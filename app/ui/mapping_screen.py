@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from tkinter import filedialog
+from typing import Any
 
 import customtkinter as ctk
 
 from app.core.column_mapper import SKIP_LABEL, SHOPIFY_FIELDS, ColumnMapper
 from app.core.shopify_generator import ShopifyGenerator
+
+STATUS_VALUES = ["Active", "Draft", "Archived"]
+PUBLISHED_VALUES = ["TRUE", "FALSE"]
 
 
 def relevant_fields(client_column: str) -> list[str]:
@@ -82,7 +86,9 @@ class MappingScreen(ctk.CTkFrame):
             self.suggested_filename += ".csv"
         self.mapper = ColumnMapper()
         self.auto_mapping = self.mapper.auto_map(self.parsed_data["headers"])
-        self.dropdowns: list[ctk.CTkOptionMenu] = []
+        # Each entry: {"widget", "mode", "shopify_field"}
+        # mode: "field" | "status_value" | "published_value"
+        self.dropdowns: list[dict[str, Any]] = []
 
         top = ctk.CTkFrame(self, fg_color="transparent")
         top.pack(fill="x", padx=20, pady=(16, 8))
@@ -150,7 +156,7 @@ class MappingScreen(ctk.CTkFrame):
         ).pack(side="left")
         ctk.CTkLabel(
             header_row,
-            text="Shopify Field",
+            text="Shopify Field / Value",
             width=280,
             anchor="w",
             font=ctk.CTkFont(size=12, weight="bold"),
@@ -192,25 +198,116 @@ class MappingScreen(ctk.CTkFrame):
             text_color="#6b7280",
         ).pack(side="left")
 
-        selected = shopify_field if shopify_field else SKIP_LABEL
-        options = relevant_fields(client_col)
+        mode, options, selected, fixed_field = self._dropdown_config(
+            client_col, shopify_field
+        )
 
-        # Ensure auto-mapped value is always selectable even if outside relevance list
-        if selected != SKIP_LABEL and selected not in options:
-            options = [selected] + [o for o in options if o != selected]
-
-        menu = ctk.CTkOptionMenu(
+        combo = ctk.CTkComboBox(
             row,
             values=options,
             width=300,
             height=30,
             fg_color="#16213e",
+            border_color="#1f2f54",
             button_color="#1f2f54",
             button_hover_color="#2a3f6b",
+            dropdown_fg_color="#0f172a",
+            dropdown_hover_color="#1f2f54",
+            state="readonly",
         )
-        menu.set(selected)
-        menu.pack(side="left")
-        self.dropdowns.append(menu)
+        combo.set(selected)
+        combo.pack(side="left")
+
+        # When user picks Status / Published from a field list, switch to value mode
+        if mode == "field":
+            combo.configure(
+                command=lambda choice, c=combo, col=client_col: self._on_field_choice(
+                    c, col, choice
+                )
+            )
+
+        self.dropdowns.append(
+            {
+                "widget": combo,
+                "mode": mode,
+                "shopify_field": fixed_field,
+                "client_col": client_col,
+            }
+        )
+
+    def _dropdown_config(
+        self, client_col: str, shopify_field: str | None
+    ) -> tuple[str, list[str], str, str | None]:
+        """Return (mode, options, selected, fixed_shopify_field)."""
+        selected_field = shopify_field if shopify_field else SKIP_LABEL
+        col_lower = (client_col or "").strip().lower()
+
+        if selected_field == "Status" or col_lower == "status":
+            current = self._sample_column_value(client_col)
+            selected = self._normalize_status(current) or "Active"
+            return "status_value", list(STATUS_VALUES), selected, "Status"
+
+        if (
+            selected_field == "Published on online store"
+            or col_lower == "published on online store"
+        ):
+            current = self._sample_column_value(client_col)
+            selected = self._normalize_published(current) or "TRUE"
+            return (
+                "published_value",
+                list(PUBLISHED_VALUES),
+                selected,
+                "Published on online store",
+            )
+
+        options = relevant_fields(client_col)
+        if selected_field != SKIP_LABEL and selected_field not in options:
+            options = [selected_field] + [o for o in options if o != selected_field]
+        return "field", options, selected_field, None
+
+    def _on_field_choice(
+        self, combo: ctk.CTkComboBox, client_col: str, choice: str
+    ) -> None:
+        """Switch to value-only dropdowns when Status / Published is chosen."""
+        meta = next((d for d in self.dropdowns if d["widget"] is combo), None)
+        if not meta:
+            return
+
+        if choice == "Status":
+            combo.configure(values=list(STATUS_VALUES), command=None)
+            current = self._normalize_status(self._sample_column_value(client_col))
+            combo.set(current or "Active")
+            meta["mode"] = "status_value"
+            meta["shopify_field"] = "Status"
+        elif choice == "Published on online store":
+            combo.configure(values=list(PUBLISHED_VALUES), command=None)
+            current = self._normalize_published(self._sample_column_value(client_col))
+            combo.set(current or "TRUE")
+            meta["mode"] = "published_value"
+            meta["shopify_field"] = "Published on online store"
+
+    def _sample_column_value(self, client_col: str) -> str:
+        for row in self.parsed_data.get("rows") or []:
+            value = str(row.get(client_col, "") or "").strip()
+            if value:
+                return value
+        return ""
+
+    @staticmethod
+    def _normalize_status(value: str) -> str | None:
+        text = (value or "").strip().lower()
+        if text in {"active", "draft", "archived"}:
+            return text.capitalize()
+        return None
+
+    @staticmethod
+    def _normalize_published(value: str) -> str | None:
+        text = (value or "").strip().lower()
+        if text in {"true", "1", "yes", "y"}:
+            return "TRUE"
+        if text in {"false", "0", "no", "n"}:
+            return "FALSE"
+        return None
 
     def _go_home(self) -> None:
         from app.ui.home_screen import HomeScreen
@@ -219,14 +316,49 @@ class MappingScreen(ctk.CTkFrame):
 
     def _collect_mapping(self) -> list[dict]:
         mapping = []
-        for item, menu in zip(self.auto_mapping, self.dropdowns):
-            mapping.append(
-                {
-                    "client_col": item["client_col"],
-                    "shopify_field": menu.get(),
-                }
-            )
+        for item, meta in zip(self.auto_mapping, self.dropdowns):
+            mode = meta["mode"]
+            widget = meta["widget"]
+            if mode == "status_value":
+                mapping.append(
+                    {
+                        "client_col": item["client_col"],
+                        "shopify_field": "Status",
+                        "constant_value": widget.get(),
+                    }
+                )
+            elif mode == "published_value":
+                mapping.append(
+                    {
+                        "client_col": item["client_col"],
+                        "shopify_field": "Published on online store",
+                        "constant_value": widget.get(),
+                    }
+                )
+            else:
+                mapping.append(
+                    {
+                        "client_col": item["client_col"],
+                        "shopify_field": widget.get(),
+                    }
+                )
         return mapping
+
+    def _apply_constant_values(self, mapping: list[dict]) -> dict:
+        """Return parsed_data copy with Status/Published constants applied."""
+        rows = [dict(r) for r in self.parsed_data.get("rows") or []]
+        for item in mapping:
+            constant = item.get("constant_value")
+            if not constant:
+                continue
+            col = item["client_col"]
+            for row in rows:
+                row[col] = constant
+        return {
+            "headers": list(self.parsed_data.get("headers") or []),
+            "rows": rows,
+            "row_count": len(rows),
+        }
 
     def _generate(self) -> None:
         self.error_label.configure(text="")
@@ -252,10 +384,10 @@ class MappingScreen(ctk.CTkFrame):
         if not output_path:
             return
 
+        data = self._apply_constant_values(mapping)
+
         try:
-            result = ShopifyGenerator().generate(
-                self.parsed_data, mapping, output_path
-            )
+            result = ShopifyGenerator().generate(data, mapping, output_path)
         except Exception as exc:  # noqa: BLE001
             self.error_label.configure(text=f"Failed to generate CSV: {exc}")
             return
