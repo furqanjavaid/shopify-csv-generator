@@ -7,6 +7,7 @@ from tkinter import filedialog
 import customtkinter as ctk
 
 from app.core.file_parser import FileParser
+from app.utils.helpers import output_filename_from_upload
 
 
 class UploadScreen(ctk.CTkFrame):
@@ -17,6 +18,7 @@ class UploadScreen(ctk.CTkFrame):
         self.app = app
         self.filepath: str | None = None
         self.parsed_data: dict | None = None
+        self.suggested_filename: str = "shopify_products.csv"
 
         top = ctk.CTkFrame(self, fg_color="transparent")
         top.pack(fill="x", padx=20, pady=(16, 8))
@@ -119,12 +121,14 @@ class UploadScreen(ctk.CTkFrame):
             parser = FileParser()
             self.parsed_data = parser.parse(path)
             self.filepath = path
+            self.suggested_filename = output_filename_from_upload(path)
             filename = path.replace("\\", "/").split("/")[-1]
             self.status_label.configure(
                 text=(
                     f"✓ {filename}  —  "
                     f"{self.parsed_data['row_count']} rows, "
                     f"{len(self.parsed_data['headers'])} columns"
+                    f"  ·  → {self.suggested_filename}"
                 )
             )
             self._render_preview()
@@ -132,6 +136,7 @@ class UploadScreen(ctk.CTkFrame):
         except ValueError as exc:
             self.parsed_data = None
             self.filepath = None
+            self.suggested_filename = "shopify_products.csv"
             self.status_label.configure(text="")
             self.error_label.configure(text=str(exc))
             self.next_btn.configure(state="disabled")
@@ -178,4 +183,8 @@ class UploadScreen(ctk.CTkFrame):
             return
         from app.ui.mapping_screen import MappingScreen
 
-        self.app.show_screen(MappingScreen, parsed_data=self.parsed_data)
+        self.app.show_screen(
+            MappingScreen,
+            parsed_data=self.parsed_data,
+            suggested_filename=self.suggested_filename,
+        )

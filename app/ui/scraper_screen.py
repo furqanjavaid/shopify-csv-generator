@@ -7,7 +7,7 @@ import threading
 import customtkinter as ctk
 
 from app.core.collection_crawler import CollectionCrawlError, crawl
-from app.utils.helpers import is_valid_url
+from app.utils.helpers import is_valid_url, output_filename_from_url
 
 
 class ScraperScreen(ctk.CTkFrame):
@@ -17,6 +17,8 @@ class ScraperScreen(ctk.CTkFrame):
         super().__init__(parent, fg_color="#1a1a2e", corner_radius=0)
         self.app = app
         self.parsed_data: dict | None = None
+        self.source_url: str = ""
+        self.suggested_filename: str = "shopify_products.csv"
 
         top = ctk.CTkFrame(self, fg_color="transparent")
         top.pack(fill="x", padx=20, pady=(16, 8))
@@ -130,6 +132,8 @@ class ScraperScreen(ctk.CTkFrame):
         self.error_label.configure(text="")
         self.strategy_label.configure(text="")
         self.parsed_data = None
+        self.source_url = url
+        self.suggested_filename = output_filename_from_url(url)
         self.next_btn.configure(state="disabled")
         self._clear_preview()
 
@@ -171,8 +175,12 @@ class ScraperScreen(ctk.CTkFrame):
         count = data.get("row_count", 0)
         errors = data.get("errors") or []
         extra = f"  ·  {len(errors)} product error(s)" if errors else ""
+        self.suggested_filename = output_filename_from_url(self.source_url)
         self.strategy_label.configure(
-            text=f"{count} products found{extra}  ·  {data.get('strategy_used', '')}"
+            text=(
+                f"{count} products found{extra}  ·  {data.get('strategy_used', '')}"
+                f"  ·  → {self.suggested_filename}"
+            )
         )
         self._render_preview()
         self.next_btn.configure(state="normal")
@@ -244,4 +252,8 @@ class ScraperScreen(ctk.CTkFrame):
             return
         from app.ui.mapping_screen import MappingScreen
 
-        self.app.show_screen(MappingScreen, parsed_data=self.parsed_data)
+        self.app.show_screen(
+            MappingScreen,
+            parsed_data=self.parsed_data,
+            suggested_filename=self.suggested_filename,
+        )

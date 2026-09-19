@@ -62,10 +62,20 @@ def relevant_fields(client_column: str) -> list[str]:
 class MappingScreen(ctk.CTkFrame):
     """Map client columns to Shopify CSV fields and generate output."""
 
-    def __init__(self, parent, app, parsed_data=None, **kwargs):
+    def __init__(
+        self,
+        parent,
+        app,
+        parsed_data=None,
+        suggested_filename: str | None = None,
+        **kwargs,
+    ):
         super().__init__(parent, fg_color="#1a1a2e", corner_radius=0)
         self.app = app
         self.parsed_data = parsed_data or {"headers": [], "rows": [], "row_count": 0}
+        self.suggested_filename = suggested_filename or "shopify_products.csv"
+        if not self.suggested_filename.lower().endswith(".csv"):
+            self.suggested_filename += ".csv"
         self.mapper = ColumnMapper()
         self.auto_mapping = self.mapper.auto_map(self.parsed_data["headers"])
         self.dropdowns: list[ctk.CTkOptionMenu] = []
@@ -229,11 +239,10 @@ class MappingScreen(ctk.CTkFrame):
             )
             return
 
-        default_name = "shopify_products.csv"
         output_path = filedialog.asksaveasfilename(
             title="Save Shopify CSV",
             defaultextension=".csv",
-            initialfile=default_name,
+            initialfile=self.suggested_filename,
             filetypes=[("CSV files", "*.csv")],
         )
         if not output_path:

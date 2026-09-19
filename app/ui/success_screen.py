@@ -22,6 +22,8 @@ class SuccessScreen(ctk.CTkFrame):
             "rows": 0,
             "output_path": "",
         }
+        output_path = self.result.get("output_path", "") or ""
+        self.output_filename = Path(output_path).name if output_path else ""
 
         check = ctk.CTkLabel(
             self,
@@ -37,7 +39,16 @@ class SuccessScreen(ctk.CTkFrame):
             font=ctk.CTkFont(size=28, weight="bold"),
             text_color="#ffffff",
         )
-        title.pack(pady=(0, 24))
+        title.pack(pady=(0, 12))
+
+        if self.output_filename:
+            file_badge = ctk.CTkLabel(
+                self,
+                text=self.output_filename,
+                font=ctk.CTkFont(size=14, weight="bold"),
+                text_color="#93c5fd",
+            )
+            file_badge.pack(pady=(0, 16))
 
         stats = ctk.CTkFrame(self, fg_color="transparent")
         stats.pack(pady=8)
@@ -48,7 +59,7 @@ class SuccessScreen(ctk.CTkFrame):
 
         path_label = ctk.CTkLabel(
             self,
-            text="Output file",
+            text="Saved as",
             font=ctk.CTkFont(size=12),
             text_color="#9ca3af",
         )
@@ -61,7 +72,7 @@ class SuccessScreen(ctk.CTkFrame):
             font=ctk.CTkFont(size=12),
         )
         self.path_entry.pack(pady=4)
-        self.path_entry.insert(0, self.result.get("output_path", ""))
+        self.path_entry.insert(0, output_path)
         self.path_entry.configure(state="readonly")
 
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
