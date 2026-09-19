@@ -128,13 +128,26 @@ class ShopifyGenerator:
         output_rows: list[dict[str, str]] = []
         product_count = 0
         variant_count = 0
+        active_handle: str | None = None
+        active_option_names: dict[int, str] = {}
 
         for source_row in parsed_data.get("rows", []):
             title = self._get_val(source_row, field_map, "Title")
+
+            # Continuation variant rows (from collection crawler): empty Title,
+            # same URL handle — attach under the active product.
             if not title:
+                if not active_handle:
+                    continue
+                variant_count += 1
+                row = self._build_continuation_row(
+                    source_row, field_map, active_handle, active_option_names
+                )
+                output_rows.append(row)
                 continue
 
             handle = self._unique_handle(title, seen_handles, source_row, field_map)
+            active_handle = handle
             variants = self._expand_variants(source_row, field_map, option_value_fields)
 
             product_count += 1
@@ -161,25 +174,30 @@ class ShopifyGenerator:
                     row["Option3 name"] = self._option_name(
                         source_row, field_map, 3, "Option"
                     )
+                    active_option_names = {
+                        1: row["Option1 name"],
+                        2: row["Option2 name"],
+                        3: row["Option3 name"],
+                    }
 
                     image_url = row.get("Product image URL") or self._get_val(
                         source_row, field_map, "Product image URL"
                     )
-                    row["Product image URL"] = image_url
-                    row["Image position"] = "1" if image_url else ""
+                    row["Product image URL"] = self._absolute_image_url(image_url)
+                    row["Image position"] = "1" if row["Product image URL"] else ""
                 else:
-                    # Subsequent rows: Title empty, URL handle kept, product fields empty
+                    # Expanded variants from comma-split options on same source row
                     row["Title"] = ""
                     if "Option1 value" in variant or "Option1 value" in field_map:
-                        row["Option1 name"] = self._option_name(
+                        row["Option1 name"] = active_option_names.get(1) or self._option_name(
                             source_row, field_map, 1, "Size"
                         )
                     if "Option2 value" in variant or "Option2 value" in field_map:
-                        row["Option2 name"] = self._option_name(
+                        row["Option2 name"] = active_option_names.get(2) or self._option_name(
                             source_row, field_map, 2, "Color"
                         )
                     if "Option3 value" in variant or "Option3 value" in field_map:
-                        row["Option3 name"] = self._option_name(
+                        row["Option3 name"] = active_option_names.get(3) or self._option_name(
                             source_row, field_map, 3, "Option"
                         )
 
@@ -195,9 +213,17 @@ class ShopifyGenerator:
                     elif not row.get(field):
                         row[field] = self._get_val(source_row, field_map, field)
 
+                if row.get("Product image URL"):
+                    row["Product image URL"] = self._absolute_image_url(
+                        row["Product image URL"]
+                    )
+                if row.get("Variant image URL"):
+                    row["Variant image URL"] = self._absolute_image_url(
+                        row["Variant image URL"]
+                    )
+
                 self._apply_defaults_and_normalize(row, is_first=(index == 0))
 
-                # Blank option names when no option value
                 for n in (1, 2, 3):
                     if not row.get(f"Option{n} value"):
                         row[f"Option{n} name"] = ""
@@ -223,11 +249,71 @@ class ShopifyGenerator:
             "output_path": str(path.resolve()),
         }
 
+    def _build_continuation_row(
+        self,
+        source_row: dict,
+        field_map: dict[str, str],
+        handle: str,
+        active_option_names: dict[int, str],
+    ) -> dict[str, str]:
+        """Build a variant-only row under an existing product handle."""
+        row = {col: "" for col in NEW_SHOPIFY_COLUMNS}
+        row["URL handle"] = handle
+
+        # Variant fields allowed on subsequent rows
+        variant_fields = [
+            "SKU",
+            "Barcode",
+            "Price",
+            "Compare-at price",
+            "Inventory quantity",
+            "Option1 value",
+            "Option2 value",
+            "Option3 value",
+            "Weight value (grams)",
+            "Requires shipping",
+            "Fulfillment service",
+            "Inventory tracker",
+            "Continue selling when out of stock",
+            "Charge tax",
+            "Status",
+            "Variant image URL",
+            "Cost per item",
+            "Tax code",
+            "Weight unit for display",
+        ]
+        for field in variant_fields:
+            row[field] = self._get_val(source_row, field_map, field)
+
+        # Carry option names from the first row when values are present
+        for n in (1, 2, 3):
+            if row.get(f"Option{n} value"):
+                row[f"Option{n} name"] = active_option_names.get(n, "")
+
+        if row.get("Variant image URL"):
+            row["Variant image URL"] = self._absolute_image_url(row["Variant image URL"])
+
+        self._apply_defaults_and_normalize(row, is_first=False)
+
+        for n in (1, 2, 3):
+            if not row.get(f"Option{n} value"):
+                row[f"Option{n} name"] = ""
+                row[f"Option{n} Linked To"] = ""
+
+        return row
+
+    @staticmethod
+    def _absolute_image_url(url: str) -> str:
+        url = (url or "").strip()
+        if url.startswith("//"):
+            return "https:" + url
+        return url
+
     def _apply_defaults_and_normalize(self, row: dict[str, str], is_first: bool) -> None:
         """Fill defaults and normalize Shopify boolean/status casing."""
         for key, default in DEFAULTS.items():
-            # Product-level defaults only on first row
-            if key in PRODUCT_FIELDS and not is_first:
+            # Product-level defaults only on first row (except Status — kept on variants)
+            if key in PRODUCT_FIELDS and key != "Status" and not is_first:
                 continue
             if not row.get(key):
                 row[key] = default
@@ -237,15 +323,17 @@ class ShopifyGenerator:
                 row.get("Published on online store"), default="TRUE"
             )
             row["Status"] = self._as_status(row.get("Status"))
-            # Image position: 1 only on first row when image present
             if row.get("Product image URL"):
+                row["Product image URL"] = self._absolute_image_url(
+                    row["Product image URL"]
+                )
                 row["Image position"] = "1"
             else:
                 row["Image position"] = ""
         else:
             row["Image position"] = ""
             row["Published on online store"] = ""
-            row["Status"] = ""
+            row["Status"] = self._as_status(row.get("Status") or "Active")
 
         row["Requires shipping"] = self._as_true_false(
             row.get("Requires shipping"), default="TRUE"

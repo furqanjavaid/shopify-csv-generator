@@ -332,8 +332,9 @@ class CollectionCrawler:
                 image_url = str(first)
 
         variants = product.get("variants") or []
+        image_url = self._absolute_url(image_url)
+
         if not variants:
-            # Single draft with product-level price
             price, compare = self._normalize_prices(
                 product.get("price"), product.get("compare_at_price"), is_uk
             )
@@ -353,11 +354,12 @@ class CollectionCrawler:
                     compare_at_price=compare,
                     inventory_quantity="",
                     image_url=image_url,
+                    is_first=True,
                 )
             ]
 
         drafts: list[dict[str, str]] = []
-        for variant in variants:
+        for index, variant in enumerate(variants):
             price, compare = self._normalize_prices(
                 variant.get("price"),
                 variant.get("compare_at_price"),
@@ -368,7 +370,6 @@ class CollectionCrawler:
                 str(variant.get("option2") or "").strip(),
                 str(variant.get("option3") or "").strip(),
             ]
-            # Clear Default Title placeholder
             for i, val in enumerate(opt_values):
                 if val.lower() in {"default title", "default"}:
                     opt_values[i] = ""
@@ -382,28 +383,32 @@ class CollectionCrawler:
                 except (TypeError, ValueError):
                     inv_str = str(inv)
 
-            # Per-variant image if present
             v_image = image_url
             feat = variant.get("featured_image")
             if isinstance(feat, dict) and feat.get("src"):
-                v_image = str(feat["src"])
+                v_image = self._absolute_url(str(feat["src"]))
+            elif isinstance(feat, str):
+                v_image = self._absolute_url(feat)
 
+            is_first = index == 0
             drafts.append(
                 self._make_draft(
-                    title=title,
+                    title=title if is_first else "",
                     url_handle=url_handle,
-                    description=description,
-                    vendor=vendor,
-                    product_type=product_type,
-                    tags=tags,
+                    description=description if is_first else "",
+                    vendor=vendor if is_first else "",
+                    product_type=product_type if is_first else "",
+                    tags=tags if is_first else "",
                     sku=str(variant.get("sku") or "").strip(),
-                    barcode=str(variant.get("barcode") or "").strip(),
-                    opt_names=opt_names,
+                    barcode=str(variant.get("barcode") or "").strip() if is_first else "",
+                    opt_names=opt_names if is_first else ["", "", ""],
                     opt_values=opt_values,
                     price=price,
                     compare_at_price=compare,
                     inventory_quantity=inv_str,
-                    image_url=v_image,
+                    # Image only on first (product) row
+                    image_url=v_image if is_first else "",
+                    is_first=is_first,
                 )
             )
         return drafts
@@ -425,36 +430,72 @@ class CollectionCrawler:
         compare_at_price: str,
         inventory_quantity: str,
         image_url: str,
+        is_first: bool = True,
     ) -> dict[str, str]:
-        # Blank option names when value empty
         names = list(opt_names)
         for i in range(3):
             if not opt_values[i]:
                 names[i] = ""
 
+        image_url = self._absolute_url(image_url)
+
+        if is_first:
+            return {
+                "title": title,
+                "url_handle": url_handle,
+                "description": description,
+                "vendor": vendor,
+                "product_category": "",
+                "type": product_type,
+                "tags": tags,
+                "sku": sku,
+                "barcode": barcode,
+                "option1_name": names[0],
+                "option1_value": opt_values[0],
+                "option2_name": names[1],
+                "option2_value": opt_values[1],
+                "option3_name": names[2],
+                "option3_value": opt_values[2],
+                "price": price,
+                "compare_at_price": compare_at_price,
+                "inventory_quantity": inventory_quantity,
+                "product_image_url": image_url,
+                "image_position": "1" if image_url else "",
+                "status": "Active",
+            }
+
+        # Subsequent variant rows: same handle, variant fields only
         return {
-            "title": title,
+            "title": "",
             "url_handle": url_handle,
-            "description": description,
-            "vendor": vendor,
+            "description": "",
+            "vendor": "",
             "product_category": "",
-            "type": product_type,
-            "tags": tags,
+            "type": "",
+            "tags": "",
             "sku": sku,
-            "barcode": barcode,
-            "option1_name": names[0],
+            "barcode": "",
+            "option1_name": "",
             "option1_value": opt_values[0],
-            "option2_name": names[1],
+            "option2_name": "",
             "option2_value": opt_values[1],
-            "option3_name": names[2],
+            "option3_name": "",
             "option3_value": opt_values[2],
             "price": price,
             "compare_at_price": compare_at_price,
             "inventory_quantity": inventory_quantity,
-            "product_image_url": image_url,
-            "image_position": "1" if image_url else "",
+            "product_image_url": "",
+            "image_position": "",
             "status": "Active",
         }
+
+    @staticmethod
+    def _absolute_url(url: str) -> str:
+        """Ensure protocol-relative Shopify CDN URLs use https:."""
+        url = (url or "").strip()
+        if url.startswith("//"):
+            return "https:" + url
+        return url
 
     def _normalize_prices(
         self,
