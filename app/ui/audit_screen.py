@@ -230,12 +230,12 @@ class AuditScreen(ctk.CTkFrame):
         self.open_folder_btn.configure(state="normal")
 
         pages = len(audit_data.get("pages_crawled") or [])
-        issues = sum(
-            len(r.get("issues") or []) for r in audit_data.get("results") or []
-        )
+        findings = audit_data.get("findings") or []
+        issues = sum(1 for f in findings if not f.get("passed"))
+        score = (audit_data.get("scores") or {}).get("overall", "—")
         self._append_log(f"Report saved: {report_path}")
         self.success_label.configure(
-            text=f"✓  Report Ready — {pages} pages · {issues} issues"
+            text=f"✓  Report Ready — CRO {score}/10 · {pages} pages · {issues} issues"
         )
         self.success_banner.pack(fill="x", pady=(0, 8), before=self.log_box)
 

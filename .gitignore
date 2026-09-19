@@ -24,4 +24,5 @@ Thumbs.db
 *.xlsx
 !sample*.xlsx
 output/
+outputs/
 audits/
