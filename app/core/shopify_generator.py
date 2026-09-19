@@ -1,4 +1,4 @@
-"""Generate Shopify-ready product import CSV files."""
+"""Generate Shopify-ready product import CSV files (new column format)."""
 
 from __future__ import annotations
 
@@ -11,71 +11,84 @@ from typing import Any
 from app.core.column_mapper import SKIP_LABEL
 from app.utils.helpers import clean_value, slugify
 
-SHOPIFY_COLUMNS = [
-    "Handle",
+NEW_SHOPIFY_COLUMNS = [
     "Title",
-    "Body (HTML)",
+    "URL handle",
+    "Description",
     "Vendor",
-    "Product Category",
+    "Product category",
     "Type",
     "Tags",
-    "Published",
-    "Option1 Name",
-    "Option1 Value",
-    "Option2 Name",
-    "Option2 Value",
-    "Option3 Name",
-    "Option3 Value",
-    "Variant SKU",
-    "Variant Grams",
-    "Variant Inventory Tracker",
-    "Variant Inventory Qty",
-    "Variant Inventory Policy",
-    "Variant Fulfillment Service",
-    "Variant Price",
-    "Variant Compare At Price",
-    "Variant Requires Shipping",
-    "Variant Taxable",
-    "Variant Barcode",
-    "Image Src",
-    "Image Position",
-    "Image Alt Text",
-    "Gift Card",
-    "SEO Title",
-    "SEO Description",
-    "Variant Image",
-    "Variant Weight Unit",
-    "Variant Tax Code",
-    "Cost per item",
+    "Published on online store",
     "Status",
+    "SKU",
+    "Barcode",
+    "Option1 name",
+    "Option1 value",
+    "Option1 Linked To",
+    "Option2 name",
+    "Option2 value",
+    "Option2 Linked To",
+    "Option3 name",
+    "Option3 value",
+    "Option3 Linked To",
+    "Price",
+    "Compare-at price",
+    "Cost per item",
+    "Charge tax",
+    "Tax code",
+    "Inventory tracker",
+    "Inventory quantity",
+    "Continue selling when out of stock",
+    "Weight value (grams)",
+    "Weight unit for display",
+    "Requires shipping",
+    "Fulfillment service",
+    "Product image URL",
+    "Image position",
+    "Image alt text",
+    "Variant image URL",
+    "Gift card",
+    "SEO title",
+    "SEO description",
 ]
 
+# Alias for callers / tests that still import SHOPIFY_COLUMNS
+SHOPIFY_COLUMNS = NEW_SHOPIFY_COLUMNS
+
+# Product-level fields: filled on first variant row only
 PRODUCT_FIELDS = {
     "Title",
-    "Body (HTML)",
+    "Description",
     "Vendor",
-    "Product Category",
+    "Product category",
     "Type",
     "Tags",
-    "Published",
-    "Image Src",
-    "Image Position",
-    "Image Alt Text",
-    "Gift Card",
-    "SEO Title",
-    "SEO Description",
+    "Published on online store",
     "Status",
+    "Product image URL",
+    "Image position",
+    "Image alt text",
+    "Gift card",
+    "SEO title",
+    "SEO description",
+}
+
+OPTION_NAME_FIELDS = {
+    "Option1 name",
+    "Option2 name",
+    "Option3 name",
 }
 
 DEFAULTS = {
-    "Published": "true",
-    "Status": "active",
-    "Variant Inventory Tracker": "shopify",
-    "Variant Inventory Policy": "deny",
-    "Variant Fulfillment Service": "manual",
-    "Variant Requires Shipping": "true",
-    "Variant Taxable": "true",
-    "Variant Weight Unit": "kg",
+    "Published on online store": "TRUE",
+    "Status": "Active",
+    "Inventory tracker": "shopify",
+    "Continue selling when out of stock": "DENY",
+    "Fulfillment service": "manual",
+    "Requires shipping": "TRUE",
+    "Charge tax": "TRUE",
+    "Weight unit for display": "g",
 }
 
 
@@ -98,15 +111,17 @@ class ShopifyGenerator:
                 field_map[shopify_field] = client_col
 
         # Infer option names when values are mapped
-        if "Option1 Value" in field_map and "Option1 Name" not in field_map:
-            field_map["Option1 Name"] = "__OPTION1_NAME__"
-        if "Option2 Value" in field_map and "Option2 Name" not in field_map:
-            field_map["Option2 Name"] = "__OPTION2_NAME__"
-        if "Option3 Value" in field_map and "Option3 Name" not in field_map:
-            field_map["Option3 Name"] = "__OPTION3_NAME__"
+        if "Option1 value" in field_map and "Option1 name" not in field_map:
+            field_map["Option1 name"] = "__OPTION1_NAME__"
+        if "Option2 value" in field_map and "Option2 name" not in field_map:
+            field_map["Option2 name"] = "__OPTION2_NAME__"
+        if "Option3 value" in field_map and "Option3 name" not in field_map:
+            field_map["Option3 name"] = "__OPTION3_NAME__"
 
         option_value_fields = [
-            f for f in ("Option1 Value", "Option2 Value", "Option3 Value") if f in field_map
+            f
+            for f in ("Option1 value", "Option2 value", "Option3 value")
+            if f in field_map
         ]
 
         seen_handles: dict[str, int] = {}
@@ -125,63 +140,68 @@ class ShopifyGenerator:
             product_count += 1
             for index, variant in enumerate(variants):
                 variant_count += 1
-                row = {col: "" for col in SHOPIFY_COLUMNS}
-                row["Handle"] = handle
+                row = {col: "" for col in NEW_SHOPIFY_COLUMNS}
+                row["URL handle"] = handle
 
                 if index == 0:
                     for field in PRODUCT_FIELDS:
-                        row[field] = self._get_val(source_row, field_map, field)
-                    row["Title"] = title
-                    # Option names on first row
-                    row["Option1 Name"] = self._option_name(
+                        if field == "Title":
+                            row["Title"] = title
+                        elif field == "Image position":
+                            continue  # set below from image URL
+                        else:
+                            row[field] = self._get_val(source_row, field_map, field)
+
+                    row["Option1 name"] = self._option_name(
                         source_row, field_map, 1, "Size"
                     )
-                    row["Option2 Name"] = self._option_name(
+                    row["Option2 name"] = self._option_name(
                         source_row, field_map, 2, "Color"
                     )
-                    row["Option3 Name"] = self._option_name(
+                    row["Option3 name"] = self._option_name(
                         source_row, field_map, 3, "Option"
                     )
+
+                    image_url = row.get("Product image URL") or self._get_val(
+                        source_row, field_map, "Product image URL"
+                    )
+                    row["Product image URL"] = image_url
+                    row["Image position"] = "1" if image_url else ""
                 else:
-                    # Subsequent variant rows: only handle + variant fields
-                    if "Option1 Value" in variant:
-                        row["Option1 Name"] = self._option_name(
+                    # Subsequent rows: Title empty, URL handle kept, product fields empty
+                    row["Title"] = ""
+                    if "Option1 value" in variant or "Option1 value" in field_map:
+                        row["Option1 name"] = self._option_name(
                             source_row, field_map, 1, "Size"
                         )
-                    if "Option2 Value" in variant:
-                        row["Option2 Name"] = self._option_name(
+                    if "Option2 value" in variant or "Option2 value" in field_map:
+                        row["Option2 name"] = self._option_name(
                             source_row, field_map, 2, "Color"
                         )
-                    if "Option3 Value" in variant:
-                        row["Option3 Name"] = self._option_name(
+                    if "Option3 value" in variant or "Option3 value" in field_map:
+                        row["Option3 name"] = self._option_name(
                             source_row, field_map, 3, "Option"
                         )
 
-                # Variant-specific mapped fields
-                for field in SHOPIFY_COLUMNS:
+                # Variant-specific fields (all rows)
+                for field in NEW_SHOPIFY_COLUMNS:
                     if field in PRODUCT_FIELDS or field in {
-                        "Handle",
-                        "Option1 Name",
-                        "Option2 Name",
-                        "Option3 Name",
+                        "URL handle",
+                        *OPTION_NAME_FIELDS,
                     }:
                         continue
                     if field in variant:
                         row[field] = variant[field]
-                    else:
+                    elif not row.get(field):
                         row[field] = self._get_val(source_row, field_map, field)
 
-                for key, default in DEFAULTS.items():
-                    if not row.get(key):
-                        row[key] = default
+                self._apply_defaults_and_normalize(row, is_first=(index == 0))
 
-                if row.get("Image Src") and not row.get("Image Position"):
-                    row["Image Position"] = "1"
-
-                # Ensure option names blank if no option values
+                # Blank option names when no option value
                 for n in (1, 2, 3):
-                    if not row.get(f"Option{n} Value"):
-                        row[f"Option{n} Name"] = ""
+                    if not row.get(f"Option{n} value"):
+                        row[f"Option{n} name"] = ""
+                        row[f"Option{n} Linked To"] = ""
 
                 output_rows.append(row)
 
@@ -190,7 +210,7 @@ class ShopifyGenerator:
         with path.open("w", newline="", encoding="utf-8-sig") as fh:
             writer = csv.DictWriter(
                 fh,
-                fieldnames=SHOPIFY_COLUMNS,
+                fieldnames=NEW_SHOPIFY_COLUMNS,
                 quoting=csv.QUOTE_MINIMAL,
             )
             writer.writeheader()
@@ -202,6 +222,70 @@ class ShopifyGenerator:
             "rows": len(output_rows),
             "output_path": str(path.resolve()),
         }
+
+    def _apply_defaults_and_normalize(self, row: dict[str, str], is_first: bool) -> None:
+        """Fill defaults and normalize Shopify boolean/status casing."""
+        for key, default in DEFAULTS.items():
+            # Product-level defaults only on first row
+            if key in PRODUCT_FIELDS and not is_first:
+                continue
+            if not row.get(key):
+                row[key] = default
+
+        if is_first:
+            row["Published on online store"] = self._as_true_false(
+                row.get("Published on online store"), default="TRUE"
+            )
+            row["Status"] = self._as_status(row.get("Status"))
+            # Image position: 1 only on first row when image present
+            if row.get("Product image URL"):
+                row["Image position"] = "1"
+            else:
+                row["Image position"] = ""
+        else:
+            row["Image position"] = ""
+            row["Published on online store"] = ""
+            row["Status"] = ""
+
+        row["Requires shipping"] = self._as_true_false(
+            row.get("Requires shipping"), default="TRUE"
+        )
+        row["Charge tax"] = self._as_true_false(row.get("Charge tax"), default="TRUE")
+        row["Continue selling when out of stock"] = self._as_inventory_policy(
+            row.get("Continue selling when out of stock")
+        )
+
+        if not row.get("Inventory tracker"):
+            row["Inventory tracker"] = "shopify"
+        if not row.get("Fulfillment service"):
+            row["Fulfillment service"] = "manual"
+        if not row.get("Weight unit for display"):
+            row["Weight unit for display"] = "g"
+
+    @staticmethod
+    def _as_true_false(value: str | None, default: str = "TRUE") -> str:
+        text = (value or "").strip().lower()
+        if not text:
+            return default
+        if text in {"false", "0", "no", "n", "off", "unpublished"}:
+            return "FALSE"
+        if text in {"true", "1", "yes", "y", "on", "published"}:
+            return "TRUE"
+        return default
+
+    @staticmethod
+    def _as_status(value: str | None) -> str:
+        text = (value or "").strip().lower()
+        if text in {"draft", "archived"}:
+            return text.capitalize()
+        return "Active"
+
+    @staticmethod
+    def _as_inventory_policy(value: str | None) -> str:
+        text = (value or "").strip().lower()
+        if "continue" in text:
+            return "CONTINUE"
+        return "DENY"
 
     def _get_val(
         self, row: dict, field_map: dict[str, str], shopify_field: str
@@ -224,7 +308,7 @@ class ShopifyGenerator:
         row: dict,
         field_map: dict[str, str],
     ) -> str:
-        mapped = self._get_val(row, field_map, "Handle")
+        mapped = self._get_val(row, field_map, "URL handle")
         base = slugify(mapped) if mapped else slugify(title)
         if not base:
             base = "product"
@@ -237,8 +321,8 @@ class ShopifyGenerator:
     def _option_name(
         self, row: dict, field_map: dict[str, str], index: int, default: str
     ) -> str:
-        value_field = f"Option{index} Value"
-        name_field = f"Option{index} Name"
+        value_field = f"Option{index} value"
+        name_field = f"Option{index} name"
         if value_field not in field_map and name_field not in field_map:
             return ""
         name = self._get_val(row, field_map, name_field)

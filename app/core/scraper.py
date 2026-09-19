@@ -108,10 +108,10 @@ class ProductScraper:
 
             return {
                 "Title": str(name),
-                "Body (HTML)": str(description),
-                "Variant Price": str(price),
-                "Variant SKU": str(sku),
-                "Image Src": str(image),
+                "Description": str(description),
+                "Price": str(price),
+                "SKU": str(sku),
+                "Product image URL": str(image),
                 "Vendor": str(brand),
             }
         return None
@@ -166,10 +166,10 @@ class ProductScraper:
 
         return {
             "Title": title,
-            "Body (HTML)": og("og:description"),
-            "Image Src": og("og:image"),
-            "Variant Price": og("product:price:amount"),
-            "Variant SKU": og("product:retailer_item_id"),
+            "Description": og("og:description"),
+            "Product image URL": og("og:image"),
+            "Price": og("product:price:amount"),
+            "SKU": og("product:retailer_item_id"),
         }
 
     def _strategy_generic_html(self, soup: BeautifulSoup) -> Optional[dict[str, str]]:
@@ -214,7 +214,7 @@ class ProductScraper:
 
         return {
             "Title": title,
-            "Body (HTML)": description,
-            "Variant Price": price,
-            "Image Src": image,
+            "Description": description,
+            "Price": price,
+            "Product image URL": image,
         }

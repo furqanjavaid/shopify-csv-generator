@@ -1,47 +1,50 @@
-"""Auto-map client columns to Shopify product CSV fields."""
+"""Auto-map client columns to Shopify product CSV fields (new format)."""
 
 from __future__ import annotations
 
 from typing import Optional
 
-# Exact Shopify product CSV field order (36 fields)
+# Exact Shopify product CSV field order (new format)
 SHOPIFY_FIELDS = [
-    "Handle",
     "Title",
-    "Body (HTML)",
+    "URL handle",
+    "Description",
     "Vendor",
-    "Product Category",
+    "Product category",
     "Type",
     "Tags",
-    "Published",
-    "Option1 Name",
-    "Option1 Value",
-    "Option2 Name",
-    "Option2 Value",
-    "Option3 Name",
-    "Option3 Value",
-    "Variant SKU",
-    "Variant Grams",
-    "Variant Inventory Tracker",
-    "Variant Inventory Qty",
-    "Variant Inventory Policy",
-    "Variant Fulfillment Service",
-    "Variant Price",
-    "Variant Compare At Price",
-    "Variant Requires Shipping",
-    "Variant Taxable",
-    "Variant Barcode",
-    "Image Src",
-    "Image Position",
-    "Image Alt Text",
-    "Gift Card",
-    "SEO Title",
-    "SEO Description",
-    "Variant Image",
-    "Variant Weight Unit",
-    "Variant Tax Code",
-    "Cost per item",
+    "Published on online store",
     "Status",
+    "SKU",
+    "Barcode",
+    "Option1 name",
+    "Option1 value",
+    "Option1 Linked To",
+    "Option2 name",
+    "Option2 value",
+    "Option2 Linked To",
+    "Option3 name",
+    "Option3 value",
+    "Option3 Linked To",
+    "Price",
+    "Compare-at price",
+    "Cost per item",
+    "Charge tax",
+    "Tax code",
+    "Inventory tracker",
+    "Inventory quantity",
+    "Continue selling when out of stock",
+    "Weight value (grams)",
+    "Weight unit for display",
+    "Requires shipping",
+    "Fulfillment service",
+    "Product image URL",
+    "Image position",
+    "Image alt text",
+    "Variant image URL",
+    "Gift card",
+    "SEO title",
+    "SEO description",
 ]
 
 SKIP_LABEL = "— Skip this column —"
@@ -60,8 +63,6 @@ class ColumnMapper:
                 used_fields.add(field)
             results.append({"client_col": header, "shopify_field": field})
 
-        # If size/color mapped, ensure option names are set via synthetic extras
-        # (handled in generator when Option values exist without names)
         return results
 
     def _match_header(self, header: str, used_fields: set[str]) -> Optional[str]:
@@ -71,27 +72,30 @@ class ColumnMapper:
 
         rules: list[tuple[list[str], str]] = [
             (["title", "name", "product"], "Title"),
-            (["compare", "original", "was", "old price"], "Variant Compare At Price"),
-            (["price", "mrp", "cost", "rate"], "Variant Price"),
-            (["sku", "code", "item no", "article"], "Variant SKU"),
-            (["qty", "stock", "inventory", "quantity"], "Variant Inventory Qty"),
-            (["desc", "detail", "about", "body", "info"], "Body (HTML)"),
+            (["handle", "slug", "url handle"], "URL handle"),
+            (["compare", "original", "was", "old price", "compare-at"], "Compare-at price"),
+            (["price", "mrp", "rate"], "Price"),
+            (["cost per", "cost"], "Cost per item"),
+            (["sku", "code", "item no", "article"], "SKU"),
+            (["qty", "stock", "inventory", "quantity"], "Inventory quantity"),
+            (["desc", "detail", "about", "body", "info"], "Description"),
             (["vendor", "brand", "company", "manufacturer"], "Vendor"),
             (["tag", "keyword", "label"], "Tags"),
             (["type", "category", "collection"], "Type"),
-            (["image", "photo", "img", "picture", "url"], "Image Src"),
-            (["weight", "gram", "kg"], "Variant Grams"),
-            (["barcode", "ean", "upc", "isbn"], "Variant Barcode"),
-            (["size"], "Option1 Value"),
-            (["color", "colour"], "Option2 Value"),
-            (["material", "flavor", "flavour", "scent", "variant"], "Option3 Value"),
+            (["image", "photo", "img", "picture", "url"], "Product image URL"),
+            (["weight", "gram", "kg"], "Weight value (grams)"),
+            (["barcode", "ean", "upc", "isbn"], "Barcode"),
+            (["seo title", "meta title"], "SEO title"),
+            (["seo desc", "meta desc", "meta description"], "SEO description"),
+            (["size"], "Option1 value"),
+            (["color", "colour"], "Option2 value"),
+            (["material", "flavor", "flavour", "scent", "variant"], "Option3 value"),
         ]
 
         for keywords, field in rules:
             if any(kw in h for kw in keywords):
                 if field not in used_fields:
                     return field
-                # Prefer first unique match; skip if already taken
                 continue
 
         return None
