@@ -1,9 +1,14 @@
-"""Shopify CSV Generator — desktop entry point."""
+"""Shopify CSV Generator — desktop entry point.
+
+Screens: HomeScreen, UploadScreen, ScraperScreen, MappingScreen,
+SuccessScreen, AuditScreen (Shopify store CRO/SEO auditor).
+"""
 
 from __future__ import annotations
 
 import customtkinter as ctk
 
+from app.ui.audit_screen import AuditScreen  # noqa: F401 — registered via navigation
 from app.ui.home_screen import HomeScreen
 
 

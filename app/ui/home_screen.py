@@ -6,7 +6,7 @@ import customtkinter as ctk
 
 
 class HomeScreen(ctk.CTkFrame):
-    """Landing screen with Upload File and Scrape URL modes."""
+    """Landing screen with Upload, Scrape, and Audit modes."""
 
     def __init__(self, parent, app, **kwargs):
         super().__init__(parent, fg_color="#1a1a2e", corner_radius=0)
@@ -18,15 +18,15 @@ class HomeScreen(ctk.CTkFrame):
             font=ctk.CTkFont(size=32, weight="bold"),
             text_color="#ffffff",
         )
-        title.pack(pady=(80, 8))
+        title.pack(pady=(60, 8))
 
         subtitle = ctk.CTkLabel(
             self,
-            text="Convert any product data to Shopify-ready CSV",
+            text="Convert product data · Scrape collections · Audit stores",
             font=ctk.CTkFont(size=14),
             text_color="#9ca3af",
         )
-        subtitle.pack(pady=(0, 50))
+        subtitle.pack(pady=(0, 40))
 
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
         btn_row.pack()
@@ -59,9 +59,23 @@ class HomeScreen(ctk.CTkFrame):
         )
         scrape_btn.pack(side="left", padx=16)
 
+        audit_btn = ctk.CTkButton(
+            self,
+            text="🔍  Audit Store",
+            width=432,
+            height=64,
+            corner_radius=12,
+            fg_color="#16213e",
+            hover_color="#1f2f54",
+            text_color="#ffffff",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            command=self._go_audit,
+        )
+        audit_btn.pack(pady=(20, 0))
+
         hint = ctk.CTkLabel(
             self,
-            text="CSV / Excel upload  ·  WooCommerce & generic product URLs",
+            text="CSV / Excel  ·  Shopify collections  ·  CRO & SEO store audits",
             font=ctk.CTkFont(size=12),
             text_color="#6b7280",
         )
@@ -84,3 +98,8 @@ class HomeScreen(ctk.CTkFrame):
         from app.ui.scraper_screen import ScraperScreen
 
         self.app.show_screen(ScraperScreen)
+
+    def _go_audit(self) -> None:
+        from app.ui.audit_screen import AuditScreen
+
+        self.app.show_screen(AuditScreen)
