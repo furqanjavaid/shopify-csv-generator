@@ -1,93 +1,140 @@
-"""Home / mode select screen."""
+"""Home / mode select — premium landing."""
 
 from __future__ import annotations
 
 import customtkinter as ctk
 
+from app.ui import theme as T
+
 
 class HomeScreen(ctk.CTkFrame):
-    """Landing screen with Upload, Scrape, and Audit modes."""
+    """Landing with three feature cards."""
 
     def __init__(self, parent, app, **kwargs):
-        super().__init__(parent, fg_color="#1a1a2e", corner_radius=0)
+        super().__init__(parent, fg_color=T.BG, corner_radius=0)
         self.app = app
 
-        title = ctk.CTkLabel(
-            self,
-            text="Shopify CSV Generator",
-            font=ctk.CTkFont(size=32, weight="bold"),
-            text_color="#ffffff",
-        )
-        title.pack(pady=(60, 8))
+        # Top brand bar
+        top = ctk.CTkFrame(self, fg_color="transparent")
+        top.pack(fill="x", padx=24, pady=(20, 0))
 
-        subtitle = ctk.CTkLabel(
-            self,
-            text="Convert product data · Scrape collections · Audit stores",
-            font=ctk.CTkFont(size=14),
-            text_color="#9ca3af",
-        )
-        subtitle.pack(pady=(0, 40))
+        ctk.CTkLabel(
+            top,
+            text="SENTIVO",
+            font=T.font(12, "bold"),
+            text_color=T.ACCENT,
+        ).pack(side="left")
 
-        btn_row = ctk.CTkFrame(self, fg_color="transparent")
-        btn_row.pack()
+        ctk.CTkLabel(
+            top,
+            text="  v1.0  ",
+            font=T.font(11),
+            text_color=T.TEXT_MUTED,
+            fg_color=T.SURFACE,
+            corner_radius=6,
+        ).pack(side="left", padx=10)
 
-        upload_btn = ctk.CTkButton(
-            btn_row,
-            text="📂  Upload File",
-            width=200,
-            height=80,
+        # Center hero
+        hero = ctk.CTkFrame(self, fg_color="transparent")
+        hero.pack(expand=True, fill="both")
+
+        ctk.CTkLabel(
+            hero,
+            text="Shopify Product Tools",
+            font=T.font(34, "bold"),
+            text_color=T.TEXT,
+        ).pack(pady=(40, 6))
+
+        ctk.CTkLabel(
+            hero,
+            text="Upload · Scrape · Audit — all in one place",
+            font=T.font(14),
+            text_color=T.TEXT_SECONDARY,
+        ).pack(pady=(0, 36))
+
+        cards = ctk.CTkFrame(hero, fg_color="transparent")
+        cards.pack()
+
+        self._feature_card(
+            cards,
+            "📂",
+            "Upload File",
+            "Convert any client spreadsheet to\nShopify CSV",
+            self._go_upload,
+        ).pack(side="left", padx=8)
+
+        self._feature_card(
+            cards,
+            "🔗",
+            "Scrape Store",
+            "Extract products from any Shopify\nstore URL",
+            self._go_scraper,
+        ).pack(side="left", padx=8)
+
+        self._feature_card(
+            cards,
+            "🔍",
+            "Audit Store",
+            "Full CRO + SEO audit with\nWord report",
+            self._go_audit,
+        ).pack(side="left", padx=8)
+
+        # Footer
+        footer = ctk.CTkFrame(self, fg_color="transparent")
+        footer.pack(side="bottom", fill="x", pady=(0, 20))
+
+        sep = ctk.CTkFrame(footer, fg_color=T.BORDER, height=1)
+        sep.pack(fill="x", padx=80, pady=(0, 12))
+
+        ctk.CTkLabel(
+            footer,
+            text="Built by Sentivo Limited",
+            font=T.font(11),
+            text_color=T.TEXT_MUTED,
+        ).pack()
+
+    def _feature_card(self, parent, icon: str, name: str, desc: str, command) -> ctk.CTkFrame:
+        card = ctk.CTkFrame(
+            parent,
+            fg_color=T.CARD,
             corner_radius=12,
-            fg_color="#16213e",
-            hover_color="#1f2f54",
-            text_color="#ffffff",
-            font=ctk.CTkFont(size=16, weight="bold"),
-            command=self._go_upload,
+            border_width=1,
+            border_color=T.BORDER,
+            width=250,
+            height=240,
         )
-        upload_btn.pack(side="left", padx=16)
+        card.pack_propagate(False)
 
-        scrape_btn = ctk.CTkButton(
-            btn_row,
-            text="🔗  Scrape URL",
-            width=200,
-            height=80,
-            corner_radius=12,
-            fg_color="#16213e",
-            hover_color="#1f2f54",
-            text_color="#ffffff",
-            font=ctk.CTkFont(size=16, weight="bold"),
-            command=self._go_scraper,
+        ctk.CTkLabel(card, text=icon, font=T.font(32), text_color=T.TEXT).pack(
+            pady=(28, 8)
         )
-        scrape_btn.pack(side="left", padx=16)
+        ctk.CTkLabel(
+            card, text=name, font=T.font(16, "bold"), text_color=T.TEXT
+        ).pack()
+        ctk.CTkLabel(
+            card,
+            text=desc,
+            font=T.font(12),
+            text_color=T.TEXT_SECONDARY,
+            justify="center",
+        ).pack(pady=(8, 16))
 
-        audit_btn = ctk.CTkButton(
-            self,
-            text="🔍  Audit Store",
-            width=432,
-            height=64,
-            corner_radius=12,
-            fg_color="#16213e",
-            hover_color="#1f2f54",
-            text_color="#ffffff",
-            font=ctk.CTkFont(size=16, weight="bold"),
-            command=self._go_audit,
-        )
-        audit_btn.pack(pady=(20, 0))
+        open_btn = T.primary_button(card, "Open →", command, width=120, height=34)
+        open_btn.pack(pady=(0, 20))
 
-        hint = ctk.CTkLabel(
-            self,
-            text="CSV / Excel  ·  Shopify collections  ·  CRO & SEO store audits",
-            font=ctk.CTkFont(size=12),
-            text_color="#6b7280",
-        )
-        hint.pack(pady=(24, 0))
+        def on_enter(_e=None):
+            card.configure(border_color=T.ACCENT)
 
-        version = ctk.CTkLabel(
-            self,
-            text="v1.0 — Sentivo",
-            font=ctk.CTkFont(size=12),
-            text_color="#6b7280",
-        )
-        version.pack(side="bottom", pady=24)
+        def on_leave(_e=None):
+            card.configure(border_color=T.BORDER)
+
+        card.bind("<Enter>", on_enter)
+        card.bind("<Leave>", on_leave)
+        for child in card.winfo_children():
+            child.bind("<Enter>", on_enter)
+            child.bind("<Leave>", on_leave)
+
+        return card
 
     def _go_upload(self) -> None:
         from app.ui.upload_screen import UploadScreen

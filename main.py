@@ -1,14 +1,15 @@
-"""Shopify CSV Generator — desktop entry point.
+"""Shopify Product Tools — desktop entry point.
 
 Screens: HomeScreen, UploadScreen, ScraperScreen, MappingScreen,
-SuccessScreen, AuditScreen (Shopify store CRO/SEO auditor).
+SuccessScreen, AuditScreen.
 """
 
 from __future__ import annotations
 
 import customtkinter as ctk
 
-from app.ui.audit_screen import AuditScreen  # noqa: F401 — registered via navigation
+from app.ui import theme as T
+from app.ui.audit_screen import AuditScreen  # noqa: F401
 from app.ui.home_screen import HomeScreen
 
 
@@ -18,14 +19,14 @@ class App(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
 
-        self.title("Shopify CSV Generator")
-        self.geometry("900x650")
+        self.title("Shopify Product Tools — Sentivo")
+        self.geometry("980x700")
         self.resizable(False, False)
-        self.configure(fg_color="#1a1a2e")
+        self.configure(fg_color=T.BG)
 
         self._center_window()
 
-        self.container = ctk.CTkFrame(self, fg_color="#1a1a2e", corner_radius=0)
+        self.container = ctk.CTkFrame(self, fg_color=T.BG, corner_radius=0)
         self.container.pack(fill="both", expand=True)
 
         self.current_screen = None
@@ -33,7 +34,7 @@ class App(ctk.CTk):
 
     def _center_window(self) -> None:
         self.update_idletasks()
-        width, height = 900, 650
+        width, height = 980, 700
         screen_w = self.winfo_screenwidth()
         screen_h = self.winfo_screenheight()
         x = (screen_w - width) // 2

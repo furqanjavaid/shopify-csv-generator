@@ -1,4 +1,4 @@
-"""Column mapping screen."""
+"""Column mapping screen — premium card rows."""
 
 from __future__ import annotations
 
@@ -9,16 +9,16 @@ import customtkinter as ctk
 
 from app.core.column_mapper import SKIP_LABEL, SHOPIFY_FIELDS, ColumnMapper
 from app.core.shopify_generator import ShopifyGenerator
+from app.ui import theme as T
 
 STATUS_VALUES = ["Active", "Draft", "Archived"]
 PUBLISHED_VALUES = ["TRUE", "FALSE"]
 
 
 def relevant_fields(client_column: str) -> list[str]:
-    """Return likely Shopify fields for a client column (max ~8) + Skip last."""
+    """Return likely Shopify fields for a client column + Skip last."""
     h = (client_column or "").strip().lower()
 
-    # Exact Shopify field name → that field first, full list available, Skip last
     for field in SHOPIFY_FIELDS:
         if field.lower() == h:
             rest = [f for f in SHOPIFY_FIELDS if f != field]
@@ -67,6 +67,14 @@ def relevant_fields(client_column: str) -> list[str]:
     return list(SHOPIFY_FIELDS) + [SKIP_LABEL]
 
 
+def _confidence(client_col: str, shopify_field: str | None) -> str:
+    if not shopify_field or shopify_field == SKIP_LABEL:
+        return "low"
+    if client_col.strip().lower() == shopify_field.strip().lower():
+        return "high"
+    return "medium"
+
+
 class MappingScreen(ctk.CTkFrame):
     """Map client columns to Shopify CSV fields and generate output."""
 
@@ -78,7 +86,7 @@ class MappingScreen(ctk.CTkFrame):
         suggested_filename: str | None = None,
         **kwargs,
     ):
-        super().__init__(parent, fg_color="#1a1a2e", corner_radius=0)
+        super().__init__(parent, fg_color=T.BG, corner_radius=0)
         self.app = app
         self.parsed_data = parsed_data or {"headers": [], "rows": [], "row_count": 0}
         self.suggested_filename = suggested_filename or "shopify_products.csv"
@@ -86,139 +94,103 @@ class MappingScreen(ctk.CTkFrame):
             self.suggested_filename += ".csv"
         self.mapper = ColumnMapper()
         self.auto_mapping = self.mapper.auto_map(self.parsed_data["headers"])
-        # Each entry: {"widget", "mode", "shopify_field"}
-        # mode: "field" | "status_value" | "published_value"
         self.dropdowns: list[dict[str, Any]] = []
 
-        top = ctk.CTkFrame(self, fg_color="transparent")
-        top.pack(fill="x", padx=20, pady=(16, 8))
+        T.header_bar(self, "Column Mapping", self._go_home, "Step 2 of 3")
 
-        back = ctk.CTkButton(
-            top,
-            text="← Back",
-            width=80,
-            height=28,
-            fg_color="transparent",
-            hover_color="#16213e",
-            text_color="#9ca3af",
+        body = ctk.CTkFrame(self, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=24, pady=(12, 0))
+
+        ctk.CTkLabel(
+            body,
+            text="AI-detected mappings shown below. Adjust any field using dropdowns.",
+            font=T.font(13),
+            text_color=T.TEXT_SECONDARY,
             anchor="w",
-            command=self._go_home,
-        )
-        back.pack(side="left")
-
-        title = ctk.CTkLabel(
-            self,
-            text="Map Columns to Shopify Fields",
-            font=ctk.CTkFont(size=24, weight="bold"),
-            text_color="#ffffff",
-        )
-        title.pack(pady=(4, 4))
-
-        subtitle = ctk.CTkLabel(
-            self,
-            text="Review the auto-mapping below. Change any field using the dropdowns.",
-            font=ctk.CTkFont(size=13),
-            text_color="#9ca3af",
-        )
-        subtitle.pack(pady=(0, 12))
+        ).pack(fill="x", pady=(0, 8))
 
         self.error_label = ctk.CTkLabel(
-            self,
-            text="",
-            font=ctk.CTkFont(size=13),
-            text_color="#ef4444",
+            body, text="", font=T.font(12), text_color=T.DANGER
         )
         self.error_label.pack()
 
         self.table = ctk.CTkScrollableFrame(
-            self,
-            width=820,
-            height=400,
-            fg_color="#0f172a",
+            body,
+            fg_color=T.SURFACE,
+            corner_radius=12,
+            border_width=1,
+            border_color=T.BORDER,
         )
-        self.table.pack(padx=20, pady=8, fill="both", expand=True)
-
-        header_row = ctk.CTkFrame(self.table, fg_color="transparent")
-        header_row.pack(fill="x", pady=(0, 8))
-        ctk.CTkLabel(
-            header_row,
-            text="Client Column",
-            width=220,
-            anchor="w",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color="#93c5fd",
-        ).pack(side="left", padx=(8, 0))
-        ctk.CTkLabel(
-            header_row,
-            text="",
-            width=40,
-            text_color="#6b7280",
-        ).pack(side="left")
-        ctk.CTkLabel(
-            header_row,
-            text="Shopify Field / Value",
-            width=280,
-            anchor="w",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color="#93c5fd",
-        ).pack(side="left")
+        self.table.pack(fill="both", expand=True, pady=(4, 8))
 
         for item in self.auto_mapping:
             self._add_mapping_row(item["client_col"], item["shopify_field"])
 
-        bottom = ctk.CTkFrame(self, fg_color="transparent")
-        bottom.pack(fill="x", side="bottom", padx=20, pady=16)
+        bottom = ctk.CTkFrame(self, fg_color=T.SURFACE, height=64, corner_radius=0)
+        bottom.pack(fill="x", side="bottom")
+        bottom.pack_propagate(False)
 
-        self.generate_btn = ctk.CTkButton(
-            bottom,
-            text="Generate Shopify CSV →",
-            width=200,
-            height=36,
-            command=self._generate,
+        bottom_inner = ctk.CTkFrame(bottom, fg_color="transparent")
+        bottom_inner.pack(fill="both", expand=True, padx=24)
+
+        self.generate_btn = T.primary_button(
+            bottom_inner,
+            "Generate Shopify CSV →",
+            self._generate,
+            width=220,
         )
-        self.generate_btn.pack(side="right")
+        self.generate_btn.pack(side="right", pady=12)
 
     def _add_mapping_row(self, client_col: str, shopify_field: str | None) -> None:
-        row = ctk.CTkFrame(self.table, fg_color="transparent")
-        row.pack(fill="x", pady=4)
+        card = ctk.CTkFrame(
+            self.table,
+            fg_color=T.CARD,
+            corner_radius=10,
+            border_width=1,
+            border_color=T.BORDER,
+            height=52,
+        )
+        card.pack(fill="x", padx=8, pady=4)
+        card.pack_propagate(False)
+
+        inner = ctk.CTkFrame(card, fg_color="transparent")
+        inner.pack(fill="both", expand=True, padx=12, pady=8)
+
+        T.pill(inner, client_col[:36], T.AMBER_BG, T.AMBER).pack(side="left")
 
         ctk.CTkLabel(
-            row,
-            text=client_col,
-            width=220,
-            anchor="w",
-            font=ctk.CTkFont(size=13),
-            text_color="#9ca3af",
-        ).pack(side="left", padx=(8, 0))
-
-        ctk.CTkLabel(
-            row,
-            text="→",
-            width=40,
-            text_color="#6b7280",
-        ).pack(side="left")
+            inner, text="→", font=T.font(14), text_color=T.TEXT_MUTED, width=30
+        ).pack(side="left", padx=8)
 
         mode, options, selected, fixed_field = self._dropdown_config(
             client_col, shopify_field
         )
 
         combo = ctk.CTkComboBox(
-            row,
+            inner,
             values=options,
-            width=300,
+            width=260,
             height=30,
-            fg_color="#16213e",
-            border_color="#1f2f54",
-            button_color="#1f2f54",
-            button_hover_color="#2a3f6b",
-            dropdown_fg_color="#0f172a",
-            dropdown_hover_color="#1f2f54",
+            corner_radius=6,
+            fg_color=T.BLUE_DIM,
+            border_color=T.BORDER,
+            button_color=T.BORDER_HOVER,
+            button_hover_color=T.ACCENT_HOVER,
+            dropdown_fg_color=T.SURFACE,
+            dropdown_hover_color=T.CARD,
+            text_color=T.TEXT,
+            font=T.font(12),
             state="readonly",
         )
         combo.set(selected)
-        combo.pack(side="left")
+        combo.pack(side="left", padx=(0, 10))
 
-        # When user picks Status / Published from a field list, switch to value mode
+        conf = _confidence(
+            client_col,
+            fixed_field or (selected if selected != SKIP_LABEL else None),
+        )
+        T.confidence_badge(inner, conf).pack(side="right")
+
         if mode == "field":
             combo.configure(
                 command=lambda choice, c=combo, col=client_col: self._on_field_choice(
@@ -238,7 +210,6 @@ class MappingScreen(ctk.CTkFrame):
     def _dropdown_config(
         self, client_col: str, shopify_field: str | None
     ) -> tuple[str, list[str], str, str | None]:
-        """Return (mode, options, selected, fixed_shopify_field)."""
         selected_field = shopify_field if shopify_field else SKIP_LABEL
         col_lower = (client_col or "").strip().lower()
 
@@ -268,7 +239,6 @@ class MappingScreen(ctk.CTkFrame):
     def _on_field_choice(
         self, combo: ctk.CTkComboBox, client_col: str, choice: str
     ) -> None:
-        """Switch to value-only dropdowns when Status / Published is chosen."""
         meta = next((d for d in self.dropdowns if d["widget"] is combo), None)
         if not meta:
             return
@@ -345,7 +315,6 @@ class MappingScreen(ctk.CTkFrame):
         return mapping
 
     def _apply_constant_values(self, mapping: list[dict]) -> dict:
-        """Return parsed_data copy with Status/Published constants applied."""
         rows = [dict(r) for r in self.parsed_data.get("rows") or []]
         for item in mapping:
             constant = item.get("constant_value")
