@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import threading
+from tkinter import filedialog
 
 import customtkinter as ctk
 
 from app.core.collection_crawler import CollectionCrawlError, crawl
+from app.core.shopify_generator import ShopifyGenerator
 from app.utils.helpers import is_valid_url, output_filename_from_url
 
 
@@ -114,11 +116,11 @@ class ScraperScreen(ctk.CTkFrame):
 
         self.next_btn = ctk.CTkButton(
             bottom,
-            text="Next: Map Columns →",
-            width=180,
+            text="Generate Shopify CSV →",
+            width=200,
             height=36,
             state="disabled",
-            command=self._go_mapping,
+            command=self._generate_csv,
         )
         self.next_btn.pack(side="right")
 
@@ -247,13 +249,43 @@ class ScraperScreen(ctk.CTkFrame):
                     anchor="w",
                 ).pack(anchor="w")
 
-    def _go_mapping(self) -> None:
+    def _identity_mapping(self) -> list[dict]:
+        """1:1 map — scraped headers are already Shopify field names."""
+        headers = (self.parsed_data or {}).get("headers") or []
+        return [
+            {"client_col": header, "shopify_field": header}
+            for header in headers
+        ]
+
+    def _generate_csv(self) -> None:
+        """Skip mapping — generate CSV directly from scraped Shopify columns."""
         if not self.parsed_data:
             return
-        from app.ui.mapping_screen import MappingScreen
 
-        self.app.show_screen(
-            MappingScreen,
-            parsed_data=self.parsed_data,
-            suggested_filename=self.suggested_filename,
+        self.error_label.configure(text="")
+        suggested = self.suggested_filename
+        if not suggested.lower().endswith(".csv"):
+            suggested += ".csv"
+
+        output_path = filedialog.asksaveasfilename(
+            title="Save Shopify CSV",
+            defaultextension=".csv",
+            initialfile=suggested,
+            filetypes=[("CSV files", "*.csv")],
         )
+        if not output_path:
+            return
+
+        try:
+            result = ShopifyGenerator().generate(
+                self.parsed_data,
+                self._identity_mapping(),
+                output_path,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.error_label.configure(text=f"Failed to generate CSV: {exc}")
+            return
+
+        from app.ui.success_screen import SuccessScreen
+
+        self.app.show_screen(SuccessScreen, result=result)
