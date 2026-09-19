@@ -70,6 +70,11 @@ class ColumnMapper:
         if not h:
             return None
 
+        # Exact Shopify field name (case-insensitive) — never Skip
+        for field in SHOPIFY_FIELDS:
+            if field.lower() == h:
+                return field
+
         rules: list[tuple[list[str], str]] = [
             (["title", "name", "product"], "Title"),
             (["handle", "slug", "url handle"], "URL handle"),

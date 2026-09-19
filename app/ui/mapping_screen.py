@@ -14,6 +14,12 @@ def relevant_fields(client_column: str) -> list[str]:
     """Return likely Shopify fields for a client column (max ~8) + Skip last."""
     h = (client_column or "").strip().lower()
 
+    # Exact Shopify field name → that field first, full list available, Skip last
+    for field in SHOPIFY_FIELDS:
+        if field.lower() == h:
+            rest = [f for f in SHOPIFY_FIELDS if f != field]
+            return [field] + rest + [SKIP_LABEL]
+
     rules: list[tuple[list[str], list[str]]] = [
         (["title", "name", "product"], ["Title", "Description", "Vendor", "Type"]),
         (["price", "mrp", "cost", "rate"], ["Price", "Compare-at price", "Cost per item"]),
@@ -22,12 +28,12 @@ def relevant_fields(client_column: str) -> list[str]:
         (["vendor", "brand", "company"], ["Vendor", "Title"]),
         (["tag", "keyword"], ["Tags"]),
         (["type", "category"], ["Type", "Product category", "Tags"]),
-        (["image", "photo", "img", "url"], ["Product image URL", "Variant image URL"]),
+        (["image", "photo", "img", "url"], ["Product image URL", "Variant image URL", "Image position"]),
         (["weight", "gram"], ["Weight value (grams)"]),
         (["qty", "stock", "inventory"], ["Inventory quantity"]),
         (["barcode", "ean", "upc"], ["Barcode", "SKU"]),
         (
-            ["size", "colour", "color", "material"],
+            ["size", "colour", "color", "material", "option"],
             [
                 "Option1 value",
                 "Option2 value",
@@ -43,7 +49,6 @@ def relevant_fields(client_column: str) -> list[str]:
 
     for keywords, fields in rules:
         if any(kw in h for kw in keywords):
-            # Dedupe while preserving order, cap at 8
             seen: set[str] = set()
             options: list[str] = []
             for field in fields:
@@ -55,7 +60,6 @@ def relevant_fields(client_column: str) -> list[str]:
             options.append(SKIP_LABEL)
             return options
 
-    # Default: all fields + Skip last
     return list(SHOPIFY_FIELDS) + [SKIP_LABEL]
 
 
