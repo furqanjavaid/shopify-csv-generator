@@ -23,6 +23,32 @@ class ScraperScreen(ctk.CTkFrame):
 
         T.header_bar(self, "Scrape Store", self._go_home)
 
+        # Fixed bottom bar FIRST so pack never pushes it off-screen
+        self.bottom_bar = ctk.CTkFrame(
+            self,
+            fg_color="#12121a",
+            height=64,
+            corner_radius=0,
+            border_width=1,
+            border_color="#2d2d3d",
+        )
+        self.bottom_bar.pack(side="bottom", fill="x")
+        self.bottom_bar.pack_propagate(False)
+
+        bottom_inner = ctk.CTkFrame(self.bottom_bar, fg_color="transparent")
+        bottom_inner.pack(fill="both", expand=True, padx=24)
+
+        self.count_badge = ctk.CTkLabel(
+            bottom_inner, text="", font=T.font(12, "bold"), text_color=T.ACCENT
+        )
+        self.count_badge.pack(side="left")
+
+        self.next_btn = T.primary_button(
+            bottom_inner, "Generate CSV →", self._go_mapping, width=180
+        )
+        self.next_btn.configure(state="disabled")
+        self.next_btn.pack(side="right", pady=12)
+
         body = ctk.CTkFrame(self, fg_color="transparent")
         body.pack(fill="both", expand=True, padx=24, pady=16)
 
@@ -73,16 +99,15 @@ class ScraperScreen(ctk.CTkFrame):
             text_color=T.BLUE,
         )
 
-        self.log_box = T.log_box(body, height=120)
-        self.log_box.pack(fill="x", pady=(8, 8))
-        self.log_box.pack_forget()
+        self.log_box = T.log_box(body, height=100)
+        # Shown after scrape starts — stays above bottom bar
 
         self.strategy_label = ctk.CTkLabel(
             body, text="", font=T.font(12), text_color=T.TEXT_SECONDARY
         )
         self.strategy_label.pack()
 
-        # Preview
+        # Preview (scrolls within body; bottom bar stays fixed)
         preview_card = T.card_frame(body)
         preview_card.pack(fill="both", expand=True, pady=(8, 0))
 
@@ -103,24 +128,6 @@ class ScraperScreen(ctk.CTkFrame):
         )
         self.preview_frame.pack(fill="both", expand=True, padx=12, pady=(0, 12))
 
-        bottom = ctk.CTkFrame(self, fg_color=T.SURFACE, height=64, corner_radius=0)
-        bottom.pack(fill="x", side="bottom")
-        bottom.pack_propagate(False)
-
-        bottom_inner = ctk.CTkFrame(bottom, fg_color="transparent")
-        bottom_inner.pack(fill="both", expand=True, padx=24)
-
-        self.count_badge = ctk.CTkLabel(
-            bottom_inner, text="", font=T.font(12, "bold"), text_color=T.ACCENT
-        )
-        self.count_badge.pack(side="left")
-
-        self.next_btn = T.primary_button(
-            bottom_inner, "Generate CSV →", self._go_mapping, width=180
-        )
-        self.next_btn.configure(state="disabled")
-        self.next_btn.pack(side="right", pady=12)
-
     def _go_home(self) -> None:
         from app.ui.home_screen import HomeScreen
 
@@ -128,7 +135,8 @@ class ScraperScreen(ctk.CTkFrame):
 
     def _append_log(self, message: str) -> None:
         if not self.log_box.winfo_ismapped():
-            self.log_box.pack(fill="x", pady=(8, 8))
+            # Insert above preview: pack after strategy_label
+            self.log_box.pack(fill="x", pady=(8, 8), after=self.strategy_label)
         self.log_box.configure(state="normal")
         self.log_box.insert("end", f"› {message.rstrip()}\n")
         self.log_box.see("end")
