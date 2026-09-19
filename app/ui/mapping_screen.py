@@ -2,13 +2,61 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from tkinter import filedialog
 
 import customtkinter as ctk
 
-from app.core.column_mapper import SKIP_LABEL, ColumnMapper
+from app.core.column_mapper import SKIP_LABEL, SHOPIFY_FIELDS, ColumnMapper
 from app.core.shopify_generator import ShopifyGenerator
+
+
+def relevant_fields(client_column: str) -> list[str]:
+    """Return likely Shopify fields for a client column (max ~8) + Skip last."""
+    h = (client_column or "").strip().lower()
+
+    rules: list[tuple[list[str], list[str]]] = [
+        (["title", "name", "product"], ["Title", "Description", "Vendor", "Type"]),
+        (["price", "mrp", "cost", "rate"], ["Price", "Compare-at price", "Cost per item"]),
+        (["sku", "code", "item", "article"], ["SKU", "Barcode"]),
+        (["desc", "detail", "about", "body"], ["Description", "SEO description"]),
+        (["vendor", "brand", "company"], ["Vendor", "Title"]),
+        (["tag", "keyword"], ["Tags"]),
+        (["type", "category"], ["Type", "Product category", "Tags"]),
+        (["image", "photo", "img", "url"], ["Product image URL", "Variant image URL"]),
+        (["weight", "gram"], ["Weight value (grams)"]),
+        (["qty", "stock", "inventory"], ["Inventory quantity"]),
+        (["barcode", "ean", "upc"], ["Barcode", "SKU"]),
+        (
+            ["size", "colour", "color", "material"],
+            [
+                "Option1 value",
+                "Option2 value",
+                "Option3 value",
+                "Option1 name",
+                "Option2 name",
+                "Option3 name",
+            ],
+        ),
+        (["status", "publish", "active"], ["Status", "Published on online store"]),
+        (["seo", "meta"], ["SEO title", "SEO description"]),
+    ]
+
+    for keywords, fields in rules:
+        if any(kw in h for kw in keywords):
+            # Dedupe while preserving order, cap at 8
+            seen: set[str] = set()
+            options: list[str] = []
+            for field in fields:
+                if field not in seen:
+                    seen.add(field)
+                    options.append(field)
+                if len(options) >= 8:
+                    break
+            options.append(SKIP_LABEL)
+            return options
+
+    # Default: all fields + Skip last
+    return list(SHOPIFY_FIELDS) + [SKIP_LABEL]
 
 
 class MappingScreen(ctk.CTkFrame):
@@ -21,7 +69,6 @@ class MappingScreen(ctk.CTkFrame):
         self.mapper = ColumnMapper()
         self.auto_mapping = self.mapper.auto_map(self.parsed_data["headers"])
         self.dropdowns: list[ctk.CTkOptionMenu] = []
-        self.options = self.mapper.dropdown_options()
 
         top = ctk.CTkFrame(self, fg_color="transparent")
         top.pack(fill="x", padx=20, pady=(16, 8))
@@ -132,9 +179,15 @@ class MappingScreen(ctk.CTkFrame):
         ).pack(side="left")
 
         selected = shopify_field if shopify_field else SKIP_LABEL
+        options = relevant_fields(client_col)
+
+        # Ensure auto-mapped value is always selectable even if outside relevance list
+        if selected != SKIP_LABEL and selected not in options:
+            options = [selected] + [o for o in options if o != selected]
+
         menu = ctk.CTkOptionMenu(
             row,
-            values=self.options,
+            values=options,
             width=300,
             height=30,
             fg_color="#16213e",
