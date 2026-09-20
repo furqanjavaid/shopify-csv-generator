@@ -26,7 +26,7 @@ def build():
             "-m",
             "PyInstaller",
             "--onefile",
-            "--windowed",
+            # "--windowed",  # temporarily disabled for updater debug console
             "--name",
             "SentivoTools",
             "--add-data",

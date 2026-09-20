@@ -31,12 +31,23 @@ def check_for_update(callback) -> None:
 
     def _check():
         try:
+            print(f"[Updater] Current version: {get_current_version()}")
             resp = requests.get(GITHUB_API, timeout=5)
+            print(f"[Updater] Status: {resp.status_code}")
+
             if resp.status_code != 200:
+                print(f"[Updater] No releases found ({resp.status_code})")
                 return
+
             data = resp.json()
+
+            if "tag_name" not in data:
+                print(f"[Updater] Invalid response: {data}")
+                return
+
             latest = data["tag_name"].lstrip("v")
             current = get_current_version()
+            print(f"[Updater] Latest: {latest}, Current: {current}")
 
             if _version_gt(latest, current):
                 download_url = None
@@ -44,14 +55,12 @@ def check_for_update(callback) -> None:
                     if asset["name"].lower().endswith(".exe"):
                         download_url = asset["browser_download_url"]
                         break
-
                 release_notes = data.get("body", "Bug fixes and improvements")
-                # First line only
                 release_notes = release_notes.split("\n")[0][:80]
-
+                print(f"[Updater] Update available: v{latest}")
                 callback(latest, download_url, release_notes)
-        except Exception:
-            pass  # Silent fail — never crash app for update check
+        except Exception as e:
+            print(f"[Updater] ERROR: {e}")
 
     thread = threading.Thread(target=_check, daemon=True)
     thread.start()
