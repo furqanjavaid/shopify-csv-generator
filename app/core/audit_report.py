@@ -20,6 +20,14 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
+from app.core.audit_templates import (
+    CHECK_ID_TO_PASSING,
+    CHECK_ID_TO_TEMPLATE,
+    EXEC_SUMMARY,
+    ISSUE_TEMPLATES,
+    PASSING_MESSAGES,
+)
+
 FONT = "Arial"
 RGB_DARK = RGBColor(0x1A, 0x1A, 0x2E)
 RGB_MID = RGBColor(0x2C, 0x3E, 0x50)
@@ -36,6 +44,91 @@ CAT_LABELS = {
     "speed": "Speed",
     "marketing": "Marketing",
 }
+
+
+def _get_issue_text(issue_key: str, evidence: str, url: str) -> dict:
+    """Get expert template for an issue, injecting real evidence."""
+    template = ISSUE_TEMPLATES.get(issue_key, {})
+    return {
+        "title": template.get("title", issue_key),
+        "severity": template.get("severity", "MEDIUM"),
+        "category": template.get("category", "General"),
+        "why": template.get("why", "").strip(),
+        "fix": template.get("fix", "").strip(),
+        "impact": template.get("impact", ""),
+        "evidence": evidence,
+        "url": url,
+    }
+
+
+def resolve_template_key(finding: dict, raw: dict | None = None) -> str | None:
+    """Map a report finding to an ISSUE_TEMPLATES key."""
+    cid = finding.get("check_id")
+    raw = raw or {}
+
+    if cid == 202:
+        policies = raw.get("policy_pages") or {}
+        shipping = policies.get("/policies/shipping-policy") or {}
+        if not shipping.get("exists"):
+            return "no_shipping_policy"
+        issue = (finding.get("issue") or "").lower()
+        if "thin" in issue or any(
+            (info or {}).get("thin") for info in policies.values()
+        ):
+            return "thin_policies"
+        if not finding.get("passed"):
+            return "no_shipping_policy"
+        return None
+
+    if cid == 7 and finding.get("passed"):
+        return None
+
+    return CHECK_ID_TO_TEMPLATE.get(cid)
+
+
+def enrich_finding(finding: dict, raw: dict | None = None) -> dict:
+    """Overlay expert template title/why/fix/impact onto a failing finding."""
+    if finding.get("passed") and finding.get("status") == "pass":
+        return finding
+
+    key = resolve_template_key(finding, raw)
+    if not key or key not in ISSUE_TEMPLATES:
+        return finding
+
+    urls = finding.get("urls") or []
+    url = urls[0] if urls else ""
+    expert = _get_issue_text(key, finding.get("evidence", ""), url)
+    enriched = dict(finding)
+    enriched["issue"] = expert["title"]
+    enriched["severity"] = expert["severity"] or finding.get("severity")
+    enriched["impact"] = expert["impact"] or finding.get("impact", "")
+    enriched["fix"] = expert["fix"] or finding.get("fix", "")
+    enriched["why"] = expert["why"]
+    enriched["template_key"] = key
+    enriched["check_name"] = expert["title"]
+    return enriched
+
+
+def format_passing_message(finding: dict, raw: dict | None = None) -> str:
+    """Build expert passing-check copy when a template exists."""
+    raw = raw or {}
+    cid = finding.get("check_id")
+    key = CHECK_ID_TO_PASSING.get(cid)
+    if not key or key not in PASSING_MESSAGES:
+        return f"✓ {finding.get('check_name')}: {(finding.get('evidence') or '')[:80]}"
+
+    tpl = PASSING_MESSAGES[key]
+    try:
+        msg = tpl.format(
+            count=raw.get("trust_badge_count", raw.get("email_capture_count", 0)),
+            match=raw.get("trust_text_match") or "detected signals",
+            price=raw.get("price_text") or "price",
+            time=raw.get("homepage_load_time", "—"),
+            title=raw.get("meta_title") or "",
+        )
+    except Exception:
+        msg = tpl
+    return f"✓ {msg}"
 
 
 def set_cell_bg(cell, hex_color: str):
@@ -152,7 +245,36 @@ def make_score_badge(score: float, output_dir: str) -> str:
 def generate_report(audit_data: dict, output_dir: str) -> str:
     store_url = audit_data.get("store_url", "")
     audit_date = audit_data.get("audit_date", datetime.now().isoformat())
-    findings = audit_data.get("findings") or []
+    raw = audit_data.get("raw_findings") or {}
+    findings_raw = audit_data.get("findings") or []
+    findings = [enrich_finding(f, raw) for f in findings_raw]
+
+    # Inject carousel as a medium issue when present and not already covered
+    if raw.get("has_carousel") and not any(
+        f.get("template_key") == "carousel_risk" for f in findings
+    ):
+        expert = _get_issue_text(
+            "carousel_risk",
+            f"Carousel/slider detected · slides={raw.get('carousel_slide_count', 0)}",
+            store_url,
+        )
+        findings.append({
+            "check_id": 15,
+            "check_name": expert["title"],
+            "severity": expert["severity"],
+            "category": "speed",
+            "passed": False,
+            "status": "warning",
+            "issue": expert["title"],
+            "evidence": expert["evidence"],
+            "impact": expert["impact"],
+            "fix": expert["fix"],
+            "why": expert["why"],
+            "urls": [store_url],
+            "screenshot": (raw.get("screenshots") or {}).get("homepage") or "",
+            "template_key": "carousel_risk",
+        })
+
     scores = audit_data.get("scores") or {"categories": {}, "overall": 0}
     screenshot_dir = os.path.join(output_dir, "screenshots")
 
@@ -212,22 +334,14 @@ def generate_report(audit_data: dict, output_dir: str) -> str:
     else:
         add_para(doc, "• No medium-priority gaps flagged.", size=10)
 
-    # Health paragraph
+    # Expert executive summary
     if overall >= 7.5:
-        summary = (
-            f"{store_name} shows a strong conversion foundation ({overall}/10). "
-            "Focus remaining effort on polishing medium gaps and protecting page speed."
-        )
+        summary = EXEC_SUMMARY["score_high"].format(store=store_name).strip()
     elif overall >= 5:
-        summary = (
-            f"{store_name} is conversion-capable but leaking revenue ({overall}/10). "
-            "Prioritize HIGH issues (ATC, reviews, trust, checkout) before marketing polish."
-        )
+        summary = EXEC_SUMMARY["score_medium"].format(store=store_name).strip()
     else:
-        summary = (
-            f"{store_name} has critical conversion blockers ({overall}/10). "
-            "Fix ATC visibility, trust/reviews, and checkout reliability before traffic spend."
-        )
+        summary = EXEC_SUMMARY["score_low"].format(store=store_name).strip()
+    summary = re.sub(r"\s*\n\s*", " ", summary)
     add_para(doc, summary, size=10, space_after=12)
     doc.add_page_break()
 
@@ -264,10 +378,16 @@ def generate_report(audit_data: dict, output_dir: str) -> str:
         urls = f.get("urls") or []
         if urls:
             add_para(doc, f"URL(s): {', '.join(urls[:4])}", size=8, color=RGB_GREY, space_after=1)
-        if f.get("impact"):
+        if f.get("why"):
+            add_para(doc, "Why this matters", size=10, bold=True, space_after=1)
+            add_para(doc, f["why"], size=9, space_after=4)
+        elif f.get("impact"):
             add_para(doc, f"Why it matters: {f['impact']}", size=9, space_after=1)
         if f.get("fix"):
-            add_para(doc, f"How to fix: {f['fix']}", size=9, space_after=4)
+            add_para(doc, "How to fix", size=10, bold=True, space_after=1)
+            add_para(doc, f["fix"], size=9, space_after=2)
+        if f.get("impact") and f.get("why"):
+            add_para(doc, f"Expected impact: {f['impact']}", size=9, bold=True, color=RGB_MID, space_after=4)
         shot = f.get("screenshot") or ""
         if shot:
             add_image_safe(doc, os.path.join(screenshot_dir, shot), width=4.8)
@@ -292,22 +412,21 @@ def generate_report(audit_data: dict, output_dir: str) -> str:
     add_para(doc, "🟢 NICE TO HAVE (LOW)", size=14, bold=True, color=RGB_GREEN)
     if lows:
         for f in lows:
-            add_para(doc, f"• {f.get('issue', '')} — {f.get('fix', '')}", size=9, space_after=3)
+            write_full_issue(f)
     else:
         add_para(doc, "• No low-priority gaps.", size=10)
 
-    # Passed checks brief
+    # Passed checks brief — expert passing messages
     passes = [f for f in findings if f.get("passed") and f.get("status") == "pass"]
     if passes:
         add_para(doc, "Passing checks", size=12, bold=True, space_after=4)
         for f in passes:
-            add_para(doc, f"✓ {f.get('check_name')}: {f.get('evidence', '')[:80]}", size=8, color=RGB_GREY, space_after=1)
+            add_para(doc, format_passing_message(f, raw), size=8, color=RGB_GREY, space_after=1)
 
     # ── Multi-page site health sections ──
     doc.add_page_break()
     add_section_bar(doc, "SITE HEALTH — MULTI-PAGE CRAWL", bg="2C3E50")
 
-    raw = audit_data.get("raw_findings") or {}
     pages = audit_data.get("pages_crawled") or []
     add_para(doc, f"Pages crawled: {len(pages)}", size=10, bold=True, space_after=4)
     for u in pages[:12]:
@@ -320,7 +439,7 @@ def generate_report(audit_data: dict, output_dir: str) -> str:
         for link in dead[:15]:
             add_para(doc, f"• 404: {link}", size=9, space_after=2)
     else:
-        add_para(doc, "• No 404 internal links found in sampled homepage links.", size=9, color=RGB_GREEN)
+        add_para(doc, f"• {PASSING_MESSAGES['dead_links']}", size=9, color=RGB_GREEN)
 
     # Policy Pages
     add_para(doc, "Policy Pages", size=12, bold=True, color=RGB_ORANGE, space_after=4)
@@ -354,17 +473,13 @@ def generate_report(audit_data: dict, output_dir: str) -> str:
     nav_count = nav.get("nav_link_count", raw.get("nav_links_count", 0))
     hamburger = nav.get("nav_hamburger_only", raw.get("nav_hamburger_only", False))
     if hamburger:
-        add_para(
-            doc,
-            f"• Hamburger-only / sparse nav detected ({nav_count} visible links).",
-            size=9,
-            color=RGB_ORANGE,
-            space_after=2,
-        )
+        expert = ISSUE_TEMPLATES["hamburger_only_desktop"]
+        add_para(doc, f"• {expert['title']}", size=9, color=RGB_ORANGE, space_after=2)
+        add_para(doc, f"  Visible links: {nav_count}", size=8, color=RGB_GREY, space_after=2)
     else:
         add_para(
             doc,
-            f"• Expanded navigation present ({nav_count} visible links).",
+            f"• {PASSING_MESSAGES['nav_depth'].format(count=nav_count)}",
             size=9,
             color=RGB_GREEN,
             space_after=2,
@@ -374,13 +489,15 @@ def generate_report(audit_data: dict, output_dir: str) -> str:
     add_para(doc, "Price Consistency", size=12, bold=True, space_after=4)
     mismatches = audit_data.get("price_mismatches") or raw.get("price_mismatches") or []
     if mismatches:
+        expert = ISSUE_TEMPLATES["price_mismatch"]
+        add_para(doc, f"• {expert['title']}", size=9, color=RGB_RED, space_after=2)
         for m in mismatches[:8]:
             add_para(
                 doc,
-                f"• {m.get('product_url', '')}: collection={m.get('collection_price')} "
+                f"  {m.get('product_url', '')}: collection={m.get('collection_price')} "
                 f"vs PDP={m.get('pdp_price')}",
-                size=9,
-                color=RGB_RED,
+                size=8,
+                color=RGB_GREY,
                 space_after=2,
             )
     else:
