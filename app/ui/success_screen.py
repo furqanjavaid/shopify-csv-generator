@@ -34,7 +34,7 @@ class SuccessScreen(ctk.CTkFrame):
         body = attach_sidebar(self, app, "upload")
 
         center = ctk.CTkFrame(body, fg_color="transparent")
-        center.pack(expand=True)
+        center.pack(fill="both", expand=True)
 
         self.check_label = ctk.CTkLabel(
             center,

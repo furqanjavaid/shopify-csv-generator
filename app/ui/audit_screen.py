@@ -37,6 +37,34 @@ class AuditScreen(ctk.CTkFrame):
         self.mod_email = ctk.BooleanVar(value=True)
         self.mod_seo = ctk.BooleanVar(value=False)
 
+        # Persistent bottom bar FIRST
+        self.bottom_bar = ctk.CTkFrame(
+            self, fg_color=T.BG_SURFACE_A, height=64, corner_radius=0
+        )
+        self.bottom_bar.pack(side="bottom", fill="x")
+        self.bottom_bar.pack_propagate(False)
+
+        self.open_folder_btn = ctk.CTkButton(
+            self.bottom_bar,
+            text="Open Folder",
+            command=self._open_folder,
+            width=120,
+            **T.secondary_btn(),
+        )
+        self.open_btn = ctk.CTkButton(
+            self.bottom_bar,
+            text="Open Word Report",
+            command=self._open_report,
+            width=160,
+            **T.primary_btn(),
+        )
+        self.open_folder_btn.pack(side="right", padx=(8, 16), pady=12)
+        self.open_btn.pack(side="right", pady=12)
+        self.open_btn.configure(
+            state="disabled", fg_color=T.BG_SURFACE_B, text_color=T.TEXT_MUTED
+        )
+        self.open_folder_btn.configure(state="disabled")
+
         body = attach_sidebar(self, app, "audit")
 
         T.page_title(
@@ -113,20 +141,7 @@ class AuditScreen(ctk.CTkFrame):
 
         self.progress = T.progress_bar(body)
         self.log_box = T.log_box(body, height=180)
-        self.log_box.pack(fill="both", expand=True, pady=(8, 12))
-
-        actions = ctk.CTkFrame(body, fg_color="transparent")
-        actions.pack(fill="x", side="bottom")
-        self.open_folder_btn = T.secondary_button(
-            actions, "Open Folder", self._open_folder, width=120
-        )
-        self.open_folder_btn.configure(state="disabled")
-        self.open_folder_btn.pack(side="right", padx=(8, 0))
-        self.open_btn = T.primary_button(
-            actions, "Open Report", self._open_report, width=140
-        )
-        self.open_btn.configure(state="disabled")
-        self.open_btn.pack(side="right")
+        self.log_box.pack(fill="both", expand=True, pady=(8, 0))
 
     def _module_check(self, parent, text: str, var: ctk.BooleanVar) -> None:
         ctk.CTkCheckBox(
@@ -182,7 +197,9 @@ class AuditScreen(ctk.CTkFrame):
         self.summary_row.pack_forget()
         self.report_path = None
         self.output_dir = None
-        self.open_btn.configure(state="disabled")
+        self.open_btn.configure(
+            state="disabled", fg_color=T.BG_SURFACE_B, text_color=T.TEXT_MUTED
+        )
         self.open_folder_btn.configure(state="disabled")
 
         self.log_box.configure(state="normal")
@@ -230,7 +247,9 @@ class AuditScreen(ctk.CTkFrame):
         self.start_btn.configure(state="normal")
         self.output_dir = output_dir
         self.report_path = report_path
-        self.open_btn.configure(state="normal")
+        self.open_btn.configure(
+            state="normal", fg_color=T.ACCENT, text_color=T.BG_PRIMARY
+        )
         self.open_folder_btn.configure(state="normal")
 
         pages = len(audit_data.get("pages_crawled") or [])

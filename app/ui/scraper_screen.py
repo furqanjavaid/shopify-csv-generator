@@ -22,6 +22,36 @@ class ScraperScreen(ctk.CTkFrame):
         self.source_url: str = ""
         self.suggested_filename: str = "shopify_products.csv"
 
+        # Persistent bottom bar FIRST (always visible)
+        self.bottom_bar = ctk.CTkFrame(
+            self, fg_color=T.BG_SURFACE_A, height=64, corner_radius=0
+        )
+        self.bottom_bar.pack(side="bottom", fill="x")
+        self.bottom_bar.pack_propagate(False)
+
+        self.count_badge = ctk.CTkLabel(
+            self.bottom_bar, text="", font=T.font(12, "bold"), text_color=T.ACCENT
+        )
+        self.count_badge.pack(side="left", padx=16, pady=12)
+
+        self.next_btn = ctk.CTkButton(
+            self.bottom_bar,
+            text="Generate Shopify CSV →",
+            command=self._go_mapping,
+            width=200,
+            **T.primary_btn(),
+        )
+        self.clear_btn = ctk.CTkButton(
+            self.bottom_bar,
+            text="Clear",
+            command=self._clear_results,
+            width=100,
+            **T.secondary_btn(),
+        )
+        self.clear_btn.pack(side="right", padx=8, pady=12)
+        self.next_btn.pack(side="right", padx=(0, 16), pady=12)
+        self._disable_actions()
+
         body = attach_sidebar(self, app, "scraper")
 
         T.page_title(
@@ -30,48 +60,12 @@ class ScraperScreen(ctk.CTkFrame):
             "Extract products from any Shopify collection URL",
         )
 
-        # Top / middle / bottom split — bottom bar reserved first
         main_area = ctk.CTkFrame(body, fg_color="transparent")
         main_area.pack(fill="both", expand=True)
 
-        # Bottom bar FIRST (always visible; buttons disabled until scrape completes)
-        self.action_bar = ctk.CTkFrame(
-            main_area, fg_color=T.BG_SURFACE_A, height=64, corner_radius=0
-        )
-        self.action_bar.pack(side="bottom", fill="x", padx=0, pady=0)
-        self.action_bar.pack_propagate(False)
-
-        self.count_badge = ctk.CTkLabel(
-            self.action_bar, text="", font=T.font(12, "bold"), text_color=T.ACCENT
-        )
-        self.count_badge.pack(side="left", padx=16, pady=12)
-
-        self.next_btn = ctk.CTkButton(
-            self.action_bar,
-            text="Generate Shopify CSV →",
-            command=self._go_mapping,
-            width=200,
-            **T.primary_btn(),
-        )
-        self.clear_btn = ctk.CTkButton(
-            self.action_bar,
-            text="Clear",
-            command=self._clear_results,
-            width=100,
-            **T.secondary_btn(),
-        )
-        self.clear_btn.pack(side="right", padx=8, pady=12)
-        self.next_btn.pack(side="right", padx=(0, 16), pady=12)
-        self.next_btn.configure(
-            state="disabled", fg_color=T.BG_SURFACE_B, text_color=T.TEXT_MUTED
-        )
-        self.clear_btn.configure(state="disabled")
-
-        # Middle — preview (expands)
         middle = ctk.CTkFrame(main_area, fg_color="transparent")
         middle.pack(fill="both", expand=True)
 
-        # Top — controls above preview
         top = ctk.CTkFrame(main_area, fg_color="transparent")
         top.pack(fill="x", before=middle)
 
@@ -92,7 +86,6 @@ class ScraperScreen(ctk.CTkFrame):
         )
         self.scrape_btn.pack(side="right")
 
-        # Options checkboxes (UI only — crawl uses defaults)
         opts = ctk.CTkFrame(top, fg_color="transparent")
         opts.pack(fill="x", pady=(0, 8))
         self.var_variants = ctk.BooleanVar(value=True)
@@ -136,9 +129,8 @@ class ScraperScreen(ctk.CTkFrame):
         )
         self.strategy_label.pack()
 
-        # Preview table in middle
         preview_card = T.card_frame(middle)
-        preview_card.pack(fill="both", expand=True, pady=(8, 8))
+        preview_card.pack(fill="both", expand=True, pady=(8, 0))
         ctk.CTkLabel(
             preview_card, text="Results Preview",
             font=T.font(12, "bold"), text_color=T.TEXT_SECONDARY, anchor="w",
@@ -153,6 +145,24 @@ class ScraperScreen(ctk.CTkFrame):
         )
         self.preview_frame.pack(fill="both", expand=True, padx=12, pady=(0, 12))
 
+    def _disable_actions(self) -> None:
+        self.next_btn.configure(
+            state="disabled", fg_color=T.BG_SURFACE_B, text_color=T.TEXT_MUTED
+        )
+        self.clear_btn.configure(state="disabled")
+
+    def _enable_actions(self) -> None:
+        self.next_btn.configure(
+            state="normal", fg_color=T.ACCENT, text_color=T.BG_PRIMARY
+        )
+        self.clear_btn.configure(state="normal")
+
+    def _show_action_bar(self) -> None:
+        self._enable_actions()
+
+    def _hide_action_bar(self) -> None:
+        self._disable_actions()
+
     def _append_log(self, message: str) -> None:
         if not self.log_box.winfo_ismapped():
             self.log_box.pack(fill="x", pady=(8, 8), after=self.strategy_label)
@@ -160,16 +170,6 @@ class ScraperScreen(ctk.CTkFrame):
         self.log_box.insert("end", f"› {message.rstrip()}\n")
         self.log_box.see("end")
         self.log_box.configure(state="disabled")
-
-    def _show_action_bar(self) -> None:
-        self.next_btn.configure(state="normal", **T.primary_btn())
-        self.clear_btn.configure(state="normal")
-
-    def _hide_action_bar(self) -> None:
-        self.next_btn.configure(
-            state="disabled", fg_color=T.BG_SURFACE_B, text_color=T.TEXT_MUTED
-        )
-        self.clear_btn.configure(state="disabled")
 
     def _clear_results(self) -> None:
         """Reset scraper UI to initial empty state."""
@@ -186,7 +186,7 @@ class ScraperScreen(ctk.CTkFrame):
         if self.log_box.winfo_ismapped():
             self.log_box.pack_forget()
         self._clear_preview()
-        self._hide_action_bar()
+        self._disable_actions()
         self.progress.stop()
         self.progress.pack_forget()
         self.loading_label.pack_forget()
@@ -200,7 +200,7 @@ class ScraperScreen(ctk.CTkFrame):
         self.parsed_data = None
         self.source_url = url
         self.suggested_filename = output_filename_from_url(url)
-        self._hide_action_bar()
+        self._disable_actions()
         self._clear_preview()
 
         self.log_box.configure(state="normal")
@@ -253,7 +253,7 @@ class ScraperScreen(ctk.CTkFrame):
         )
         self._append_log(f"Done — {count} rows ready")
         self._render_preview()
-        self._show_action_bar()
+        self._enable_actions()
 
     def _on_error(self, message: str) -> None:
         self.progress.stop()
@@ -262,7 +262,7 @@ class ScraperScreen(ctk.CTkFrame):
         self.scrape_btn.configure(state="normal")
         self.error_label.configure(text=message)
         self._append_log(f"ERROR: {message}")
-        self._hide_action_bar()
+        self._disable_actions()
 
     def _clear_preview(self) -> None:
         for child in self.preview_frame.winfo_children():
@@ -282,7 +282,6 @@ class ScraperScreen(ctk.CTkFrame):
             "Image Src",
             "Option1 Name",
             "Option1 Value",
-            # App crawler column names (same fields, different labels)
             "Price",
             "SKU",
             "Product image URL",

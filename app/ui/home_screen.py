@@ -17,14 +17,17 @@ class HomeScreen(ctk.CTkFrame):
 
         body = attach_sidebar(self, app, "home")
 
+        content = ctk.CTkFrame(body, fg_color="transparent")
+        content.pack(fill="both", expand=True)
+
         T.page_title(
-            body,
+            content,
             "Shopify Product Tools",
             "Upload · Scrape · Audit — all in one place",
         )
 
         # Feature cards
-        cards = ctk.CTkFrame(body, fg_color="transparent")
+        cards = ctk.CTkFrame(content, fg_color="transparent")
         cards.pack(fill="x", pady=(0, T.GRID_GAP))
         cards.grid_columnconfigure((0, 1, 2), weight=1)
 
@@ -45,7 +48,7 @@ class HomeScreen(ctk.CTkFrame):
         )
 
         # Two columns: Recent Tasks + System Status
-        lower = ctk.CTkFrame(body, fg_color="transparent")
+        lower = ctk.CTkFrame(content, fg_color="transparent")
         lower.pack(fill="both", expand=True, pady=(0, 8))
         lower.grid_columnconfigure(0, weight=3)
         lower.grid_columnconfigure(1, weight=2)
@@ -55,7 +58,7 @@ class HomeScreen(ctk.CTkFrame):
         self._system_status(lower)
 
         # Bottom bar
-        footer = ctk.CTkFrame(body, fg_color="transparent", height=28)
+        footer = ctk.CTkFrame(content, fg_color="transparent", height=28)
         footer.pack(fill="x", side="bottom")
         ctk.CTkLabel(
             footer, text="v1.0", font=T.font_tuple(T.CAPTION), text_color=T.TEXT_MUTED

@@ -97,6 +97,30 @@ class MappingScreen(ctk.CTkFrame):
         self.auto_mapping = self.mapper.auto_map(self.parsed_data["headers"])
         self.dropdowns: list[dict[str, Any]] = []
 
+        # Persistent bottom bar FIRST
+        self.bottom_bar = ctk.CTkFrame(
+            self, fg_color=T.BG_SURFACE_A, height=64, corner_radius=0
+        )
+        self.bottom_bar.pack(side="bottom", fill="x")
+        self.bottom_bar.pack_propagate(False)
+
+        self.generate_btn = ctk.CTkButton(
+            self.bottom_bar,
+            text="Generate Shopify CSV →",
+            command=self._generate,
+            width=220,
+            **T.primary_btn(),
+        )
+        self.generate_btn.pack(side="right", padx=16, pady=12)
+        if self.parsed_data.get("headers"):
+            self.generate_btn.configure(
+                state="normal", fg_color=T.ACCENT, text_color=T.BG_PRIMARY
+            )
+        else:
+            self.generate_btn.configure(
+                state="disabled", fg_color=T.BG_SURFACE_B, text_color=T.TEXT_MUTED
+            )
+
         body = attach_sidebar(self, app, "upload")
 
         top = ctk.CTkFrame(body, fg_color="transparent")
@@ -150,13 +174,6 @@ class MappingScreen(ctk.CTkFrame):
         self.table.pack(fill="both", expand=True, padx=1, pady=(0, 1))
 
         self._rebuild_rows()
-
-        actions = ctk.CTkFrame(body, fg_color="transparent")
-        actions.pack(fill="x", side="bottom")
-        self.generate_btn = T.primary_button(
-            actions, "Generate Shopify CSV →", self._generate, width=220
-        )
-        self.generate_btn.pack(side="right")
 
     def _rebuild_rows(self) -> None:
         for child in self.table.winfo_children():

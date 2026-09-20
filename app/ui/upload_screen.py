@@ -23,6 +23,25 @@ class UploadScreen(ctk.CTkFrame):
         self.suggested_filename: str = "shopify_products.csv"
         self._hover_pulse = False
 
+        # Persistent bottom bar FIRST
+        self.bottom_bar = ctk.CTkFrame(
+            self, fg_color=T.BG_SURFACE_A, height=64, corner_radius=0
+        )
+        self.bottom_bar.pack(side="bottom", fill="x")
+        self.bottom_bar.pack_propagate(False)
+
+        self.next_btn = ctk.CTkButton(
+            self.bottom_bar,
+            text="Next: Map Columns →",
+            command=self._go_mapping,
+            width=200,
+            **T.primary_btn(),
+        )
+        self.next_btn.pack(side="right", padx=16, pady=12)
+        self.next_btn.configure(
+            state="disabled", fg_color=T.BG_SURFACE_B, text_color=T.TEXT_MUTED
+        )
+
         body = attach_sidebar(self, app, "upload")
 
         # Title row + step indicator
@@ -101,15 +120,6 @@ class UploadScreen(ctk.CTkFrame):
         )
         self.preview_frame.pack(fill="both", expand=True, padx=12, pady=(0, 12))
 
-        # Actions
-        actions = ctk.CTkFrame(body, fg_color="transparent")
-        actions.pack(fill="x", side="bottom")
-        self.next_btn = T.primary_button(
-            actions, "Next: Map Columns →", self._go_mapping, width=200
-        )
-        self.next_btn.configure(state="disabled")
-        self.next_btn.pack(side="right")
-
     def _drop_enter(self, _e=None) -> None:
         self.drop_zone.configure(border_color=T.ACCENT)
         if not self._hover_pulse:
@@ -162,14 +172,18 @@ class UploadScreen(ctk.CTkFrame):
             ).pack(side="left")
 
             self._render_preview()
-            self.next_btn.configure(state="normal")
+            self.next_btn.configure(
+                state="normal", fg_color=T.ACCENT, text_color=T.BG_PRIMARY
+            )
             self.drop_zone.configure(border_color=T.ACCENT)
         except ValueError as exc:
             self.parsed_data = None
             self.filepath = None
             self.suggested_filename = "shopify_products.csv"
             self.error_label.configure(text=str(exc))
-            self.next_btn.configure(state="disabled")
+            self.next_btn.configure(
+                state="disabled", fg_color=T.BG_SURFACE_B, text_color=T.TEXT_MUTED
+            )
             self._clear_preview()
 
     def _clear_preview(self) -> None:

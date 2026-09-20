@@ -21,7 +21,8 @@ class App(ctk.CTk):
 
         self.title("Shopify Product Tools — Sentivo")
         self.geometry("980x700")
-        self.resizable(False, False)
+        self.minsize(960, 640)
+        self.resizable(True, True)
         self.configure(fg_color=T.BG)
 
         self._center_window()
