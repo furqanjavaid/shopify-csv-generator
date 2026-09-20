@@ -1,1 +1,1 @@
-"""Shopify CSV Generator application package."""
+"""Sentivo Tools application package."""

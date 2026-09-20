@@ -1,1 +1,1 @@
-"""Core business logic for Shopify CSV Generator."""
+"""Core business logic for Sentivo Tools."""

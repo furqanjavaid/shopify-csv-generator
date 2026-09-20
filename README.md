@@ -1,42 +1,32 @@
-# Shopify CSV Generator
+# Sentivo Tools
+**by Sentivo Limited**
 
-Desktop app that converts product CSV/Excel files or product listing URLs into Shopify-ready import CSV.
+A professional desktop toolkit for Shopify store management.
 
 ## Features
+- 📁 File Upload — Convert any client CSV/Excel to Shopify format
+- 🔗 URL Scraper — Extract products from any Shopify store
+- 🔍 Store Auditor — Full CRO audit with Word report
+- 🖼️ Image Converter — Bulk convert images to WebP/PNG/JPG
 
-- **Upload File** — CSV or Excel with auto column mapping
-- **Scrape URL** — JSON-LD / Open Graph / HTML heuristics
-- **Shopify CSV** — Exact 36-field product import format
+## Requirements
+- Windows 10/11 (64-bit)
+- Internet connection (for scraping and auditing)
 
-## First time setup
+## Installation
+Run `SentivoToolsSetup.exe` and follow the wizard.
 
+## Development
 ```bash
 pip install -r requirements.txt
-```
-
-## Run in development
-
-```bash
+playwright install chromium
 python main.py
 ```
 
-## Build executable
-
+## Build
 ```bash
-python build.py
+python installer\build_installer.bat
 ```
 
-Output will be in `/dist/` folder:
-
-- Windows: `ShopifyCSVGenerator.exe`
-- Mac: `ShopifyCSVGenerator` (run with open or double-click)
-
-## Notes
-
-- Build on Windows to get `.exe`, build on Mac to get `.app`
-- Do not share the `/build/` or `/dist/` folders — rebuild on each machine
-- Window size: 900×650, dark theme (CustomTkinter)
-
-## Tech stack
-
-Python 3.11 · CustomTkinter · pandas · BeautifulSoup4 · PyInstaller
+## Version
+1.0.0 — Initial release

@@ -1,4 +1,4 @@
-"""Shopify Product Tools — desktop entry point.
+"""Sentivo Tools — desktop entry point.
 
 Screens: HomeScreen, UploadScreen, ScraperScreen, MappingScreen,
 SuccessScreen, AuditScreen, ConverterScreen, SettingsScreen.
@@ -24,7 +24,7 @@ class App(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
 
-        self.title(f"Shopify Product Tools — Sentivo  v{get_current_version()}")
+        self.title(f"Sentivo Tools  v{get_current_version()}")
         self.geometry("980x700")
         self.minsize(960, 640)
         self.resizable(True, True)

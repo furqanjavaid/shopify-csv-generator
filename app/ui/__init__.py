@@ -1,1 +1,1 @@
-"""UI screens for Shopify CSV Generator."""
+"""UI screens for Sentivo Tools."""

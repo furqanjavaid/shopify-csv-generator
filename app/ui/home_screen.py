@@ -22,7 +22,7 @@ class HomeScreen(ctk.CTkFrame):
 
         T.page_title(
             content,
-            "Shopify Product Tools",
+            "Sentivo Tools",
             "Upload · Scrape · Audit — all in one place",
         )
 

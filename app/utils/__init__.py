@@ -1,1 +1,1 @@
-"""Shared helpers for Shopify CSV Generator."""
+"""Shared helpers for Sentivo Tools."""

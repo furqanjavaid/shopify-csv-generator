@@ -124,7 +124,7 @@ def test_automapping_aliases():
     )
 
 
-# ─── SHOPIFY CSV GENERATOR ─────────────────────────────────
+# ─── SENTIVO TOOLS CSV GENERATION ──────────────────────────
 def test_csv_generation():
     from app.core.shopify_generator import ShopifyGenerator
 

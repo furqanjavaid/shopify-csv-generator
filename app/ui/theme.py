@@ -1,4 +1,4 @@
-"""Design system for Shopify Product Tools — Sentivo amber theme."""
+"""Design system for Sentivo Tools — Sentivo amber theme."""
 
 from __future__ import annotations
 
