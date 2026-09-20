@@ -41,11 +41,14 @@ def check_for_update(callback) -> None:
             if _version_gt(latest, current):
                 download_url = None
                 for asset in data.get("assets", []):
-                    if asset["name"].endswith(".exe"):
+                    if asset["name"].lower().endswith(".exe"):
                         download_url = asset["browser_download_url"]
                         break
 
                 release_notes = data.get("body", "Bug fixes and improvements")
+                # First line only
+                release_notes = release_notes.split("\n")[0][:80]
+
                 callback(latest, download_url, release_notes)
         except Exception:
             pass  # Silent fail — never crash app for update check
