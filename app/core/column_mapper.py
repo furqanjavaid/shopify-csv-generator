@@ -156,7 +156,9 @@ class ColumnMapper:
         # Exact Shopify field name (case-insensitive, space-normalized)
         for field in SHOPIFY_FIELDS:
             if _normalize_header(field) == h:
-                return field
+                if field not in used_fields:
+                    return field
+                return None
 
         # Exact alias match (normalized)
         for field, aliases in FIELD_ALIASES.items():
@@ -165,7 +167,7 @@ class ColumnMapper:
             if h in normalized_aliases or h.replace(" / ", "/") in normalized_aliases:
                 if field not in used_fields:
                     return field
-                continue
+                return None
 
         # Broader keyword fallback for remaining columns
         rules: list[tuple[list[str], str]] = [
