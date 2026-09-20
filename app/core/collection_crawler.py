@@ -292,8 +292,11 @@ class CollectionCrawler:
 
         title = str(product.get("title") or "").strip()
         url_handle = str(product.get("handle") or handle).strip()
-        description = str(
-            product.get("description") or product.get("body_html") or ""
+        # body_html / description must stay ONE string — never split on commas/tags
+        description = self._as_single_html_string(
+            product.get("body_html")
+            if product.get("body_html") not in (None, "")
+            else product.get("description")
         )
         vendor = str(product.get("vendor") or "").strip()
         product_type = str(product.get("type") or product.get("product_type") or "").strip()
@@ -490,6 +493,27 @@ class CollectionCrawler:
         }
 
     @staticmethod
+    def _as_single_html_string(value: Any) -> str:
+        """
+        Coerce Shopify body_html / description to one cell value.
+
+        Never iterate or split on commas — HTML often contains commas inside
+        tags and prose; splitting would create bogus extra product rows.
+        """
+        if value is None:
+            return ""
+        if isinstance(value, (list, tuple)):
+            # Some payloads rarely nest fragments — join, do not emit multiple rows
+            value = "".join(str(part) for part in value if part is not None)
+        text = str(value)
+        # Normalize newlines to spaces so one logical cell stays one row when
+        # viewed in naive editors; csv.QUOTE_ALL still preserves content safely.
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        # Keep paragraph breaks as spaces (Shopify import accepts either)
+        text = re.sub(r"\n+", " ", text)
+        return text.strip()
+
+    @staticmethod
     def _absolute_url(url: str) -> str:
         """Ensure protocol-relative Shopify CDN URLs use https:."""
         url = (url or "").strip()
@@ -599,7 +623,13 @@ def drafts_to_parsed_data(drafts: list[dict[str, str]]) -> dict[str, Any]:
     for draft in drafts:
         row: dict[str, str] = {}
         for key, header in DRAFT_KEY_TO_HEADER.items():
-            row[header] = str(draft.get(key, "") or "")
+            raw = draft.get(key, "") or ""
+            # Description must remain a single string cell (never list/iterable)
+            if key == "description" and not isinstance(raw, str):
+                raw = CollectionCrawler._as_single_html_string(raw)
+            else:
+                raw = str(raw)
+            row[header] = raw
         rows.append(row)
 
     return {

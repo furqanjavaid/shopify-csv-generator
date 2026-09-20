@@ -237,7 +237,7 @@ class ShopifyGenerator:
             writer = csv.DictWriter(
                 fh,
                 fieldnames=NEW_SHOPIFY_COLUMNS,
-                quoting=csv.QUOTE_MINIMAL,
+                quoting=csv.QUOTE_ALL,
             )
             writer.writeheader()
             writer.writerows(output_rows)
@@ -443,5 +443,8 @@ class ShopifyGenerator:
     def _split_option_values(raw: str) -> list[str]:
         if not raw:
             return []
+        # Never comma-split HTML (e.g. Description wrongly mapped to an option)
+        if "<" in raw and ">" in raw:
+            return [raw.strip()]
         parts = re.split(r"[,;]", raw)
         return [p.strip() for p in parts if p.strip()]
