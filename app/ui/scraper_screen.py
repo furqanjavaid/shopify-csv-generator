@@ -106,20 +106,32 @@ class ScraperScreen(ctk.CTkFrame):
             corner_radius=T.BORDER_RADIUS,
             height=140,
         )
-        self.preview_frame.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        self.preview_frame.pack(fill="both", expand=True, padx=12, pady=(0, 8))
 
-        # Bottom actions
-        actions = ctk.CTkFrame(body, fg_color="transparent")
-        actions.pack(fill="x", side="bottom")
+        # Action bar — shown only after scrape completes with results
+        self.action_bar = ctk.CTkFrame(preview_card, fg_color="transparent")
         self.count_badge = ctk.CTkLabel(
-            actions, text="", font=T.font(12, "bold"), text_color=T.ACCENT
+            self.action_bar, text="", font=T.font(12, "bold"), text_color=T.ACCENT
         )
-        self.count_badge.pack(side="left")
-        self.next_btn = T.primary_button(
-            actions, "Generate CSV →", self._go_mapping, width=180
+        self.count_badge.pack(side="left", padx=T.CARD_PADDING)
+
+        self.next_btn = ctk.CTkButton(
+            self.action_bar,
+            text="Generate Shopify CSV →",
+            command=self._go_mapping,
+            width=200,
+            **T.primary_btn(),
         )
-        self.next_btn.configure(state="disabled")
-        self.next_btn.pack(side="right")
+        self.next_btn.pack(side="right", padx=(0, T.CARD_PADDING), pady=(0, 12))
+
+        self.clear_btn = ctk.CTkButton(
+            self.action_bar,
+            text="Clear",
+            command=self._clear_results,
+            width=100,
+            **T.secondary_btn(),
+        )
+        self.clear_btn.pack(side="right", padx=(0, 8), pady=(0, 12))
 
     def _append_log(self, message: str) -> None:
         if not self.log_box.winfo_ismapped():
@@ -129,6 +141,34 @@ class ScraperScreen(ctk.CTkFrame):
         self.log_box.see("end")
         self.log_box.configure(state="disabled")
 
+    def _show_action_bar(self) -> None:
+        if not self.action_bar.winfo_ismapped():
+            self.action_bar.pack(fill="x", padx=0, pady=(0, 4))
+
+    def _hide_action_bar(self) -> None:
+        self.action_bar.pack_forget()
+
+    def _clear_results(self) -> None:
+        """Reset scraper UI to initial empty state."""
+        self.parsed_data = None
+        self.source_url = ""
+        self.suggested_filename = "shopify_products.csv"
+        self.url_entry.delete(0, "end")
+        self.error_label.configure(text="")
+        self.strategy_label.configure(text="")
+        self.count_badge.configure(text="")
+        self.log_box.configure(state="normal")
+        self.log_box.delete("1.0", "end")
+        self.log_box.configure(state="disabled")
+        if self.log_box.winfo_ismapped():
+            self.log_box.pack_forget()
+        self._clear_preview()
+        self._hide_action_bar()
+        self.progress.stop()
+        self.progress.pack_forget()
+        self.loading_label.pack_forget()
+        self.scrape_btn.configure(state="normal")
+
     def _start_scrape(self) -> None:
         url = self.url_entry.get().strip()
         self.error_label.configure(text="")
@@ -137,7 +177,7 @@ class ScraperScreen(ctk.CTkFrame):
         self.parsed_data = None
         self.source_url = url
         self.suggested_filename = output_filename_from_url(url)
-        self.next_btn.configure(state="disabled")
+        self._hide_action_bar()
         self._clear_preview()
 
         self.log_box.configure(state="normal")
@@ -190,7 +230,7 @@ class ScraperScreen(ctk.CTkFrame):
         )
         self._append_log(f"Done — {count} rows ready")
         self._render_preview()
-        self.next_btn.configure(state="normal")
+        self._show_action_bar()
 
     def _on_error(self, message: str) -> None:
         self.progress.stop()
@@ -199,7 +239,7 @@ class ScraperScreen(ctk.CTkFrame):
         self.scrape_btn.configure(state="normal")
         self.error_label.configure(text=message)
         self._append_log(f"ERROR: {message}")
-        self.next_btn.configure(state="disabled")
+        self._hide_action_bar()
 
     def _clear_preview(self) -> None:
         for child in self.preview_frame.winfo_children():
