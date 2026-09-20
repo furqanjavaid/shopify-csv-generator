@@ -390,7 +390,12 @@ def run_playwright_audit(
             except Exception:
                 page.goto(product_url, wait_until="domcontentloaded", timeout=30000)
             page.evaluate("window.scrollTo(0, 0)")
-            page.wait_for_timeout(500)
+            # Wait for images to load after JS renders (configurator themes)
+            page.wait_for_timeout(3000)
+            try:
+                page.wait_for_selector("img[src*='cdn.shopify']", timeout=5000)
+            except Exception:
+                pass
             product_screenshot = take_screenshot(page, "product", screenshot_dir)
 
             atc = page.query_selector(
@@ -418,16 +423,17 @@ def run_playwright_audit(
                 findings["atc_above_fold"] = False
                 findings["atc_y_position"] = 9999
 
-            product_images = page.query_selector_all(
-                ".product__media img, "
-                "[class*='product-image'] img, "
-                ".product-single__photo img, "
-                "[class*='product-gallery'] img, "
-                "[class*='product-media'] img, "
-                ".product img, "
-                "img[src*='products']"
+            # Broader image search — Shopify CDN / JS-rendered configurators
+            all_images = page.query_selector_all(
+                "img[src*='cdn.shopify'], img[src*='shopify.com']"
             )
-            # Deduplicate by src
+            product_images = [
+                img
+                for img in all_images
+                if img.is_visible()
+                and (img.bounding_box() or {}).get("width", 0) > 100
+            ]
+
             seen: set[str] = set()
             unique_images = []
             for img in product_images:
@@ -435,6 +441,7 @@ def run_playwright_audit(
                 if src and src not in seen:
                     seen.add(src)
                     unique_images.append(img)
+
             findings["product_image_count"] = len(unique_images)
 
             price = page.query_selector(
@@ -659,7 +666,7 @@ def calculate_scores(findings: dict) -> dict:
         mob -= 1
     scores_named["Mobile"] = max(0.0, round(mob, 1))
 
-    # Speed (15%) — 10/10 only when load < 1s
+    # Speed (15%) — even sub-1s loads get a small penalty above 0.8s
     spd = 10.0
     load = findings.get("homepage_load_time", 999)
     if load > 3:
@@ -670,8 +677,11 @@ def calculate_scores(findings: dict) -> dict:
         spd -= 2
     elif load > 1:
         spd -= 1
+    elif load > 0.5:
+        spd -= 0.5
+    # Carousel penalty
     if findings.get("has_carousel"):
-        spd -= 2  # carousel = LCP risk
+        spd -= 2
     if findings.get("carousel_slide_count", 0) > 2:
         spd -= 1
     scores_named["Speed"] = max(0.0, round(spd, 1))
