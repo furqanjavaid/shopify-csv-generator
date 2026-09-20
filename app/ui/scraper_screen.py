@@ -22,30 +22,6 @@ class ScraperScreen(ctk.CTkFrame):
         self.source_url: str = ""
         self.suggested_filename: str = "shopify_products.csv"
 
-        # Action bar pinned to screen bottom (packed on show, before content shrinks)
-        self.action_bar = ctk.CTkFrame(self, fg_color=T.BG_SURFACE_A, corner_radius=0, height=56)
-        self.action_bar.pack_propagate(False)
-        self.count_badge = ctk.CTkLabel(
-            self.action_bar, text="", font=T.font(12, "bold"), text_color=T.ACCENT
-        )
-        self.count_badge.pack(side="left", padx=24)
-        self.next_btn = ctk.CTkButton(
-            self.action_bar,
-            text="Generate Shopify CSV →",
-            command=self._go_mapping,
-            width=200,
-            **T.primary_btn(),
-        )
-        self.next_btn.pack(side="right", padx=(0, 24), pady=8)
-        self.clear_btn = ctk.CTkButton(
-            self.action_bar,
-            text="Clear",
-            command=self._clear_results,
-            width=100,
-            **T.secondary_btn(),
-        )
-        self.clear_btn.pack(side="right", padx=(0, 8), pady=8)
-
         body = attach_sidebar(self, app, "scraper")
 
         T.page_title(
@@ -117,7 +93,7 @@ class ScraperScreen(ctk.CTkFrame):
 
         # Preview table
         preview_card = T.card_frame(body)
-        preview_card.pack(fill="both", expand=True, pady=(8, 12))
+        preview_card.pack(fill="x", pady=(8, 0))
         ctk.CTkLabel(
             preview_card, text="Results Preview",
             font=T.font(12, "bold"), text_color=T.TEXT_SECONDARY, anchor="w",
@@ -128,9 +104,32 @@ class ScraperScreen(ctk.CTkFrame):
             fg_color=T.BG_SURFACE_B,
             orientation="horizontal",
             corner_radius=T.BORDER_RADIUS,
-            height=140,
+            height=160,
         )
-        self.preview_frame.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        self.preview_frame.pack(fill="x", padx=12, pady=(0, 8))
+
+        # Action bar — inside preview_card, after scrollable table
+        self.action_bar = ctk.CTkFrame(preview_card, fg_color="transparent")
+        self.count_badge = ctk.CTkLabel(
+            self.action_bar, text="", font=T.font(12, "bold"), text_color=T.ACCENT
+        )
+        self.count_badge.pack(side="left")
+        self.next_btn = ctk.CTkButton(
+            self.action_bar,
+            text="Generate Shopify CSV →",
+            command=self._go_mapping,
+            width=200,
+            **T.primary_btn(),
+        )
+        self.next_btn.pack(side="right")
+        self.clear_btn = ctk.CTkButton(
+            self.action_bar,
+            text="Clear",
+            command=self._clear_results,
+            width=100,
+            **T.secondary_btn(),
+        )
+        self.clear_btn.pack(side="right", padx=(0, 8))
 
     def _append_log(self, message: str) -> None:
         if not self.log_box.winfo_ismapped():
@@ -142,7 +141,7 @@ class ScraperScreen(ctk.CTkFrame):
 
     def _show_action_bar(self) -> None:
         if not self.action_bar.winfo_ismapped():
-            self.action_bar.pack(side="bottom", fill="x", pady=12, padx=24)
+            self.action_bar.pack(fill="x", padx=T.CARD_PADDING, pady=(4, 12))
 
     def _hide_action_bar(self) -> None:
         self.action_bar.pack_forget()
