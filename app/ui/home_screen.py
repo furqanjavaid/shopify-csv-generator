@@ -26,40 +26,41 @@ class HomeScreen(ctk.CTkFrame):
             "Upload · Scrape · Audit — all in one place",
         )
 
-        # Feature cards
-        cards = ctk.CTkFrame(content, fg_color="transparent")
-        cards.pack(fill="x", pady=(0, T.GRID_GAP))
-        cards.grid_columnconfigure((0, 1, 2), weight=1)
+        # Feature cards — equal width + equal height via uniform grid
+        cards_frame = ctk.CTkFrame(content, fg_color="transparent")
+        cards_frame.pack(fill="x", pady=(0, T.GRID_GAP))
+        cards_frame.grid_columnconfigure((0, 1, 2), weight=1, uniform="card")
+        cards_frame.grid_rowconfigure(0, weight=1)
 
         self._feature_card(
-            cards, 0, "📄", "Upload File",
+            cards_frame, 0, "📄", "Upload File",
             "Convert any client spreadsheet to Shopify CSV",
             "Open Upload", self._go_upload,
         )
         self._feature_card(
-            cards, 1, "🔗", "Scrape Store",
+            cards_frame, 1, "🔗", "Scrape Store",
             "Extract products from any Shopify store URL",
             "Open Scraper", self._go_scraper,
         )
         self._feature_card(
-            cards, 2, "🔍", "Audit Store",
+            cards_frame, 2, "🔍", "Audit Store",
             "Full CRO audit with Word report",
             "Open Auditor", self._go_audit,
         )
 
-        # Two columns: Recent Tasks + System Status
-        lower = ctk.CTkFrame(content, fg_color="transparent")
-        lower.pack(fill="both", expand=True, pady=(0, 8))
-        lower.grid_columnconfigure(0, weight=3)
-        lower.grid_columnconfigure(1, weight=2)
-        lower.grid_rowconfigure(0, weight=1)
+        # Bottom — Recent Tasks + System Status equal columns
+        bottom = ctk.CTkFrame(content, fg_color="transparent")
+        bottom.pack(fill="both", expand=True)
+        bottom.grid_columnconfigure(0, weight=3)
+        bottom.grid_columnconfigure(1, weight=2)
+        bottom.grid_rowconfigure(0, weight=1)
 
-        self._recent_tasks(lower)
-        self._system_status(lower)
+        self._recent_tasks(bottom)
+        self._system_status(bottom)
 
-        # Bottom bar
+        # Footer
         footer = ctk.CTkFrame(content, fg_color="transparent", height=28)
-        footer.pack(fill="x", side="bottom")
+        footer.pack(fill="x", side="bottom", pady=(8, 0))
         ctk.CTkLabel(
             footer, text="v1.0", font=T.font_tuple(T.CAPTION), text_color=T.TEXT_MUTED
         ).pack(side="left")
@@ -70,40 +71,51 @@ class HomeScreen(ctk.CTkFrame):
             text_color=T.TEXT_MUTED,
         ).pack(side="right")
 
-    def _feature_card(self, parent, col: int, icon: str, title: str, desc: str, btn: str, command) -> None:
+    def _feature_card(
+        self, parent, col: int, icon: str, title: str, desc: str, btn: str, command
+    ) -> None:
+        padx = (0, 8) if col == 0 else (8, 0) if col == 2 else 8
         card = T.card_frame(parent)
-        card.grid(row=0, column=col, sticky="nsew", padx=(0 if col == 0 else T.GRID_GAP // 2, 0 if col == 2 else T.GRID_GAP // 2))
+        card.grid(row=0, column=col, padx=padx, sticky="nsew")
 
-        inner = ctk.CTkFrame(card, fg_color="transparent")
-        inner.pack(fill="both", expand=True, padx=T.CARD_PADDING, pady=T.CARD_PADDING)
+        # Top content
+        top = ctk.CTkFrame(card, fg_color="transparent")
+        top.pack(fill="x", padx=T.CARD_PADDING, pady=(T.CARD_PADDING, 0))
 
-        ctk.CTkLabel(inner, text=icon, font=T.font(28), text_color=T.TEXT_PRIMARY, anchor="w").pack(fill="x")
         ctk.CTkLabel(
-            inner, text=title, font=T.font_tuple(T.H3), text_color=T.TEXT_PRIMARY, anchor="w"
+            top, text=icon, font=T.font(28), text_color=T.TEXT_PRIMARY, anchor="w"
+        ).pack(fill="x")
+        ctk.CTkLabel(
+            top, text=title, font=T.font_tuple(T.H3), text_color=T.TEXT_PRIMARY, anchor="w"
         ).pack(fill="x", pady=(8, 4))
         ctk.CTkLabel(
-            inner,
+            top,
             text=desc,
             font=T.font_tuple(T.BODY),
             text_color=T.TEXT_SECONDARY,
             anchor="w",
             wraplength=220,
             justify="left",
-        ).pack(fill="x", pady=(0, 16))
+        ).pack(fill="x")
 
-        T.primary_button(inner, btn, command, width=140).pack(anchor="w")
+        # Spacer pushes button to card bottom
+        ctk.CTkFrame(card, fg_color="transparent").pack(fill="both", expand=True)
+
+        T.primary_button(card, btn, command).pack(
+            fill="x", padx=T.CARD_PADDING, pady=(0, T.CARD_PADDING)
+        )
 
     def _recent_tasks(self, parent) -> None:
         card = T.card_frame(parent)
-        card.grid(row=0, column=0, sticky="nsew", padx=(0, T.GRID_GAP // 2))
+        card.grid(row=0, column=0, padx=(0, 8), sticky="nsew")
 
         head = ctk.CTkFrame(card, fg_color="transparent")
         head.pack(fill="x", padx=T.CARD_PADDING, pady=(T.CARD_PADDING, 8))
         ctk.CTkLabel(
-            head, text="Recent Tasks", font=T.font_tuple(T.H3), text_color=T.TEXT_PRIMARY, anchor="w"
+            head, text="Recent Tasks", font=T.font_tuple(T.H3),
+            text_color=T.TEXT_PRIMARY, anchor="w",
         ).pack(fill="x")
 
-        # Header row
         cols = ("Type", "Name", "Status", "Date")
         widths = (70, 160, 100, 90)
         header = ctk.CTkFrame(card, fg_color=T.BG_SURFACE_B, height=T.ROW_HEIGHT)
@@ -138,7 +150,7 @@ class HomeScreen(ctk.CTkFrame):
 
     def _system_status(self, parent) -> None:
         card = T.card_frame(parent)
-        card.grid(row=0, column=1, sticky="nsew", padx=(T.GRID_GAP // 2, 0))
+        card.grid(row=0, column=1, sticky="nsew")
 
         inner = ctk.CTkFrame(card, fg_color="transparent")
         inner.pack(fill="both", expand=True, padx=T.CARD_PADDING, pady=T.CARD_PADDING)
