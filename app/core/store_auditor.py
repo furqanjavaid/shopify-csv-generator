@@ -1,8 +1,9 @@
 """
-Shopify Store CRO Auditor — conversion-impact priority.
+Store Auditor — Playwright-powered visual CRO audit
 
-Static checks: requests + BeautifulSoup (ThreadPoolExecutor)
-Playwright only: ATC fold, cart flow, mobile tap target, load time
+Two phases:
+1. requests phase — fast, basic checks (meta, speed, text)
+2. Playwright phase — visual, JS-rendered, behavioral checks
 """
 
 from __future__ import annotations
@@ -12,22 +13,15 @@ import json
 import os
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any, Callable, Optional
 from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
-from playwright.async_api import async_playwright
+from playwright.sync_api import sync_playwright
 
 ProgressCallback = Optional[Callable[[str], None]]
-
-SKIP_PATHS = [
-    "/cart", "/checkout", "/account", "/search",
-    ".pdf", ".zip", "javascript:", "#", "/cdn/", "/s/files/",
-    "/customer_authentication", "/services/", "/.well-known/",
-]
 
 HEADERS = {
     "User-Agent": (
@@ -47,7 +41,34 @@ CATEGORY_WEIGHTS = {
     "marketing": 0.10,
 }
 
-DEDUCTIONS = {"HIGH": 3.0, "MEDIUM": 1.5, "LOW": 0.5}
+SCORE_LABEL_TO_KEY = {
+    "Product Page": "product_page",
+    "Cart & Checkout": "cart_checkout",
+    "Mobile": "mobile",
+    "Speed": "speed",
+    "Marketing": "marketing",
+}
+
+TRUST_KEYWORDS = (
+    "guarantee",
+    "secure",
+    "trustpilot",
+    "money back",
+    "free return",
+    "ssl",
+    "safe checkout",
+    "protected",
+)
+
+URGENCY_KEYWORDS = (
+    "low stock",
+    "only left",
+    "selling fast",
+    "limited",
+    "hurry",
+    "ends soon",
+    "last few",
+)
 
 
 # ─────────────────────────────────────────────
@@ -78,13 +99,10 @@ def make_output_dir(base_url: str) -> str:
     return output_dir
 
 
-def safe_filename(url: str) -> str:
-    path = urlparse(url).path.strip("/").replace("/", "_") or "homepage"
-    return re.sub(r"[^\w\-]", "_", path)[:80]
-
-
-def is_skip_url(url: str) -> bool:
-    return any(p in url for p in SKIP_PATHS)
+def _session() -> requests.Session:
+    s = requests.Session()
+    s.headers.update(HEADERS)
+    return s
 
 
 def _finding(
@@ -120,842 +138,442 @@ def _finding(
     }
 
 
-def _session() -> requests.Session:
-    s = requests.Session()
-    s.headers.update(HEADERS)
-    return s
-
-
-def fetch_soup(session: requests.Session, url: str, timeout: int = 15) -> BeautifulSoup | None:
-    try:
-        r = session.get(url, timeout=timeout, allow_redirects=True)
-        if r.status_code >= 400:
-            return None
-        return BeautifulSoup(r.text, "lxml")
-    except Exception:
-        return None
+def take_screenshot(page, name: str, screenshot_dir: str) -> str:
+    """Save viewport screenshot; return basename for report embedding."""
+    os.makedirs(screenshot_dir, exist_ok=True)
+    # Stable names for report cover + unique timestamped copies
+    stable = {
+        "homepage": "homepage_desktop.png",
+        "mobile": "homepage_mobile.png",
+        "product": "product_desktop.png",
+        "cart": "cart_after_atc.png",
+    }.get(name)
+    fname = stable or f"{name}_{int(time.time())}.png"
+    path = os.path.join(screenshot_dir, fname)
+    page.screenshot(path=path, full_page=False)
+    # Also keep a timestamped copy for history
+    if stable:
+        stamp = os.path.join(screenshot_dir, f"{name}_{int(time.time())}.png")
+        try:
+            page.screenshot(path=stamp, full_page=False)
+        except Exception:
+            pass
+    return fname
 
 
 # ─────────────────────────────────────────────
-# Crawl (requests + BS4)
+# Phase 1 — requests (fast basics)
 # ─────────────────────────────────────────────
 
-def crawl_pages(
-    base_url: str,
-    max_pages: int = 60,
-    progress: ProgressCallback = None,
-) -> list[str]:
+def run_requests_audit(url: str, progress: ProgressCallback = None) -> dict[str, Any]:
+    """Fast static checks: speed, meta, email, trust text, canonical, robots."""
+    _emit(progress, "[1/2] Requests phase — meta, speed, trust text…")
+    findings: dict[str, Any] = {
+        "homepage_load_time": 999.0,
+        "has_meta_title": False,
+        "meta_title": "",
+        "has_meta_description": False,
+        "meta_description": "",
+        "has_email_capture_static": False,
+        "has_trust_text": False,
+        "trust_text_match": "",
+        "has_canonical": False,
+        "canonical_href": "",
+        "robots_meta": "",
+        "has_robots_meta": False,
+        "product_urls_hint": [],
+        "status_code": 0,
+        "requests_error": "",
+    }
+
     session = _session()
-    base_domain = urlparse(base_url).netloc
-    visited: set[str] = set()
-    queue = [base_url.rstrip("/") + "/" if urlparse(base_url).path in ("", "/") else base_url]
-    if base_url not in queue:
-        queue.insert(0, base_url)
-    found: list[str] = []
+    t0 = time.time()
+    try:
+        resp = session.get(url, timeout=20, allow_redirects=True)
+        findings["homepage_load_time"] = round(time.time() - t0, 2)
+        findings["status_code"] = resp.status_code
+        html = resp.text
+    except Exception as exc:
+        findings["requests_error"] = str(exc)
+        findings["homepage_load_time"] = round(time.time() - t0, 2)
+        _emit(progress, f"      Requests error: {exc}")
+        return findings
 
-    while queue and len(found) < max_pages:
-        url = queue.pop(0).split("#")[0]
-        if url in visited or is_skip_url(url):
-            continue
-        visited.add(url)
-        soup = fetch_soup(session, url)
-        if not soup:
-            continue
-        found.append(url)
-        if len(found) % 10 == 0:
-            _emit(progress, f"      Crawled {len(found)} pages...")
-        for a in soup.find_all("a", href=True):
-            href = urljoin(url, a["href"]).split("#")[0]
-            parsed = urlparse(href)
-            if parsed.netloc != base_domain:
-                continue
-            if href not in visited and not is_skip_url(href):
-                queue.append(href)
-    return found
-
-
-# ─────────────────────────────────────────────
-# Static product-page checks (BS4)
-# ─────────────────────────────────────────────
-
-def _has_reviews(soup: BeautifulSoup) -> tuple[bool, str]:
-    # Class patterns
-    for el in soup.find_all(True, class_=True):
-        classes = " ".join(el.get("class", [])).lower()
-        for kw in (
-            "review", "rating", "stars", "judge-me", "jdgm", "stamped",
-            "yotpo", "loox", "okendo", "rivyo",
-        ):
-            if kw in classes:
-                return True, f"Element class match: '{kw}' in {classes[:60]}"
-
-    text = soup.get_text(" ", strip=True).lower()
-    for phrase in (
-        "customer review", "customer reviews", "verified buyer",
-        "out of 5", "stars", "reviews",
-    ):
-        if phrase in text:
-            return True, f"Text match: '{phrase}'"
-
-    for script in soup.find_all("script", type="application/ld+json"):
-        raw = script.string or script.get_text() or ""
-        if "aggregaterating" in raw.lower():
-            return True, "JSON-LD aggregateRating found"
-    return False, "No review/rating signals found"
-
-
-def _has_trust(soup: BeautifulSoup) -> tuple[bool, str]:
-    keywords = (
-        "money back", "guarantee", "secure checkout", "free return",
-        "easy return", "ssl", "safe checkout", "protected",
-    )
-    text = soup.get_text(" ", strip=True).lower()
-    for kw in keywords:
-        if kw in text:
-            return True, f"Text match: '{kw}'"
-
-    for img in soup.find_all("img", alt=True):
-        alt = (img.get("alt") or "").lower()
-        for kw in keywords:
-            if kw in alt:
-                return True, f"Image alt match: '{kw}'"
-
-    for el in soup.find_all(True, class_=True):
-        classes = " ".join(el.get("class", [])).lower()
-        for kw in ("trust", "badge", "guarantee", "secure"):
-            if kw in classes:
-                return True, f"Class match: '{kw}'"
-    return False, "No trust badge signals found"
-
-
-def _has_price(soup: BeautifulSoup) -> tuple[bool, str]:
-    currency = re.compile(r"[$£€]\s*\d|^\d+[.,]\d{2}")
-    compare_note = ""
-    for el in soup.find_all(True, class_=re.compile(r"compare|sale|was-price|price--on-sale", re.I)):
-        style = (el.get("style") or "").lower()
-        tag = el.name or ""
-        if tag == "s" or "line-through" in style or "compare" in " ".join(el.get("class", [])).lower():
-            t = el.get_text(" ", strip=True)
-            if currency.search(t) or re.search(r"\d", t):
-                compare_note = f"; compare-at: '{t[:30]}'"
-                break
-    for el in soup.find_all(["s", "del"]):
-        t = el.get_text(" ", strip=True)
-        if currency.search(t):
-            compare_note = f"; compare-at: '{t[:30]}'"
-            break
-
-    for el in soup.find_all(True, class_=re.compile(r"price", re.I)):
-        t = el.get_text(" ", strip=True)
-        if currency.search(t) or re.search(r"\d", t):
-            return True, f"Price element: '{t[:40]}'{compare_note}"
-    body = soup.get_text(" ", strip=True)
-    if re.search(r"[$£€]\s*\d", body):
-        return True, f"Currency symbol with number found on page{compare_note}"
-    return False, "No clear price element with currency found"
-
-
-
-def _has_urgency(soup: BeautifulSoup) -> tuple[bool, str]:
-    text = soup.get_text(" ", strip=True).lower()
-    phrases = (
-        "only", "left in stock", "selling fast", "low stock",
-        "limited", "sold", "people viewing",
-    )
-    # "only" alone is too noisy — require context
-    for phrase in phrases:
-        if phrase == "only":
-            if re.search(r"only\s+\d+\s+left|only\s+\d+\s+in\s+stock", text):
-                return True, "Text match: low-stock style 'only X left'"
-            continue
-        if phrase == "sold":
-            if re.search(r"\d+\s+sold", text):
-                return True, "Text match: 'X sold'"
-            continue
-        if phrase in text:
-            return True, f"Text match: '{phrase}'"
-    return False, "No urgency signals found"
-
-
-def _has_upsell(soup: BeautifulSoup) -> tuple[bool, str]:
-    text = soup.get_text(" ", strip=True).lower()
-    phrases = (
-        "you may also like", "frequently bought together",
-        "customers also bought", "recommended for you", "complete the look",
-    )
-    for phrase in phrases:
-        if phrase in text:
-            return True, f"Text match: '{phrase}'"
-    for el in soup.find_all(True, class_=True):
-        classes = " ".join(el.get("class", [])).lower()
-        if any(k in classes for k in ("upsell", "cross-sell", "related", "recommended", "complementary")):
-            return True, f"Class match related/upsell: {classes[:50]}"
-    return False, "No upsell/cross-sell section found"
-
-
-def _has_shipping(soup: BeautifulSoup) -> tuple[bool, str]:
-    text = soup.get_text(" ", strip=True).lower()
-    phrases = ("ships in", "delivery", "free shipping", "arrives by", "shipping")
-    for phrase in phrases:
-        if phrase in text:
-            return True, f"Text match: '{phrase}'"
-    return False, "No shipping/delivery info found near product content"
-
-
-def _image_count(soup: BeautifulSoup) -> tuple[int, str]:
-    gallery = soup.find(
-        True,
-        class_=re.compile(r"product__media|product-image|gallery|product__photos|media-gallery", re.I),
-    )
-    root = gallery or soup
-    imgs = []
-    for img in root.find_all("img"):
-        src = img.get("src") or img.get("data-src") or ""
-        if not src or src.startswith("data:"):
-            continue
-        low = src.lower()
-        if any(x in low for x in ("icon", "logo", "pixel", "1x1", "sprite")):
-            continue
-        imgs.append(src)
-    # unique
-    count = len(list(dict.fromkeys(imgs)))
-    return count, f"{count} product image(s) detected"
-
-
-def _has_subscription(soup: BeautifulSoup) -> tuple[bool, str]:
-    text = soup.get_text(" ", strip=True).lower()
-    html = str(soup).lower()
-    for kw in ("seal", "recharge", "bold subscriptions", "appstle", "subscribe & save", "subscribe and save"):
-        if kw in text or kw in html:
-            return True, f"Subscription signal: '{kw}'"
-    for el in soup.find_all(True, class_=True):
-        classes = " ".join(el.get("class", [])).lower()
-        if "subscription" in classes or "subscribe" in classes:
-            return True, f"Class match: {classes[:50]}"
-    return False, "No subscription option found"
-
-
-def analyze_product_html(url: str, html: str) -> dict[str, Any]:
     soup = BeautifulSoup(html, "lxml")
-    reviews_ok, reviews_ev = _has_reviews(soup)
-    trust_ok, trust_ev = _has_trust(soup)
-    price_ok, price_ev = _has_price(soup)
-    urgency_ok, urgency_ev = _has_urgency(soup)
-    upsell_ok, upsell_ev = _has_upsell(soup)
-    shipping_ok, shipping_ev = _has_shipping(soup)
-    img_count, img_ev = _image_count(soup)
-    sub_ok, sub_ev = _has_subscription(soup)
-    return {
-        "url": url,
-        "reviews": (reviews_ok, reviews_ev),
-        "trust": (trust_ok, trust_ev),
-        "price": (price_ok, price_ev),
-        "urgency": (urgency_ok, urgency_ev),
-        "upsell": (upsell_ok, upsell_ev),
-        "shipping": (shipping_ok, shipping_ev),
-        "images": (img_count, img_ev),
-        "subscription": (sub_ok, sub_ev),
-    }
 
+    title = soup.find("title")
+    title_text = (title.get_text(strip=True) if title else "") or ""
+    findings["has_meta_title"] = bool(title_text)
+    findings["meta_title"] = title_text[:120]
 
-def fetch_and_analyze_product(url: str) -> dict[str, Any] | None:
-    session = _session()
-    try:
-        r = session.get(url, timeout=15, allow_redirects=True)
-        if r.status_code >= 400:
-            return None
-        return analyze_product_html(url, r.text)
-    except Exception:
-        return None
+    desc = soup.find("meta", attrs={"name": re.compile(r"^description$", re.I)})
+    if not desc:
+        desc = soup.find("meta", attrs={"property": re.compile(r"og:description", re.I)})
+    desc_text = (desc.get("content") or "").strip() if desc else ""
+    findings["has_meta_description"] = bool(desc_text)
+    findings["meta_description"] = desc_text[:160]
 
-
-# ─────────────────────────────────────────────
-# Homepage static checks
-# ─────────────────────────────────────────────
-
-def analyze_homepage(url: str, soup: BeautifulSoup) -> dict[str, Any]:
-    text = soup.get_text(" ", strip=True).lower()
-    html = str(soup).lower()
-
-    # Email capture
-    email_ok = False
-    email_ev = "No email capture found"
     if soup.find("input", attrs={"type": "email"}):
-        email_ok, email_ev = True, "Email input found"
+        findings["has_email_capture_static"] = True
     else:
-        for kw in ("klaviyo", "mailchimp", "omnisend", "popup", "flyout", "newsletter"):
-            if kw in html:
-                email_ok, email_ev = True, f"Capture signal: '{kw}'"
+        low = html.lower()
+        for kw in ("klaviyo", "mailchimp", "omnisend", "newsletter"):
+            if kw in low:
+                findings["has_email_capture_static"] = True
                 break
 
-    # Trust on homepage
-    trust_ok, trust_ev = _has_trust(soup)
-
-    # Hero CTA
-    h1 = soup.find("h1")
-    has_h1 = bool(h1 and h1.get_text(strip=True))
-    cta_keywords = ("shop now", "shop all", "buy now", "get started", "explore", "discover")
-    has_cta = any(k in text for k in cta_keywords)
-    if not has_cta:
-        hero = soup.find(True, class_=re.compile(r"hero|banner|slideshow", re.I))
-        if hero and hero.find(["a", "button"]):
-            has_cta = True
-    hero_ok = has_h1 and has_cta
-    hero_ev = f"H1={'yes' if has_h1 else 'no'}, CTA={'yes' if has_cta else 'no'}"
-
-    # Social proof
-    social_ok = False
-    social_ev = "No social proof found"
-    for phrase in ("as seen in", "testimonial", "trusted by", "customers", "press"):
-        if phrase in text:
-            social_ok, social_ev = True, f"Text match: '{phrase}'"
+    body_text = soup.get_text(" ", strip=True).lower()
+    for kw in TRUST_KEYWORDS:
+        if kw in body_text:
+            findings["has_trust_text"] = True
+            findings["trust_text_match"] = kw
             break
-    if not social_ok:
-        for el in soup.find_all(True, class_=True):
-            classes = " ".join(el.get("class", [])).lower()
-            if any(k in classes for k in ("testimonial", "press", "logo-bar", "social-proof")):
-                social_ok, social_ev = True, f"Class match: {classes[:50]}"
-                break
 
-    return {
-        "email": (email_ok, email_ev),
-        "trust": (trust_ok, trust_ev),
-        "hero": (hero_ok, hero_ev),
-        "social": (social_ok, social_ev),
-    }
+    canonical = soup.find("link", rel=lambda v: v and "canonical" in str(v).lower())
+    if canonical and canonical.get("href"):
+        findings["has_canonical"] = True
+        findings["canonical_href"] = canonical["href"]
 
+    robots = soup.find("meta", attrs={"name": re.compile(r"^robots$", re.I)})
+    if robots and robots.get("content"):
+        findings["has_robots_meta"] = True
+        findings["robots_meta"] = robots["content"]
 
-# ─────────────────────────────────────────────
-# Aggregate static findings
-# ─────────────────────────────────────────────
+    # Hint product URLs for Playwright
+    product_urls: list[str] = []
+    for a in soup.find_all("a", href=True):
+        href = urljoin(url, a["href"]).split("#")[0]
+        if "/products/" in urlparse(href).path and href not in product_urls:
+            product_urls.append(href)
+        if len(product_urls) >= 8:
+            break
+    findings["product_urls_hint"] = product_urls
 
-def build_static_findings(
-    homepage_url: str,
-    homepage_data: dict,
-    product_results: list[dict],
-) -> list[dict]:
-    findings: list[dict] = []
-    if not product_results:
-        product_results = []
-
-    # 2 Reviews
-    fail_urls = [p["url"] for p in product_results if not p["reviews"][0]]
-    pass_ev = next((p["reviews"][1] for p in product_results if p["reviews"][0]), "")
-    if fail_urls and len(fail_urls) == len(product_results):
-        findings.append(_finding(
-            2, "Reviews Present", "HIGH", "product_page", False,
-            "No reviews or star ratings on product pages",
-            "Checked all product pages — no review widgets or aggregateRating found",
-            "93% of buyers read reviews before purchasing",
-            "Install Judge.me / Okendo / Loox and display stars on product pages",
-            fail_urls,
-        ))
-    elif fail_urls:
-        findings.append(_finding(
-            2, "Reviews Present", "HIGH", "product_page", False,
-            f"Reviews missing on {len(fail_urls)} product page(s)",
-            f"Missing on: {', '.join(fail_urls[:3])}…",
-            "Missing reviews reduce conversion on those products",
-            "Ensure reviews app loads on all product templates",
-            fail_urls,
-        ))
-    else:
-        findings.append(_finding(
-            2, "Reviews Present", "HIGH", "product_page", True,
-            "Reviews / ratings present",
-            pass_ev or "Review signals found",
-            "", "", [p["url"] for p in product_results[:1]],
-        ))
-
-    # 3 Trust badges — fail only if missing on ALL product pages AND homepage
-    any_prod_trust = any(p["trust"][0] for p in product_results)
-    home_trust_ok = homepage_data["trust"][0]
-    if any_prod_trust or home_trust_ok:
-        ev = homepage_data["trust"][1] if home_trust_ok else next(
-            (p["trust"][1] for p in product_results if p["trust"][0]), "Trust found"
-        )
-        findings.append(_finding(
-            3, "Trust Badges", "HIGH", "product_page", True,
-            "Trust signals present", ev, "", "",
-        ))
-    else:
-        findings.append(_finding(
-            3, "Trust Badges", "HIGH", "product_page", False,
-            "No trust badges on product pages or homepage",
-            f"Homepage: {homepage_data['trust'][1]}; Products: no trust signals",
-            "Customers hesitate without trust indicators",
-            "Add trust strip: Secure Checkout, Money-Back Guarantee, Free Returns",
-            [p["url"] for p in product_results[:5]] + [homepage_url],
-        ))
-
-    # 4 Price visibility
-    price_fail = [p["url"] for p in product_results if not p["price"][0]]
-    if price_fail and len(price_fail) == len(product_results):
-        findings.append(_finding(
-            4, "Price Visibility", "HIGH", "product_page", False,
-            "No clear price element found on product pages",
-            "No currency-marked price element detected",
-            "Hidden or unclear pricing kills conversion",
-            "Ensure .price element shows currency and amount above the fold",
-            price_fail,
-        ))
-    elif price_fail:
-        findings.append(_finding(
-            4, "Price Visibility", "HIGH", "product_page", False,
-            f"Price unclear on {len(price_fail)} product page(s)",
-            f"Affected: {', '.join(price_fail[:3])}",
-            "Unclear pricing reduces add-to-cart rate",
-            "Fix price rendering on affected templates",
-            price_fail,
-        ))
-    else:
-        ev = next((p["price"][1] for p in product_results if p["price"][0]), "Price found")
-        findings.append(_finding(
-            4, "Price Visibility", "HIGH", "product_page", True,
-            "Price clearly visible", ev, "", "",
-        ))
-
-    # 8 Email
-    email_ok, email_ev = homepage_data["email"]
-    findings.append(_finding(
-        8, "Email Capture", "MEDIUM", "marketing", email_ok,
-        "Email capture present" if email_ok else "No email capture / popup detected",
-        email_ev,
-        "Without capture you lose most non-buyers forever",
-        "Add Klaviyo/Omnisend popup with a first-order incentive",
-        [homepage_url],
-    ))
-
-    # 9 Urgency
-    urgency_pass = [p for p in product_results if p["urgency"][0]]
-    if urgency_pass:
-        findings.append(_finding(
-            9, "Urgency Signals", "MEDIUM", "marketing", True,
-            "Urgency signals found",
-            urgency_pass[0]["urgency"][1],
-            "", "", [urgency_pass[0]["url"]],
-        ))
-    else:
-        findings.append(_finding(
-            9, "Urgency Signals", "MEDIUM", "marketing", False,
-            "No urgency signals on any product page",
-            "No low-stock / limited / selling-fast messaging found",
-            "Without urgency, shoppers delay and often don't return",
-            "Show low-stock using inventory_quantity or a countdown for promos",
-            [p["url"] for p in product_results[:5]],
-        ))
-
-    # 10 Upsell
-    upsell_pass = [p for p in product_results if p["upsell"][0]]
-    if upsell_pass:
-        findings.append(_finding(
-            10, "Upsell / Cross-sell", "MEDIUM", "marketing", True,
-            "Upsell/cross-sell section found",
-            upsell_pass[0]["upsell"][1],
-            "", "", [upsell_pass[0]["url"]],
-        ))
-    else:
-        findings.append(_finding(
-            10, "Upsell / Cross-sell", "MEDIUM", "marketing", False,
-            "No upsell or cross-sell section on product pages",
-            "No 'You may also like' / FBT sections detected",
-            "Missing upsells reduce average order value",
-            "Add Related Products or Frequently Bought Together below description",
-            [p["url"] for p in product_results[:5]],
-        ))
-
-    # 11 Shipping
-    ship_pass = [p for p in product_results if p["shipping"][0]]
-    if ship_pass:
-        findings.append(_finding(
-            11, "Shipping Info Visible", "MEDIUM", "marketing", True,
-            "Shipping/delivery info found",
-            ship_pass[0]["shipping"][1],
-            "", "", [ship_pass[0]["url"]],
-        ))
-    else:
-        findings.append(_finding(
-            11, "Shipping Info Visible", "MEDIUM", "marketing", False,
-            "No shipping info on product pages",
-            "No ships-in / free shipping / delivery messaging found",
-            "Shipping clarity reduces checkout anxiety",
-            "Add delivery estimate or free-shipping threshold near ATC",
-            [p["url"] for p in product_results[:5]],
-        ))
-
-    # 12 Image count
-    img_fail = [p["url"] for p in product_results if p["images"][0] < 2]
-    img_warn = [p["url"] for p in product_results if p["images"][0] == 2]
-    img_pass = [p for p in product_results if p["images"][0] >= 3]
-    if img_fail:
-        findings.append(_finding(
-            12, "Image Count", "MEDIUM", "product_page", False,
-            f"Only 1 image on {len(img_fail)} product page(s)",
-            f"Single-image products: {', '.join(img_fail[:3])}",
-            "Thin galleries reduce confidence and conversion",
-            "Add at least 3 lifestyle/detail images per product",
-            img_fail,
-            status="fail",
-        ))
-    elif img_warn and not img_pass:
-        findings.append(_finding(
-            12, "Image Count", "MEDIUM", "product_page", False,
-            "Only 2 images on product pages",
-            img_warn[0] if img_warn else "2 images",
-            "More images usually lift conversion",
-            "Aim for 3+ images per product",
-            img_warn,
-            status="warning",
-        ))
-    else:
-        findings.append(_finding(
-            12, "Image Count", "MEDIUM", "product_page", True,
-            "Product galleries have 3+ images",
-            img_pass[0]["images"][1] if img_pass else "3+ images",
-            "", "",
-        ))
-
-    # 13 Subscription LOW
-    sub_pass = [p for p in product_results if p["subscription"][0]]
-    findings.append(_finding(
-        13, "Subscription Option", "LOW", "product_page", bool(sub_pass),
-        "Subscription option found" if sub_pass else "No subscription / Subscribe & Save option",
-        sub_pass[0]["subscription"][1] if sub_pass else "No Seal/Recharge/Appstle signals",
-        "Subscriptions increase LTV",
-        "Enable Subscribe & Save with a small discount",
-        [p["url"] for p in product_results[:3]],
-    ))
-
-    # 14 Hero CTA
-    hero_ok, hero_ev = homepage_data["hero"]
-    findings.append(_finding(
-        14, "Homepage Hero CTA", "LOW", "marketing", hero_ok,
-        "Homepage hero has H1 + CTA" if hero_ok else "Homepage missing clear H1 or hero CTA",
-        hero_ev,
-        "Weak hero CTAs increase bounce",
-        "Add a clear H1 and primary Shop Now button in the hero",
-        [homepage_url],
-    ))
-
-    # 15 Social proof homepage
-    social_ok, social_ev = homepage_data["social"]
-    findings.append(_finding(
-        15, "Social Proof on Homepage", "LOW", "marketing", social_ok,
-        "Homepage social proof present" if social_ok else "No social proof on homepage",
-        social_ev,
-        "New visitors need proof before exploring",
-        "Add testimonials, press logos, or review summary on homepage",
-        [homepage_url],
-    ))
-
+    _emit(
+        progress,
+        f"      Load {findings['homepage_load_time']}s · "
+        f"title={'yes' if findings['has_meta_title'] else 'no'} · "
+        f"desc={'yes' if findings['has_meta_description'] else 'no'} · "
+        f"{len(product_urls)} product link(s)",
+    )
     return findings
 
 
 # ─────────────────────────────────────────────
-# Playwright checks
+# Phase 2 — Playwright (visual / behavioral)
 # ─────────────────────────────────────────────
 
-ATC_SELECTORS = [
-    'button[name="add"]',
-    'button.product-form__submit',
-    '.product-form__submit',
-    'button[type="submit"]',
-    '[data-testid="AddToCart"]',
-    'form[action*="/cart/add"] button',
-]
-
-ATC_TEXT_RE = re.compile(r"add to cart|buy now|add to bag|add to basket", re.I)
-
-
-async def _find_atc(page):
-    for sel in ATC_SELECTORS:
-        try:
-            els = await page.query_selector_all(sel)
-            for el in els:
-                if await el.is_visible():
-                    return el
-        except Exception:
-            pass
-    try:
-        for el in await page.query_selector_all("button, a[href], input[type='submit']"):
-            if not await el.is_visible():
-                continue
-            text = (await el.inner_text() or await el.get_attribute("value") or "").strip()
-            if ATC_TEXT_RE.search(text):
-                return el
-    except Exception:
-        pass
-    return None
-
-
-async def playwright_checks(
-    base_url: str,
-    product_urls: list[str],
+def run_playwright_audit(
+    url: str,
     screenshot_dir: str,
     progress: ProgressCallback = None,
-) -> list[dict]:
-    findings: list[dict] = []
-    if not product_urls:
-        findings.append(_finding(
-            1, "ATC Button Above Fold", "HIGH", "product_page", False,
-            "No product pages found to test ATC",
-            "Crawl returned zero /products/ URLs",
-            "Cannot sell without product pages",
-            "Ensure products are published and linked from the storefront",
-            [base_url],
-        ))
-        return findings
+    product_url_hint: str | None = None,
+) -> dict[str, Any]:
+    findings: dict[str, Any] = {
+        "has_h1": False,
+        "h1_text": "",
+        "hero_cta_count": 0,
+        "nav_links_count": 0,
+        "has_visible_nav": False,
+        "has_announcement_bar": False,
+        "trust_badge_count": 0,
+        "email_capture_count": 0,
+        "has_email_capture": False,
+        "has_carousel": False,
+        "carousel_slide_count": 0,
+        "product_url": None,
+        "atc_y_position": 9999,
+        "atc_above_fold": False,
+        "product_image_count": 0,
+        "price_visible": False,
+        "price_text": "",
+        "product_has_reviews": False,
+        "has_urgency": False,
+        "has_cross_sell": False,
+        "has_volume_pricing": False,
+        "has_sticky_atc": False,
+        "mobile_has_hamburger": False,
+        "mobile_atc_above_fold": False,
+        "mobile_atc_tap_target_ok": False,
+        "cart_has_checkout_btn": False,
+        "cart_has_trust": False,
+        "cart_has_upsell": False,
+        "cart_flow_error": "",
+        "screenshots": {},
+    }
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(
-            viewport={"width": 1440, "height": 900},
-            user_agent=HEADERS["User-Agent"],
-        )
-        page = await context.new_page()
+    homepage_screenshot = ""
+    product_screenshot = ""
+    mobile_screenshot = ""
+    cart_screenshot = ""
+    product_url: str | None = product_url_hint
 
-        # 1 ATC above fold — all products (dedupe)
-        _emit(progress, f"[Playwright] ATC above-fold check on {len(product_urls)} products...")
-        atc_fail: list[str] = []
-        atc_missing: list[str] = []
-        atc_shot = ""
-        for i, url in enumerate(product_urls):
-            if i % 5 == 0:
-                _emit(progress, f"      ATC check {i+1}/{len(product_urls)}")
-            try:
-                await page.set_viewport_size({"width": 1440, "height": 900})
-                await page.goto(url, wait_until="domcontentloaded", timeout=25000)
-                await page.evaluate("window.scrollTo(0, 0)")
-                await asyncio.sleep(0.5)
-                atc = await _find_atc(page)
-                if not atc:
-                    atc_missing.append(url)
-                    continue
-                box = await atc.bounding_box()
-                if box and box["y"] >= 600:
-                    atc_fail.append(url)
-                    if not atc_shot:
-                        fname = f"cro_atc_below_fold_{safe_filename(url)}.png"
-                        await page.screenshot(
-                            path=os.path.join(screenshot_dir, fname), full_page=False
-                        )
-                        atc_shot = fname
-                elif box and not atc_shot and i == 0:
-                    fname = f"cro_atc_ok_{safe_filename(url)}.png"
-                    await page.screenshot(
-                        path=os.path.join(screenshot_dir, fname), full_page=False
-                    )
-                    atc_shot = fname
-            except Exception:
-                atc_missing.append(url)
+    _emit(progress, "[2/2] Playwright phase — desktop homepage…")
 
-        if atc_missing and len(atc_missing) == len(product_urls):
-            findings.append(_finding(
-                1, "ATC Button Above Fold", "HIGH", "product_page", False,
-                "Add to Cart button not detected on product pages",
-                "No ATC / Buy Now control found in DOM",
-                "Visitors cannot purchase — direct revenue loss",
-                "Ensure product form submit button is visible in the theme",
-                atc_missing,
-                atc_shot,
-            ))
-        elif atc_fail:
-            findings.append(_finding(
-                1, "ATC Button Above Fold", "HIGH", "product_page", False,
-                "Add to Cart button is below the fold",
-                f"ATC y-position ≥ 600px on {len(atc_fail)} product page(s)",
-                "Shoppers who don't scroll miss the buy button",
-                "Move ATC above the fold or add a sticky ATC bar",
-                atc_fail,
-                atc_shot,
-            ))
-        else:
-            findings.append(_finding(
-                1, "ATC Button Above Fold", "HIGH", "product_page", True,
-                "ATC button visible above the fold",
-                "ATC visible within first 600px on checked products",
-                "", "", product_urls[:1], atc_shot,
-            ))
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
 
-        # 5 Cart checkout
-        _emit(progress, "[Playwright] Cart & checkout flow...")
-        cart_ok = False
-        cart_ev = "Cart flow failed"
-        cart_shot = ""
-        test_url = product_urls[0]
+        # ── DESKTOP VIEWPORT ──
+        page = browser.new_page(viewport={"width": 1440, "height": 900})
+        page.set_extra_http_headers({"Accept-Language": "en-US,en;q=0.9"})
         try:
-            await page.set_viewport_size({"width": 1440, "height": 900})
-            await page.goto(test_url, wait_until="domcontentloaded", timeout=25000)
-            await asyncio.sleep(1.0)
-            atc = await _find_atc(page)
-            if atc:
-                await atc.click(timeout=5000)
-                await asyncio.sleep(1.8)
-                fname = "cro_cart_after_atc.png"
-                await page.screenshot(path=os.path.join(screenshot_dir, fname), full_page=False)
-                cart_shot = fname
-                # drawer or /cart
-                checkout = None
-                for sel in (
-                    'button[name="checkout"]',
-                    'a[href*="/checkout"]',
-                    'button:has-text("Checkout")',
-                    'a:has-text("Checkout")',
-                    '[name="checkout"]',
-                ):
+            page.goto(url, wait_until="networkidle", timeout=30000)
+        except Exception:
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+
+        homepage_screenshot = take_screenshot(page, "homepage", screenshot_dir)
+
+        h1 = page.query_selector("h1")
+        findings["has_h1"] = bool(h1)
+        findings["h1_text"] = (h1.inner_text().strip() if h1 else "")[:120]
+
+        hero_btns = page.query_selector_all(
+            "a.button, button, .btn, [class*='hero'] a, [class*='banner'] a"
+        )
+        findings["hero_cta_count"] = len(hero_btns)
+
+        nav_links = page.query_selector_all("nav a, header a")
+        findings["nav_links_count"] = len(nav_links)
+        findings["has_visible_nav"] = len(nav_links) > 3
+
+        announcement = page.query_selector(
+            ".announcement-bar, [class*='announcement'], [class*='promo-bar']"
+        )
+        findings["has_announcement_bar"] = bool(announcement)
+
+        trust_elements = []
+        for sel in (
+            "[class*='trust']",
+            "[class*='badge']",
+            "[class*='review']",
+            "[class*='rating']",
+            ".trustpilot",
+        ):
+            trust_elements.extend(page.query_selector_all(sel))
+        findings["trust_badge_count"] = len(trust_elements)
+
+        email_inputs = page.query_selector_all("input[type='email']")
+        findings["email_capture_count"] = len(email_inputs)
+        findings["has_email_capture"] = len(email_inputs) > 0
+
+        carousel = page.query_selector(
+            "[class*='carousel'], [class*='slider'], .slick-slider, .swiper"
+        )
+        findings["has_carousel"] = bool(carousel)
+        if carousel:
+            slides = page.query_selector_all(
+                "[class*='slide'], .slick-slide, .swiper-slide"
+            )
+            findings["carousel_slide_count"] = len(slides)
+
+        # Find product link
+        if progress:
+            progress("Finding product page...")
+        _emit(progress, "      Finding product page…")
+
+        if not product_url:
+            product_link = page.query_selector("a[href*='/products/']")
+            if product_link:
+                href = product_link.get_attribute("href") or ""
+                product_url = urljoin(url, href) if href else None
+
+        findings["product_url"] = product_url
+
+        # ── PRODUCT PAGE ──
+        if product_url:
+            _emit(progress, f"      Auditing product: {product_url}")
+            try:
+                page.goto(product_url, wait_until="networkidle", timeout=30000)
+            except Exception:
+                page.goto(product_url, wait_until="domcontentloaded", timeout=30000)
+            page.evaluate("window.scrollTo(0, 0)")
+            page.wait_for_timeout(500)
+            product_screenshot = take_screenshot(page, "product", screenshot_dir)
+
+            atc = page.query_selector(
+                "button[name='add'], [class*='add-to-cart'], button[class*='atc'], "
+                "form[action*='/cart/add'] button, .product-form__submit"
+            )
+            if not atc:
+                # Text fallback
+                for el in page.query_selector_all("button, a, input[type='submit']"):
                     try:
-                        el = await page.query_selector(sel)
-                        if el and await el.is_visible():
-                            checkout = el
+                        if not el.is_visible():
+                            continue
+                        text = (el.inner_text() or el.get_attribute("value") or "").strip()
+                        if re.search(r"add to cart|buy now|add to bag", text, re.I):
+                            atc = el
                             break
                     except Exception:
-                        pass
-                if not checkout and "/cart" not in page.url:
-                    try:
-                        await page.goto(urljoin(base_url, "/cart"), wait_until="domcontentloaded", timeout=20000)
-                        await asyncio.sleep(1)
-                        fname = "cro_cart_page.png"
-                        await page.screenshot(path=os.path.join(screenshot_dir, fname), full_page=False)
-                        cart_shot = fname
-                        for sel in (
-                            'button[name="checkout"]',
-                            'a[href*="/checkout"]',
-                            '[name="checkout"]',
-                        ):
-                            el = await page.query_selector(sel)
-                            if el and await el.is_visible():
-                                checkout = el
-                                break
-                    except Exception:
-                        pass
-                if checkout:
-                    cart_ok = True
-                    cart_ev = "Checkout button visible after ATC"
-                else:
-                    cart_ev = "ATC clicked but checkout button not found"
-            else:
-                cart_ev = "Could not click ATC — button not found"
-        except Exception as exc:
-            cart_ev = f"Cart flow error: {exc}"
+                        continue
 
-        findings.append(_finding(
-            5, "Cart Checkout Working", "HIGH", "cart_checkout", cart_ok,
-            "Checkout reachable after ATC" if cart_ok else "Cart/checkout flow broken or incomplete",
-            cart_ev,
-            "Broken checkout = zero revenue",
-            "Fix ATC → cart drawer/page and ensure Checkout button is visible",
-            [test_url],
-            cart_shot,
-        ))
-
-        # 6 Mobile ATC tap target
-        _emit(progress, "[Playwright] Mobile ATC tap target...")
-        mobile_ok = False
-        mobile_ev = "Mobile ATC not measured"
-        mobile_shot = ""
-        try:
-            await page.set_viewport_size({"width": 390, "height": 844})
-            await page.goto(test_url, wait_until="domcontentloaded", timeout=25000)
-            await asyncio.sleep(1.5)
-            atc = await _find_atc(page)
-            fname = f"cro_mobile_{safe_filename(test_url)}.png"
-            await page.screenshot(path=os.path.join(screenshot_dir, fname), full_page=False)
-            mobile_shot = fname
             if atc:
-                box = await atc.bounding_box()
-                if box:
-                    w, h = box["width"], box["height"]
-                    if w >= 44 and h >= 44:
-                        mobile_ok = True
-                        mobile_ev = f"ATC tap target {int(w)}×{int(h)}px"
-                    else:
-                        mobile_ev = f"ATC tap target too small: {int(w)}×{int(h)}px (min 44×44)"
-                else:
-                    mobile_ev = "ATC found but no bounding box"
+                box = atc.bounding_box()
+                findings["atc_y_position"] = box["y"] if box else 9999
+                findings["atc_above_fold"] = bool(box and box["y"] < 800)
             else:
-                mobile_ev = "ATC not found on mobile viewport"
-        except Exception as exc:
-            mobile_ev = f"Mobile check error: {exc}"
+                findings["atc_above_fold"] = False
+                findings["atc_y_position"] = 9999
 
-        findings.append(_finding(
-            6, "Mobile ATC Tap Target", "HIGH", "mobile", mobile_ok,
-            "Mobile ATC tap target OK" if mobile_ok else "Mobile ATC tap target too small or missing",
-            mobile_ev,
-            "Small tap targets cause mis-taps and abandoned carts on mobile",
-            "Set min-height/min-width of ATC to at least 48px on mobile",
-            [test_url],
-            mobile_shot,
-        ))
+            product_images = page.query_selector_all(
+                ".product__media img, [class*='product-image'] img, "
+                ".product-single__photo img, [class*='product__media'] img, "
+                ".product-gallery img, [class*='media-gallery'] img"
+            )
+            findings["product_image_count"] = len(product_images)
 
-        # 7 Page speed
-        _emit(progress, "[Playwright] Measuring page speed...")
+            price = page.query_selector(
+                "[class*='price']:not([class*='compare']):not([class*='compare-at'])"
+            )
+            findings["price_visible"] = bool(price)
+            findings["price_text"] = (price.inner_text().strip() if price else "")[:80]
 
-        async def measure_load(url: str) -> float | None:
-            try:
-                t0 = time.time()
-                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                return round(time.time() - t0, 2)
-            except Exception:
-                return None
+            reviews = page.query_selector(
+                "[class*='review'], [class*='rating'], .stamped-badge, "
+                ".yotpo, .judge-me, .jdgm-preview-badge, .loox-rating"
+            )
+            findings["product_has_reviews"] = bool(reviews)
 
-        await page.set_viewport_size({"width": 1440, "height": 900})
-        home_t = await measure_load(base_url)
-        prod_t = await measure_load(test_url)
+            page_text = page.inner_text("body").lower()
+            findings["has_urgency"] = any(kw in page_text for kw in URGENCY_KEYWORDS)
 
-        def speed_status(t: float | None) -> tuple[bool, str, str]:
-            if t is None:
-                return False, "fail", "Could not measure"
-            if t < 3:
-                return True, "pass", f"{t}s"
-            if t <= 5:
-                return False, "warning", f"{t}s (3–5s)"
-            return False, "fail", f"{t}s (>5s)"
+            related = page.query_selector(
+                "[class*='related'], [class*='upsell'], [class*='cross-sell'], "
+                "[class*='recommended'], [class*='complementary']"
+            )
+            findings["has_cross_sell"] = bool(related)
 
-        home_ok, home_st, home_ev = speed_status(home_t)
-        prod_ok, prod_st, prod_ev = speed_status(prod_t)
-        # Overall pass only if both under 3; fail if any over 5; else warning
-        if home_ok and prod_ok:
-            speed_passed, speed_status_val = True, "pass"
-            speed_issue = "Page speed healthy"
-            speed_ev = f"Homepage {home_ev}; Product {prod_ev}"
-            sev_note = "HIGH"
-        elif (home_t and home_t > 5) or (prod_t and prod_t > 5):
-            speed_passed, speed_status_val = False, "fail"
-            speed_issue = "Page load time critical (>5s)"
-            speed_ev = f"Homepage {home_ev}; Product {prod_ev}"
-            sev_note = "HIGH"
+            volume = page.query_selector(
+                "[class*='volume'], [class*='tier'], [class*='bulk']"
+            )
+            findings["has_volume_pricing"] = bool(volume)
+
+            sticky = page.query_selector(
+                "[class*='sticky'][class*='cart'], [class*='sticky'][class*='atc'], "
+                "[class*='sticky-add']"
+            )
+            findings["has_sticky_atc"] = bool(sticky)
         else:
-            speed_passed, speed_status_val = False, "warning"
-            speed_issue = "Page load time slow (3–5s)"
-            speed_ev = f"Homepage {home_ev}; Product {prod_ev}"
-            sev_note = "HIGH"
+            _emit(progress, "      No /products/ link found — skipping product checks")
 
-        findings.append(_finding(
-            7, "Page Speed", sev_note, "speed", speed_passed,
-            speed_issue, speed_ev,
-            "53% of mobile users abandon pages taking over 3s",
-            "Remove unused apps, compress images, defer non-critical JS",
-            [base_url, test_url],
-            status=speed_status_val,
-        ))
-
-        # Homepage screenshots
+        # ── MOBILE VIEWPORT ──
+        if progress:
+            progress("Checking mobile experience...")
+        _emit(progress, "      Checking mobile experience…")
+        mobile_page = browser.new_page(viewport={"width": 390, "height": 844})
         try:
-            await page.set_viewport_size({"width": 1440, "height": 900})
-            await page.goto(base_url, wait_until="domcontentloaded", timeout=20000)
-            await page.screenshot(
-                path=os.path.join(screenshot_dir, "homepage_desktop.png"), full_page=False
-            )
-            await page.set_viewport_size({"width": 390, "height": 844})
-            await page.goto(base_url, wait_until="domcontentloaded", timeout=20000)
-            await page.screenshot(
-                path=os.path.join(screenshot_dir, "homepage_mobile.png"), full_page=False
-            )
+            mobile_page.goto(url, wait_until="networkidle", timeout=30000)
         except Exception:
-            pass
+            mobile_page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        mobile_screenshot = take_screenshot(mobile_page, "mobile", screenshot_dir)
 
-        await browser.close()
+        hamburger = mobile_page.query_selector(
+            "[class*='hamburger'], [class*='menu-toggle'], [class*='nav-toggle'], "
+            "button[aria-label*='menu' i], summary.header__icon--menu"
+        )
+        findings["mobile_has_hamburger"] = bool(hamburger)
 
+        if product_url:
+            try:
+                mobile_page.goto(product_url, wait_until="networkidle", timeout=30000)
+            except Exception:
+                mobile_page.goto(product_url, wait_until="domcontentloaded", timeout=30000)
+            mobile_page.evaluate("window.scrollTo(0, 0)")
+            mobile_page.wait_for_timeout(500)
+            mobile_atc = mobile_page.query_selector(
+                "button[name='add'], [class*='add-to-cart'], .product-form__submit"
+            )
+            if not mobile_atc:
+                for el in mobile_page.query_selector_all("button"):
+                    try:
+                        text = (el.inner_text() or "").strip()
+                        if re.search(r"add to cart|buy now", text, re.I):
+                            mobile_atc = el
+                            break
+                    except Exception:
+                        continue
+            if mobile_atc:
+                mobile_box = mobile_atc.bounding_box()
+                findings["mobile_atc_above_fold"] = bool(
+                    mobile_box and mobile_box["y"] < 844
+                )
+                if mobile_box:
+                    findings["mobile_atc_tap_target_ok"] = (
+                        mobile_box["width"] >= 44 and mobile_box["height"] >= 44
+                    )
+
+        # ── CART FLOW ──
+        if progress:
+            progress("Testing cart flow...")
+        _emit(progress, "      Testing cart flow…")
+        if product_url:
+            cart_page = browser.new_page(viewport={"width": 1440, "height": 900})
+            try:
+                cart_page.goto(product_url, wait_until="networkidle", timeout=30000)
+            except Exception:
+                cart_page.goto(product_url, wait_until="domcontentloaded", timeout=30000)
+
+            atc_btn = cart_page.query_selector(
+                "button[name='add'], [class*='add-to-cart'], .product-form__submit"
+            )
+            if not atc_btn:
+                for el in cart_page.query_selector_all("button"):
+                    try:
+                        text = (el.inner_text() or "").strip()
+                        if re.search(r"add to cart|buy now", text, re.I):
+                            atc_btn = el
+                            break
+                    except Exception:
+                        continue
+
+            if atc_btn:
+                try:
+                    atc_btn.click(timeout=5000)
+                    cart_page.wait_for_timeout(2000)
+
+                    cart_drawer = cart_page.query_selector(
+                        "[class*='cart-drawer'], [class*='drawer'][class*='cart'], "
+                        "#CartDrawer, .cart-notification"
+                    )
+                    if not cart_drawer:
+                        cart_page.goto(
+                            urljoin(url, "/cart"),
+                            wait_until="networkidle",
+                            timeout=30000,
+                        )
+
+                    cart_screenshot = take_screenshot(cart_page, "cart", screenshot_dir)
+
+                    checkout_btn = cart_page.query_selector(
+                        "[name='checkout'], button[class*='checkout'], "
+                        "a[href*='/checkout'], button:has-text('Checkout')"
+                    )
+                    findings["cart_has_checkout_btn"] = bool(checkout_btn)
+
+                    cart_trust = cart_page.query_selector(
+                        "[class*='trust'], [class*='secure'], [class*='guarantee']"
+                    )
+                    findings["cart_has_trust"] = bool(cart_trust)
+
+                    cart_upsell = cart_page.query_selector(
+                        "[class*='upsell'], [class*='recommend'], [class*='cross']"
+                    )
+                    findings["cart_has_upsell"] = bool(cart_upsell)
+                except Exception as e:
+                    findings["cart_flow_error"] = str(e)
+                    _emit(progress, f"      Cart flow error: {e}")
+            else:
+                findings["cart_flow_error"] = "ATC button not found for cart flow"
+                _emit(progress, "      Cart flow skipped — ATC not found")
+
+        browser.close()
+
+    findings["screenshots"] = {
+        "homepage": homepage_screenshot or None,
+        "product": product_screenshot or None,
+        "mobile": mobile_screenshot or None,
+        "cart": cart_screenshot or None,
+    }
     return findings
 
 
@@ -963,21 +581,390 @@ async def playwright_checks(
 # Scoring
 # ─────────────────────────────────────────────
 
-def compute_scores(findings: list[dict]) -> dict:
-    cats = {k: 10.0 for k in CATEGORY_WEIGHTS}
-    for f in findings:
-        if f.get("passed") and f.get("status") != "warning":
-            continue
-        cat = f.get("category")
-        if cat not in cats:
-            continue
-        ded = DEDUCTIONS.get(f.get("severity", "LOW"), 0.5)
-        if f.get("status") == "warning":
-            ded = min(ded, 1.5)
-        cats[cat] = max(0.0, cats[cat] - ded)
+def calculate_scores(findings: dict) -> dict:
+    scores_named: dict[str, float] = {}
 
-    overall = round(sum(cats[c] * CATEGORY_WEIGHTS[c] for c in cats), 1)
-    return {"categories": {k: round(v, 1) for k, v in cats.items()}, "overall": overall}
+    # Product Page (30%)
+    pp = 10.0
+    if not findings.get("atc_above_fold"):
+        pp -= 3
+    if not findings.get("product_has_reviews"):
+        pp -= 2
+    if findings.get("product_image_count", 0) < 3:
+        pp -= 1.5
+    if not findings.get("has_urgency"):
+        pp -= 1
+    if not findings.get("has_cross_sell"):
+        pp -= 1
+    if not findings.get("has_sticky_atc"):
+        pp -= 0.5
+    if not findings.get("price_visible"):
+        pp -= 1
+    scores_named["Product Page"] = max(0.0, round(pp, 1))
+
+    # Cart (25%)
+    cart = 10.0
+    if not findings.get("cart_has_checkout_btn"):
+        cart -= 4
+    if not findings.get("cart_has_trust"):
+        cart -= 3
+    if not findings.get("cart_has_upsell"):
+        cart -= 2
+    if findings.get("cart_flow_error"):
+        cart -= 1
+    scores_named["Cart & Checkout"] = max(0.0, round(cart, 1))
+
+    # Mobile (20%)
+    mob = 10.0
+    if not findings.get("mobile_atc_above_fold"):
+        mob -= 3
+    if not findings.get("mobile_atc_tap_target_ok"):
+        mob -= 2
+    if not findings.get("mobile_has_hamburger"):
+        mob -= 1
+    scores_named["Mobile"] = max(0.0, round(mob, 1))
+
+    # Speed (15%)
+    spd = 10.0
+    load = findings.get("homepage_load_time", 999)
+    if load > 3:
+        spd -= 4
+    elif load > 2:
+        spd -= 2
+    elif load > 1:
+        spd -= 1
+    if findings.get("has_carousel"):
+        spd -= 1
+    scores_named["Speed"] = max(0.0, round(spd, 1))
+
+    # Marketing (10%)
+    mkt = 10.0
+    if not findings.get("has_email_capture") and not findings.get("has_email_capture_static"):
+        mkt -= 3
+    if findings.get("trust_badge_count", 0) < 2 and not findings.get("has_trust_text"):
+        mkt -= 2
+    if not findings.get("has_announcement_bar"):
+        mkt -= 1
+    if not findings.get("has_h1"):
+        mkt -= 2
+    if not findings.get("has_meta_title") or not findings.get("has_meta_description"):
+        mkt -= 1
+    scores_named["Marketing"] = max(0.0, round(mkt, 1))
+
+    overall = (
+        scores_named["Product Page"] * 0.30
+        + scores_named["Cart & Checkout"] * 0.25
+        + scores_named["Mobile"] * 0.20
+        + scores_named["Speed"] * 0.15
+        + scores_named["Marketing"] * 0.10
+    )
+
+    categories = {
+        SCORE_LABEL_TO_KEY[k]: v for k, v in scores_named.items() if k in SCORE_LABEL_TO_KEY
+    }
+    return {
+        "categories": categories,
+        "overall": round(overall, 1),
+        "labels": scores_named,
+    }
+
+
+# ─────────────────────────────────────────────
+# Map raw findings → report findings list
+# ─────────────────────────────────────────────
+
+def build_report_findings(raw: dict, base_url: str) -> list[dict]:
+    findings: list[dict] = []
+    product_url = raw.get("product_url") or base_url
+    shots = raw.get("screenshots") or {}
+    product_shot = shots.get("product") or ""
+    cart_shot = shots.get("cart") or ""
+    mobile_shot = shots.get("mobile") or ""
+    home_shot = shots.get("homepage") or ""
+
+    # 1 ATC above fold
+    findings.append(_finding(
+        1, "ATC Button Above Fold", "HIGH", "product_page",
+        bool(raw.get("atc_above_fold")),
+        "ATC button visible above the fold"
+        if raw.get("atc_above_fold")
+        else "Add to Cart button is below the fold or missing",
+        f"ATC y-position: {raw.get('atc_y_position', 'n/a')}px (threshold 800px)",
+        "Shoppers who don't scroll miss the buy button",
+        "Move ATC above the fold or add a sticky ATC bar",
+        [product_url],
+        product_shot,
+    ))
+
+    # 2 Reviews
+    findings.append(_finding(
+        2, "Reviews Present", "HIGH", "product_page",
+        bool(raw.get("product_has_reviews")),
+        "Reviews / ratings present" if raw.get("product_has_reviews")
+        else "No reviews or star ratings on product page",
+        "Review/rating widget detected" if raw.get("product_has_reviews")
+        else "No review widgets (.judge-me, .yotpo, stamped, etc.) found",
+        "93% of buyers read reviews before purchasing",
+        "Install Judge.me / Okendo / Loox and display stars on product pages",
+        [product_url],
+        product_shot,
+    ))
+
+    # 3 Trust badges
+    trust_ok = raw.get("trust_badge_count", 0) >= 1 or raw.get("has_trust_text")
+    findings.append(_finding(
+        3, "Trust Badges", "HIGH", "product_page",
+        bool(trust_ok),
+        "Trust signals present" if trust_ok else "No trust badges detected",
+        f"Trust elements: {raw.get('trust_badge_count', 0)}; "
+        f"text match: {raw.get('trust_text_match') or 'none'}",
+        "Customers hesitate without trust indicators",
+        "Add trust strip: Secure Checkout, Money-Back Guarantee, Free Returns",
+        [base_url, product_url],
+        home_shot,
+    ))
+
+    # 4 Price
+    findings.append(_finding(
+        4, "Price Visibility", "HIGH", "product_page",
+        bool(raw.get("price_visible")),
+        "Price clearly visible" if raw.get("price_visible")
+        else "No clear price element found on product page",
+        raw.get("price_text") or "No price element detected",
+        "Hidden or unclear pricing kills conversion",
+        "Ensure .price shows currency and amount above the fold",
+        [product_url],
+        product_shot,
+    ))
+
+    # 5 Cart checkout
+    cart_ok = bool(raw.get("cart_has_checkout_btn")) and not raw.get("cart_flow_error")
+    findings.append(_finding(
+        5, "Cart Checkout Working", "HIGH", "cart_checkout",
+        cart_ok,
+        "Checkout reachable after ATC" if cart_ok
+        else "Cart/checkout flow broken or incomplete",
+        raw.get("cart_flow_error")
+        or (
+            "Checkout button visible after ATC"
+            if raw.get("cart_has_checkout_btn")
+            else "Checkout button not found after ATC"
+        ),
+        "Broken checkout = zero revenue",
+        "Fix ATC → cart drawer/page and ensure Checkout button is visible",
+        [product_url],
+        cart_shot,
+    ))
+
+    # 5b Cart trust / upsell (MEDIUM)
+    findings.append(_finding(
+        51, "Cart Trust Signals", "MEDIUM", "cart_checkout",
+        bool(raw.get("cart_has_trust")),
+        "Trust signals in cart" if raw.get("cart_has_trust")
+        else "No trust signals in cart",
+        "Secure/guarantee/trust element in cart UI"
+        if raw.get("cart_has_trust") else "None found",
+        "Cart is high-anxiety — reinforce trust before checkout",
+        "Add secure checkout / guarantee copy near Checkout",
+        [product_url],
+        cart_shot,
+    ))
+    findings.append(_finding(
+        52, "Cart Upsell", "MEDIUM", "cart_checkout",
+        bool(raw.get("cart_has_upsell")),
+        "Cart upsell present" if raw.get("cart_has_upsell")
+        else "No upsell in cart",
+        "Upsell/recommend block found" if raw.get("cart_has_upsell") else "None found",
+        "Missing cart upsells reduce AOV",
+        "Add cart drawer recommendations or FBT",
+        [product_url],
+        cart_shot,
+    ))
+
+    # 6 Mobile ATC tap
+    mobile_tap_ok = bool(raw.get("mobile_atc_tap_target_ok"))
+    findings.append(_finding(
+        6, "Mobile ATC Tap Target", "HIGH", "mobile",
+        mobile_tap_ok,
+        "Mobile ATC tap target OK" if mobile_tap_ok
+        else "Mobile ATC tap target too small or missing",
+        f"Above fold: {raw.get('mobile_atc_above_fold')}; "
+        f"tap target ≥44px: {raw.get('mobile_atc_tap_target_ok')}",
+        "Small tap targets cause mis-taps and abandoned carts on mobile",
+        "Set min-height/min-width of ATC to at least 48px on mobile",
+        [product_url],
+        mobile_shot,
+    ))
+
+    # 6b Mobile ATC fold
+    findings.append(_finding(
+        61, "Mobile ATC Above Fold", "HIGH", "mobile",
+        bool(raw.get("mobile_atc_above_fold")),
+        "Mobile ATC above fold" if raw.get("mobile_atc_above_fold")
+        else "Mobile ATC below fold or missing",
+        f"mobile_atc_above_fold={raw.get('mobile_atc_above_fold')}",
+        "Mobile shoppers expect buy CTA without scrolling",
+        "Keep ATC sticky or above the fold on mobile product pages",
+        [product_url],
+        mobile_shot,
+    ))
+
+    # 7 Speed
+    load = raw.get("homepage_load_time", 999)
+    if load < 3:
+        speed_ok, speed_st = True, "pass"
+        speed_issue = "Page speed healthy"
+    elif load <= 5:
+        speed_ok, speed_st = False, "warning"
+        speed_issue = "Page load time slow (3–5s)"
+    else:
+        speed_ok, speed_st = False, "fail"
+        speed_issue = "Page load time critical (>5s)"
+    findings.append(_finding(
+        7, "Page Speed", "HIGH", "speed",
+        speed_ok,
+        speed_issue,
+        f"Homepage response {load}s"
+        + ("; carousel detected" if raw.get("has_carousel") else ""),
+        "53% of mobile users abandon pages taking over 3s",
+        "Remove unused apps, compress images, defer non-critical JS",
+        [base_url],
+        home_shot,
+        status=speed_st,
+    ))
+
+    # 8 Email
+    email_ok = bool(raw.get("has_email_capture") or raw.get("has_email_capture_static"))
+    findings.append(_finding(
+        8, "Email Capture", "MEDIUM", "marketing",
+        email_ok,
+        "Email capture present" if email_ok else "No email capture detected",
+        f"Playwright inputs: {raw.get('email_capture_count', 0)}; "
+        f"static: {raw.get('has_email_capture_static')}",
+        "Without capture you lose most non-buyers forever",
+        "Add Klaviyo/Omnisend popup with a first-order incentive",
+        [base_url],
+        home_shot,
+    ))
+
+    # 9 Urgency
+    findings.append(_finding(
+        9, "Urgency Signals", "MEDIUM", "marketing",
+        bool(raw.get("has_urgency")),
+        "Urgency signals found" if raw.get("has_urgency")
+        else "No urgency signals on product page",
+        "low-stock / limited / selling-fast messaging"
+        if raw.get("has_urgency") else "None found",
+        "Without urgency, shoppers delay and often don't return",
+        "Show low-stock using inventory_quantity or a promo countdown",
+        [product_url],
+        product_shot,
+    ))
+
+    # 10 Cross-sell
+    findings.append(_finding(
+        10, "Upsell / Cross-sell", "MEDIUM", "marketing",
+        bool(raw.get("has_cross_sell")),
+        "Upsell/cross-sell section found" if raw.get("has_cross_sell")
+        else "No upsell or cross-sell section on product page",
+        "Related/upsell block detected" if raw.get("has_cross_sell") else "None found",
+        "Missing upsells reduce average order value",
+        "Add Related Products or Frequently Bought Together below description",
+        [product_url],
+        product_shot,
+    ))
+
+    # 12 Images
+    img_n = raw.get("product_image_count", 0)
+    img_ok = img_n >= 3
+    findings.append(_finding(
+        12, "Image Count", "MEDIUM", "product_page",
+        img_ok,
+        f"Product gallery has {img_n} image(s)"
+        + (" (3+)" if img_ok else " — below recommended 3"),
+        f"{img_n} product image(s) detected",
+        "Thin galleries reduce confidence and conversion",
+        "Add at least 3 lifestyle/detail images per product",
+        [product_url],
+        product_shot,
+        status="pass" if img_ok else ("warning" if img_n == 2 else "fail"),
+    ))
+
+    # 14 Hero / H1
+    hero_ok = bool(raw.get("has_h1")) and raw.get("hero_cta_count", 0) > 0
+    findings.append(_finding(
+        14, "Homepage Hero CTA", "LOW", "marketing",
+        hero_ok,
+        "Homepage has H1 + CTA elements" if hero_ok
+        else "Homepage missing clear H1 or hero CTA",
+        f"H1={'yes' if raw.get('has_h1') else 'no'} "
+        f"('{raw.get('h1_text', '')[:40]}'); "
+        f"CTA-like elements: {raw.get('hero_cta_count', 0)}",
+        "Weak hero CTAs increase bounce",
+        "Add a clear H1 and primary Shop Now button in the hero",
+        [base_url],
+        home_shot,
+    ))
+
+    # Announcement bar
+    findings.append(_finding(
+        16, "Announcement Bar", "LOW", "marketing",
+        bool(raw.get("has_announcement_bar")),
+        "Announcement / promo bar present" if raw.get("has_announcement_bar")
+        else "No announcement bar detected",
+        "Promo/announcement bar element found"
+        if raw.get("has_announcement_bar") else "None found",
+        "Announcement bars drive promos and free-shipping thresholds",
+        "Add a slim announcement bar with offer or shipping message",
+        [base_url],
+        home_shot,
+    ))
+
+    # Sticky ATC
+    findings.append(_finding(
+        17, "Sticky ATC", "LOW", "product_page",
+        bool(raw.get("has_sticky_atc")),
+        "Sticky ATC present" if raw.get("has_sticky_atc")
+        else "No sticky ATC bar",
+        "Sticky cart/ATC element found" if raw.get("has_sticky_atc") else "None found",
+        "Sticky ATC recovers scrollers who miss the primary button",
+        "Add a sticky add-to-cart bar on product pages",
+        [product_url],
+        product_shot,
+    ))
+
+    # Meta title / description (requests)
+    findings.append(_finding(
+        100, "Meta Title", "MEDIUM", "marketing",
+        bool(raw.get("has_meta_title")),
+        "Meta title present" if raw.get("has_meta_title") else "Homepage missing <title>",
+        raw.get("meta_title") or "No title element",
+        "Hurts SEO & CTR",
+        "Add a unique title tag under 60 characters",
+        [base_url],
+    ))
+    findings.append(_finding(
+        101, "Meta Description", "MEDIUM", "marketing",
+        bool(raw.get("has_meta_description")),
+        "Meta description present" if raw.get("has_meta_description")
+        else "Homepage missing meta description",
+        raw.get("meta_description") or "No meta description",
+        "Weak SERP snippets reduce click-through",
+        "Add a compelling meta description under 155 characters",
+        [base_url],
+    ))
+    findings.append(_finding(
+        102, "Canonical Tag", "LOW", "marketing",
+        bool(raw.get("has_canonical")),
+        "Canonical tag present" if raw.get("has_canonical")
+        else "No canonical tag on homepage",
+        raw.get("canonical_href") or "None found",
+        "Canonical tags prevent duplicate-content issues",
+        "Add <link rel='canonical'> pointing to the preferred URL",
+        [base_url],
+    ))
+
+    return findings
 
 
 def findings_to_legacy_results(findings: list[dict]) -> list[dict]:
@@ -1003,10 +990,14 @@ def findings_to_legacy_results(findings: list[dict]) -> list[dict]:
 
 
 # ─────────────────────────────────────────────
-# Main entry
+# Main entry (async — UI calls asyncio.run)
 # ─────────────────────────────────────────────
 
-async def run_audit(base_url: str, mode: str = "cro", progress: ProgressCallback = None) -> tuple:
+async def run_audit(
+    base_url: str,
+    mode: str = "cro",
+    progress: ProgressCallback = None,
+) -> tuple:
     if not base_url.startswith("http"):
         base_url = "https://" + base_url
     base_url = base_url.rstrip("/")
@@ -1015,87 +1006,46 @@ async def run_audit(base_url: str, mode: str = "cro", progress: ProgressCallback
     output_dir = make_output_dir(base_url)
     screenshot_dir = os.path.join(output_dir, "screenshots")
 
-    # 1. Crawl
-    _emit(progress, "[1/4] Crawling pages (requests)...")
-    all_pages = await asyncio.to_thread(crawl_pages, base_url, 60, progress)
-    product_pages = [u for u in all_pages if "/products/" in urlparse(u).path]
-    _emit(progress, f"      {len(all_pages)} pages · {len(product_pages)} products")
+    # Phase 1
+    req = await asyncio.to_thread(run_requests_audit, base_url, progress)
 
-    # 2. Homepage static
-    _emit(progress, "[2/4] Static checks — homepage + all products...")
-    session = _session()
-    home_soup = await asyncio.to_thread(fetch_soup, session, base_url)
-    homepage_data = (
-        analyze_homepage(base_url, home_soup)
-        if home_soup
-        else {
-            "email": (False, "Homepage unreachable"),
-            "trust": (False, "Homepage unreachable"),
-            "hero": (False, "Homepage unreachable"),
-            "social": (False, "Homepage unreachable"),
-        }
+    # Phase 2
+    hint = (req.get("product_urls_hint") or [None])[0]
+    pw = await asyncio.to_thread(
+        run_playwright_audit, base_url, screenshot_dir, progress, hint
     )
 
-    # Product static concurrent
-    product_results: list[dict] = []
-    if product_pages:
-        def _job(u: str):
-            return fetch_and_analyze_product(u)
+    # Merge raw findings
+    raw = {**req, **pw}
+    # Prefer Playwright email if measured
+    if pw.get("has_email_capture"):
+        raw["has_email_capture"] = True
+    elif req.get("has_email_capture_static"):
+        raw["has_email_capture"] = True
 
-        with ThreadPoolExecutor(max_workers=5) as pool:
-            futures = {pool.submit(_job, u): u for u in product_pages}
-            done = 0
-            for fut in as_completed(futures):
-                done += 1
-                if done % 5 == 0 or done == len(product_pages):
-                    _emit(progress, f"      Analyzed {done}/{len(product_pages)} products")
-                try:
-                    res = fut.result()
-                    if res:
-                        product_results.append(res)
-                except Exception:
-                    pass
+    _emit(progress, "      Building scores & findings…")
+    scores = calculate_scores(raw)
+    findings = build_report_findings(raw, base_url)
 
-    static_findings = build_static_findings(base_url, homepage_data, product_results)
-
-    # 3. Playwright
-    _emit(progress, "[3/4] Playwright — ATC, cart, mobile, speed...")
-    pw_findings = await playwright_checks(
-        base_url, product_pages, screenshot_dir, progress
-    )
-
-    # Merge: playwright findings for checks 1,5,6,7 override if present
-    by_id = {f["check_id"]: f for f in static_findings}
-    for f in pw_findings:
-        by_id[f["check_id"]] = f
-    findings = sorted(by_id.values(), key=lambda x: (x["severity"] != "HIGH", x["severity"] != "MEDIUM", x["check_id"]))
-
-    # Full mode: light SEO extras (optional)
     if mode == "full":
-        _emit(progress, "      Full mode: meta SEO sample...")
-        # Keep CRO-focused; optional quick title check on homepage
-        if home_soup:
-            title = home_soup.find("title")
-            if not title or not title.get_text(strip=True):
-                findings.append(_finding(
-                    100, "Homepage Title Tag", "MEDIUM", "marketing", False,
-                    "Homepage missing <title>",
-                    "No title element",
-                    "Hurts SEO & CTR",
-                    "Add a unique title tag under 60 characters",
-                    [base_url],
-                ))
+        # Extra full-mode note already covered by meta checks
+        pass
 
-    scores = compute_scores(findings)
-    _emit(progress, f"[4/4] CRO Score: {scores['overall']}/10")
+    product_pages = []
+    if raw.get("product_url"):
+        product_pages = [raw["product_url"]]
+    pages_crawled = [base_url] + product_pages
+
+    _emit(progress, f"CRO Score: {scores['overall']}/10")
 
     audit_data = {
         "store_url": base_url,
         "audit_date": datetime.now().isoformat(),
         "audit_mode": mode,
-        "pages_crawled": all_pages,
+        "pages_crawled": pages_crawled,
         "product_pages": product_pages,
-        "load_times": {},
+        "load_times": {"homepage": raw.get("homepage_load_time")},
+        "raw_findings": raw,
         "findings": findings,
         "scores": scores,
         "results": findings_to_legacy_results(findings),
