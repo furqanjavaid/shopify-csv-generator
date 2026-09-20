@@ -29,6 +29,7 @@ MinVersion=10.0
 CloseApplications=yes
 CloseApplicationsFilter=*SentivoTools.exe
 RestartApplications=yes
+SetupIconFile=assets\icon.ico
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

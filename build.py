@@ -30,6 +30,8 @@ def build():
             "--noconsole",
             "--name",
             "SentivoTools",
+            "--icon",
+            "assets/icon.ico",
             "--add-data",
             "app;app",
             "--add-data",
