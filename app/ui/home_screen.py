@@ -23,7 +23,7 @@ class HomeScreen(ctk.CTkFrame):
         T.page_title(
             content,
             "Sentivo Tools",
-            "Upload · Scrape · Audit — all in one place",
+            "by Sentivo Limited",
         )
 
         # Feature cards — equal width, fixed compact height

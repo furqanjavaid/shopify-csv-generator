@@ -1,4 +1,6 @@
 {
-  "version": "1.0.1",
-  "release_notes": "Initial release — CSV Generator, URL Scraper, Store Auditor, Image Converter"
+  "version": "1.0.2",
+  "app_name": "Sentivo Tools",
+  "publisher": "Sentivo Limited",
+  "release_notes": "Bug fixes and UI improvements"
 }

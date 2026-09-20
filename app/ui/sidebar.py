@@ -44,14 +44,14 @@ class Sidebar(ctk.CTkFrame):
         brand.pack(fill="x", padx=T.CARD_PADDING, pady=(28, 24))
         ctk.CTkLabel(
             brand,
-            text="Sentivo",
+            text="Sentivo Tools",
             font=T.font_tuple(T.H2),
             text_color=T.TEXT_PRIMARY,
             anchor="w",
         ).pack(fill="x")
         ctk.CTkLabel(
             brand,
-            text="Product Tools",
+            text="by Sentivo Limited",
             font=T.font_tuple(T.CAPTION),
             text_color=T.TEXT_MUTED,
             anchor="w",
