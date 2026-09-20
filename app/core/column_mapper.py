@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 # Exact Shopify product CSV field order (new format)
@@ -49,6 +50,88 @@ SHOPIFY_FIELDS = [
 
 SKIP_LABEL = "— Skip this column —"
 
+# Aliases → our Shopify field names (Body HTML / Variant Price etc. map to app columns)
+FIELD_ALIASES: dict[str, list[str]] = {
+    "Description": [
+        "description",
+        "body",
+        "body html",
+        "body_html",
+        "body (html)",
+        "description / specification",
+        "description/specification",
+        "specification",
+        "product description",
+        "desc",
+        "details",
+        "product details",
+        "about",
+    ],
+    "Title": [
+        "product name",
+        "name",
+        "product title",
+        "item name",
+        "item",
+        "title",
+    ],
+    "Vendor": [
+        "brand",
+        "manufacturer",
+        "supplier",
+        "vendor name",
+        "vendor",
+    ],
+    # Shopify export "Variant Price" → our "Price"
+    "Price": [
+        "price",
+        "variant price",
+        "raw min price",
+        "sale price",
+        "retail price",
+        "cost",
+    ],
+    # Shopify export "Variant SKU" → our "SKU"
+    "SKU": [
+        "sku",
+        "variant sku",
+        "item sku",
+        "product sku",
+        "sku status",
+        "article number",
+    ],
+    # Shopify export "Image Src" → our "Product image URL"
+    "Product image URL": [
+        "image url",
+        "image src",
+        "first image url",
+        "product image url",
+        "image",
+        "photo url",
+        "image link",
+    ],
+    "Tags": [
+        "tag",
+        "tags",
+        "keywords",
+        "labels",
+    ],
+    "Type": [
+        "product type",
+        "category",
+        "type",
+    ],
+}
+
+
+def _normalize_header(header: str) -> str:
+    """Case-insensitive, collapse / strip extra spaces, unify separators."""
+    text = (header or "").strip().lower()
+    text = text.replace("_", " ")
+    text = re.sub(r"\s*/\s*", "/", text)  # "description / specification" → "description/specification"
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
 
 class ColumnMapper:
     """Fuzzy keyword mapping from client headers to Shopify fields."""
@@ -66,39 +149,41 @@ class ColumnMapper:
         return results
 
     def _match_header(self, header: str, used_fields: set[str]) -> Optional[str]:
-        h = (header or "").strip().lower()
+        h = _normalize_header(header)
         if not h:
             return None
 
-        # Exact Shopify field name (case-insensitive) — never Skip
+        # Exact Shopify field name (case-insensitive, space-normalized)
         for field in SHOPIFY_FIELDS:
-            if field.lower() == h:
+            if _normalize_header(field) == h:
                 return field
 
+        # Exact alias match (normalized)
+        for field, aliases in FIELD_ALIASES.items():
+            normalized_aliases = {_normalize_header(a) for a in aliases}
+            # Also accept slash/space variants of description aliases
+            if h in normalized_aliases or h.replace(" / ", "/") in normalized_aliases:
+                if field not in used_fields:
+                    return field
+                continue
+
+        # Broader keyword fallback for remaining columns
         rules: list[tuple[list[str], str]] = [
-            (["title", "name", "product"], "Title"),
             (["handle", "slug", "url handle"], "URL handle"),
             (["compare", "original", "was", "old price", "compare-at"], "Compare-at price"),
-            (["price", "mrp", "rate"], "Price"),
-            (["cost per", "cost"], "Cost per item"),
-            (["sku", "code", "item no", "article"], "SKU"),
+            (["cost per"], "Cost per item"),
             (["qty", "stock", "inventory", "quantity"], "Inventory quantity"),
-            (["desc", "detail", "about", "body", "info"], "Description"),
-            (["vendor", "brand", "company", "manufacturer"], "Vendor"),
-            (["tag", "keyword", "label"], "Tags"),
-            (["type", "category", "collection"], "Type"),
-            (["image", "photo", "img", "picture", "url"], "Product image URL"),
             (["weight", "gram", "kg"], "Weight value (grams)"),
             (["barcode", "ean", "upc", "isbn"], "Barcode"),
             (["seo title", "meta title"], "SEO title"),
             (["seo desc", "meta desc", "meta description"], "SEO description"),
             (["size"], "Option1 value"),
             (["color", "colour"], "Option2 value"),
-            (["material", "flavor", "flavour", "scent", "variant"], "Option3 value"),
+            (["material", "flavor", "flavour", "scent"], "Option3 value"),
         ]
 
         for keywords, field in rules:
-            if any(kw in h for kw in keywords):
+            if any(_normalize_header(kw) in h for kw in keywords):
                 if field not in used_fields:
                     return field
                 continue
