@@ -28,3 +28,5 @@ output/
 outputs/
 audits/
 config.json
+installer/python-*.exe
+installer/output/

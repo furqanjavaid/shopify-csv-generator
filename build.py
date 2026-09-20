@@ -1,4 +1,4 @@
-"""Build script — creates Sentivo.exe"""
+"""Build script — creates SentivoTools.exe"""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ def clean():
 
 
 def build():
-    print("Building Sentivo.exe...")
+    print("Building SentivoTools.exe...")
     result = subprocess.run(
         [
             sys.executable,
@@ -28,7 +28,7 @@ def build():
             "--onefile",
             "--windowed",
             "--name",
-            "Sentivo",
+            "SentivoTools",
             "--add-data",
             "app;app",
             "--add-data",
@@ -63,7 +63,7 @@ def build():
     )
 
     if result.returncode == 0:
-        exe_path = os.path.join(ROOT, "dist", "Sentivo.exe")
+        exe_path = os.path.join(ROOT, "dist", "SentivoTools.exe")
         size = os.path.getsize(exe_path) / (1024 * 1024)
         print("\n[OK] Build successful!")
         print(f"Output: {exe_path}")
