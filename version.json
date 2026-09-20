@@ -1,5 +1,5 @@
 {
-  "version": "1.0.4",
+  "version": "1.0.5",
   "app_name": "Sentivo Tools",
   "publisher": "Sentivo Limited",
   "release_notes": "Improved Store Auditor with multi-page crawl, better report format"
