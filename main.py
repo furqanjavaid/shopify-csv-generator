@@ -1,7 +1,7 @@
 """Shopify Product Tools — desktop entry point.
 
 Screens: HomeScreen, UploadScreen, ScraperScreen, MappingScreen,
-SuccessScreen, AuditScreen, SettingsScreen.
+SuccessScreen, AuditScreen, ConverterScreen, SettingsScreen.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ import customtkinter as ctk
 
 from app.ui import theme as T
 from app.ui.audit_screen import AuditScreen  # noqa: F401
+from app.ui.converter_screen import ConverterScreen  # noqa: F401
 from app.ui.home_screen import HomeScreen
 from app.utils.config import get_theme
 

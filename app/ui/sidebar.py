@@ -12,6 +12,7 @@ NAV_ITEMS = [
     ("upload", "File Upload"),
     ("scraper", "URL Scraper"),
     ("audit", "Store Auditor"),
+    ("converter", "🖼️ Image Converter"),
     ("settings", "Settings"),
 ]
 
@@ -123,6 +124,10 @@ class Sidebar(ctk.CTkFrame):
             from app.ui.audit_screen import AuditScreen
 
             self.app.show_screen(AuditScreen)
+        elif page_id == "converter":
+            from app.ui.converter_screen import ConverterScreen
+
+            self.app.show_screen(ConverterScreen)
         elif page_id == "settings":
             from app.ui.settings_screen import SettingsScreen
 

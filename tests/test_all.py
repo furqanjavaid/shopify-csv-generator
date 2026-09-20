@@ -213,6 +213,25 @@ def test_config_save_load():
         set_theme(previous)
 
 
+def test_image_converter():
+    from app.core.image_converter import convert_images
+    from PIL import Image
+    import tempfile
+    import os
+
+    tmp_dir = tempfile.mkdtemp()
+    img_path = os.path.join(tmp_dir, "test.png")
+    Image.new("RGB", (100, 100), color=(255, 0, 0)).save(img_path)
+
+    out_dir = os.path.join(tmp_dir, "converted")
+    result = convert_images([img_path], out_dir, target_format="WEBP", quality=85)
+
+    assert result["converted"] == 1, f"Expected 1 converted, got {result}"
+    assert len(result["output_files"]) == 1
+    assert result["output_files"][0].endswith(".webp")
+    assert os.path.exists(result["output_files"][0])
+
+
 # ─── RUN ALL ───────────────────────────────────────────────
 if __name__ == "__main__":
     print("\n" + "=" * 50)
@@ -228,6 +247,7 @@ if __name__ == "__main__":
     test("Scraper — valid Shopify URL", test_scraper_valid_url)
     test("Scraper — invalid URL error handling", test_scraper_invalid_url)
     test("Config save/load", test_config_save_load)
+    test("Image converter WEBP", test_image_converter)
 
     print("\n" + "=" * 50)
     passed = sum(1 for r in results if r[0] == PASS)
