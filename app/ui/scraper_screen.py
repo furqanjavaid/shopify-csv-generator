@@ -1,4 +1,4 @@
-"""URL / collection scraper — premium UI."""
+"""URL / collection scraper — themed UI with options + live log."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import customtkinter as ctk
 
 from app.core.collection_crawler import CollectionCrawlError, crawl
 from app.ui import theme as T
+from app.ui.sidebar import attach_sidebar
 from app.utils.helpers import is_valid_url, output_filename_from_url
 
 
@@ -15,53 +16,25 @@ class ScraperScreen(ctk.CTkFrame):
     """Scrape a Shopify collection URL and preview results."""
 
     def __init__(self, parent, app, **kwargs):
-        super().__init__(parent, fg_color=T.BG, corner_radius=0)
+        super().__init__(parent, fg_color=T.BG_PRIMARY, corner_radius=0)
         self.app = app
         self.parsed_data: dict | None = None
         self.source_url: str = ""
         self.suggested_filename: str = "shopify_products.csv"
 
-        T.header_bar(self, "Scrape Store", self._go_home)
+        body = attach_sidebar(self, app, "scraper")
 
-        # Fixed bottom bar FIRST so pack never pushes it off-screen
-        self.bottom_bar = ctk.CTkFrame(
-            self,
-            fg_color="#12121a",
-            height=64,
-            corner_radius=0,
-            border_width=1,
-            border_color="#2d2d3d",
+        T.page_title(
+            body,
+            "URL Scraper",
+            "Extract products from any Shopify collection URL",
         )
-        self.bottom_bar.pack(side="bottom", fill="x")
-        self.bottom_bar.pack_propagate(False)
 
-        bottom_inner = ctk.CTkFrame(self.bottom_bar, fg_color="transparent")
-        bottom_inner.pack(fill="both", expand=True, padx=24)
-
-        self.count_badge = ctk.CTkLabel(
-            bottom_inner, text="", font=T.font(12, "bold"), text_color=T.ACCENT
-        )
-        self.count_badge.pack(side="left")
-
-        self.next_btn = T.primary_button(
-            bottom_inner, "Generate CSV →", self._go_mapping, width=180
-        )
-        self.next_btn.configure(state="disabled")
-        self.next_btn.pack(side="right", pady=12)
-
-        body = ctk.CTkFrame(self, fg_color="transparent")
-        body.pack(fill="both", expand=True, padx=24, pady=16)
-
-        # URL row
+        # URL + Scrape
         url_card = T.card_frame(body)
-        url_card.pack(fill="x", pady=(0, 8))
-
+        url_card.pack(fill="x", pady=(0, T.GRID_GAP))
         url_inner = ctk.CTkFrame(url_card, fg_color="transparent")
-        url_inner.pack(fill="x", padx=16, pady=14)
-
-        ctk.CTkLabel(
-            url_inner, text="🌐", font=T.font(18), text_color=T.BLUE
-        ).pack(side="left", padx=(0, 8))
+        url_inner.pack(fill="x", padx=T.CARD_PADDING, pady=T.CARD_PADDING)
 
         self.url_entry = T.styled_entry(
             url_inner,
@@ -74,68 +47,82 @@ class ScraperScreen(ctk.CTkFrame):
         )
         self.scrape_btn.pack(side="right")
 
-        ctk.CTkLabel(
-            body,
-            text="Works with any Shopify store collection URL",
-            font=T.font(11),
-            text_color=T.TEXT_MUTED,
-            anchor="w",
-        ).pack(fill="x", pady=(0, 12))
+        # Options checkboxes (UI only — crawl uses defaults)
+        opts = ctk.CTkFrame(body, fg_color="transparent")
+        opts.pack(fill="x", pady=(0, 8))
+        self.var_variants = ctk.BooleanVar(value=True)
+        self.var_images = ctk.BooleanVar(value=True)
+        self.var_compare = ctk.BooleanVar(value=True)
+        for text, var in (
+            ("Include variants", self.var_variants),
+            ("Include images", self.var_images),
+            ("Include compare-at price", self.var_compare),
+        ):
+            ctk.CTkCheckBox(
+                opts,
+                text=text,
+                variable=var,
+                font=T.font_tuple(T.LABEL),
+                text_color=T.TEXT_SECONDARY,
+                fg_color=T.ACCENT,
+                hover_color=T.ACCENT_HOVER,
+                border_color=T.BORDER,
+                checkmark_color=T.BG_PRIMARY,
+                corner_radius=T.BORDER_RADIUS,
+            ).pack(side="left", padx=(0, 20))
 
         self.error_label = ctk.CTkLabel(
-            body, text="", font=T.font(12), text_color=T.DANGER
+            body, text="", font=T.font_tuple(T.CAPTION), text_color=T.ERROR
         )
         self.error_label.pack()
 
-        # Progress section
         self.progress_section = ctk.CTkFrame(body, fg_color="transparent")
         self.progress_section.pack(fill="x")
-
         self.progress = T.progress_bar(self.progress_section)
         self.loading_label = ctk.CTkLabel(
-            self.progress_section,
-            text="",
-            font=T.font(12),
-            text_color=T.BLUE,
+            self.progress_section, text="", font=T.font_tuple(T.CAPTION),
+            text_color=T.ACCENT,
         )
 
-        self.log_box = T.log_box(body, height=100)
-        # Shown after scrape starts — stays above bottom bar
+        self.log_box = T.log_box(body, height=110)
 
         self.strategy_label = ctk.CTkLabel(
-            body, text="", font=T.font(12), text_color=T.TEXT_SECONDARY
+            body, text="", font=T.font_tuple(T.CAPTION), text_color=T.TEXT_SECONDARY
         )
         self.strategy_label.pack()
 
-        # Preview (scrolls within body; bottom bar stays fixed)
+        # Preview table
         preview_card = T.card_frame(body)
-        preview_card.pack(fill="both", expand=True, pady=(8, 0))
-
+        preview_card.pack(fill="both", expand=True, pady=(8, 12))
         ctk.CTkLabel(
-            preview_card,
-            text="Preview",
-            font=T.font(12, "bold"),
-            text_color=T.TEXT_SECONDARY,
-            anchor="w",
-        ).pack(fill="x", padx=16, pady=(12, 4))
+            preview_card, text="Results Preview",
+            font=T.font(12, "bold"), text_color=T.TEXT_SECONDARY, anchor="w",
+        ).pack(fill="x", padx=T.CARD_PADDING, pady=(12, 4))
 
         self.preview_frame = ctk.CTkScrollableFrame(
             preview_card,
-            fg_color=T.SURFACE,
+            fg_color=T.BG_SURFACE_B,
             orientation="horizontal",
-            corner_radius=8,
+            corner_radius=T.BORDER_RADIUS,
             height=140,
         )
         self.preview_frame.pack(fill="both", expand=True, padx=12, pady=(0, 12))
 
-    def _go_home(self) -> None:
-        from app.ui.home_screen import HomeScreen
-
-        self.app.show_screen(HomeScreen)
+        # Bottom actions
+        actions = ctk.CTkFrame(body, fg_color="transparent")
+        actions.pack(fill="x", side="bottom")
+        self.count_badge = ctk.CTkLabel(
+            actions, text="", font=T.font(12, "bold"), text_color=T.ACCENT
+        )
+        self.count_badge.pack(side="left")
+        self.next_btn = T.primary_button(
+            actions, "Generate CSV →", self._go_mapping, width=180
+        )
+        self.next_btn.configure(state="disabled")
+        self.next_btn.pack(side="right")
 
     def _append_log(self, message: str) -> None:
         if not self.log_box.winfo_ismapped():
-            # Insert above preview: pack after strategy_label
             self.log_box.pack(fill="x", pady=(8, 8), after=self.strategy_label)
         self.log_box.configure(state="normal")
         self.log_box.insert("end", f"› {message.rstrip()}\n")
@@ -197,7 +184,7 @@ class ScraperScreen(ctk.CTkFrame):
         errors = data.get("errors") or []
         extra = f"  ·  {len(errors)} error(s)" if errors else ""
         self.suggested_filename = output_filename_from_url(self.source_url)
-        self.count_badge.configure(text=f"  {count} products found{extra}  ")
+        self.count_badge.configure(text=f"{count} products found{extra}")
         self.strategy_label.configure(
             text=f"{data.get('strategy_used', '')}  ·  → {self.suggested_filename}"
         )
@@ -246,24 +233,16 @@ class ScraperScreen(ctk.CTkFrame):
             col.grid(row=0, column=col_idx, padx=4, sticky="nw")
 
             ctk.CTkLabel(
-                col,
-                text=header,
-                font=T.font(11, "bold"),
-                text_color=T.BLUE,
-                width=130,
-                anchor="w",
+                col, text=header, font=T.font(11, "bold"),
+                text_color=T.ACCENT, width=130, anchor="w",
             ).pack(anchor="w", pady=(0, 4))
 
             for i, row in enumerate(rows):
                 value = str(row.get(header, ""))[:45]
-                bg = T.SURFACE if i % 2 == 0 else T.CARD
+                bg = T.BG_SURFACE_A if i % 2 == 0 else T.BG_SURFACE_B
                 ctk.CTkLabel(
-                    col,
-                    text=value or "—",
-                    font=T.font(11),
-                    text_color=T.TEXT_SECONDARY,
-                    width=130,
-                    anchor="w",
+                    col, text=value or "—", font=T.font(11),
+                    text_color=T.TEXT_SECONDARY, width=130, anchor="w",
                     fg_color=bg,
                 ).pack(anchor="w", ipady=1)
 

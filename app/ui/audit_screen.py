@@ -1,4 +1,4 @@
-"""Shopify store audit — premium UI."""
+"""Shopify store audit — themed UI with modules + summary cards."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from pathlib import Path
 import customtkinter as ctk
 
 from app.ui import theme as T
+from app.ui.sidebar import attach_sidebar
 from app.utils.helpers import is_valid_url
 
 
@@ -19,149 +20,152 @@ class AuditScreen(ctk.CTkFrame):
     """Run a full or CRO-only Shopify store audit and open the Word report."""
 
     def __init__(self, parent, app, **kwargs):
-        super().__init__(parent, fg_color=T.BG, corner_radius=0)
+        super().__init__(parent, fg_color=T.BG_PRIMARY, corner_radius=0)
         self.app = app
         self.report_path: str | None = None
         self.output_dir: str | None = None
         self._running = False
         self.mode_var = ctk.StringVar(value="cro")
 
-        T.header_bar(self, "Store Audit", self._go_home)
+        # Module checklist vars (UI; mode_var drives actual run)
+        self.mod_atc = ctk.BooleanVar(value=True)
+        self.mod_reviews = ctk.BooleanVar(value=True)
+        self.mod_trust = ctk.BooleanVar(value=True)
+        self.mod_cart = ctk.BooleanVar(value=True)
+        self.mod_mobile = ctk.BooleanVar(value=True)
+        self.mod_speed = ctk.BooleanVar(value=True)
+        self.mod_email = ctk.BooleanVar(value=True)
+        self.mod_seo = ctk.BooleanVar(value=False)
 
-        body = ctk.CTkFrame(self, fg_color="transparent")
-        body.pack(fill="both", expand=True, padx=24, pady=16)
+        body = attach_sidebar(self, app, "audit")
 
-        # URL
+        T.page_title(
+            body,
+            "Store Auditor",
+            "CRO conversion audit with scored Word report",
+        )
+
+        # URL + Run
         url_card = T.card_frame(body)
-        url_card.pack(fill="x", pady=(0, 12))
-
+        url_card.pack(fill="x", pady=(0, T.GRID_GAP))
         url_inner = ctk.CTkFrame(url_card, fg_color="transparent")
-        url_inner.pack(fill="x", padx=16, pady=14)
-
-        ctk.CTkLabel(
-            url_inner, text="🌐", font=T.font(18), text_color=T.BLUE
-        ).pack(side="left", padx=(0, 8))
+        url_inner.pack(fill="x", padx=T.CARD_PADDING, pady=T.CARD_PADDING)
 
         self.url_entry = T.styled_entry(
             url_inner, placeholder="https://your-store.com"
         )
-        self.url_entry.pack(side="left", fill="x", expand=True)
-
-        # Mode cards
-        modes = ctk.CTkFrame(body, fg_color="transparent")
-        modes.pack(fill="x", pady=(0, 12))
-
-        self.cro_card = self._mode_card(
-            modes,
-            "⚡ CRO Only",
-            "Faster · 2-3 min",
-            "cro",
-        )
-        self.cro_card.pack(side="left", expand=True, fill="x", padx=(0, 8))
-
-        self.full_card = self._mode_card(
-            modes,
-            "🔍 Full Audit",
-            "SEO + CRO · 4-6 min",
-            "full",
-        )
-        self.full_card.pack(side="left", expand=True, fill="x", padx=(8, 0))
-
-        self._refresh_mode_cards()
-
+        self.url_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
         self.start_btn = T.primary_button(
-            body, "Start Audit →", self._start_audit, width=400, height=44
+            url_inner, "Run Audit", self._start_audit, width=130
         )
-        self.start_btn.pack(fill="x", pady=(4, 12))
+        self.start_btn.pack(side="right")
+
+        # Modules checklist — two columns
+        mods_card = T.card_frame(body)
+        mods_card.pack(fill="x", pady=(0, T.GRID_GAP))
+        mods_inner = ctk.CTkFrame(mods_card, fg_color="transparent")
+        mods_inner.pack(fill="x", padx=T.CARD_PADDING, pady=T.CARD_PADDING)
+
+        ctk.CTkLabel(
+            mods_inner, text="Audit Modules",
+            font=T.font_tuple(T.H3), text_color=T.TEXT_PRIMARY, anchor="w",
+        ).pack(fill="x", pady=(0, 8))
+
+        cols = ctk.CTkFrame(mods_inner, fg_color="transparent")
+        cols.pack(fill="x")
+        left = ctk.CTkFrame(cols, fg_color="transparent")
+        left.pack(side="left", fill="x", expand=True)
+        right = ctk.CTkFrame(cols, fg_color="transparent")
+        right.pack(side="left", fill="x", expand=True)
+
+        left_items = [
+            ("ATC above fold", self.mod_atc),
+            ("Reviews present", self.mod_reviews),
+            ("Trust badges", self.mod_trust),
+            ("Cart / checkout", self.mod_cart),
+        ]
+        right_items = [
+            ("Mobile tap target", self.mod_mobile),
+            ("Page speed", self.mod_speed),
+            ("Email capture", self.mod_email),
+            ("Full SEO pass", self.mod_seo),
+        ]
+        for text, var in left_items:
+            self._module_check(left, text, var)
+        for text, var in right_items:
+            self._module_check(right, text, var)
+
+        # Mode hint from SEO checkbox
+        self.mod_seo.trace_add("write", self._sync_mode_from_modules)
 
         self.error_label = ctk.CTkLabel(
-            body, text="", font=T.font(12), text_color=T.DANGER
+            body, text="", font=T.font_tuple(T.CAPTION), text_color=T.ERROR
         )
         self.error_label.pack()
 
-        self.success_banner = ctk.CTkFrame(
-            body,
-            fg_color=T.ACCENT_DIM,
-            corner_radius=8,
-            border_width=1,
-            border_color=T.ACCENT,
-            height=40,
+        # Results summary cards (hidden until success)
+        self.summary_row = ctk.CTkFrame(body, fg_color="transparent")
+        self.score_value = self._make_summary_card(self.summary_row, "CRO Score", "—", "/10", T.ACCENT)
+        self.issues_value = self._make_summary_card(self.summary_row, "Issues", "0", "found", T.ERROR)
+        self.recs_value = self._make_summary_card(
+            self.summary_row, "Recommendations", "0", "actions", T.SUCCESS
         )
-        self.success_label = ctk.CTkLabel(
-            self.success_banner,
-            text="Report Ready",
-            font=T.font(13, "bold"),
-            text_color=T.ACCENT,
-        )
-        self.success_label.pack(pady=8)
 
         self.progress = T.progress_bar(body)
-        self.log_box = T.log_box(body, height=200)
-        self.log_box.pack(fill="both", expand=True, pady=(8, 0))
+        self.log_box = T.log_box(body, height=180)
+        self.log_box.pack(fill="both", expand=True, pady=(8, 12))
 
-        bottom = ctk.CTkFrame(self, fg_color=T.SURFACE, height=64, corner_radius=0)
-        bottom.pack(fill="x", side="bottom")
-        bottom.pack_propagate(False)
-
-        bottom_inner = ctk.CTkFrame(bottom, fg_color="transparent")
-        bottom_inner.pack(fill="both", expand=True, padx=24)
-
+        actions = ctk.CTkFrame(body, fg_color="transparent")
+        actions.pack(fill="x", side="bottom")
         self.open_folder_btn = T.secondary_button(
-            bottom_inner, "Open Folder", self._open_folder, width=120
+            actions, "Open Folder", self._open_folder, width=120
         )
         self.open_folder_btn.configure(state="disabled")
-        self.open_folder_btn.pack(side="right", pady=12, padx=(8, 0))
-
+        self.open_folder_btn.pack(side="right", padx=(8, 0))
         self.open_btn = T.primary_button(
-            bottom_inner, "📄 Open Report", self._open_report, width=160
+            actions, "Open Report", self._open_report, width=140
         )
         self.open_btn.configure(state="disabled")
-        self.open_btn.pack(side="right", pady=12)
+        self.open_btn.pack(side="right")
 
-    def _mode_card(self, parent, title: str, subtitle: str, value: str) -> ctk.CTkFrame:
-        card = ctk.CTkFrame(
+    def _module_check(self, parent, text: str, var: ctk.BooleanVar) -> None:
+        ctk.CTkCheckBox(
             parent,
-            fg_color=T.CARD,
-            corner_radius=12,
-            border_width=2,
+            text=text,
+            variable=var,
+            font=T.font_tuple(T.LABEL),
+            text_color=T.TEXT_SECONDARY,
+            fg_color=T.ACCENT,
+            hover_color=T.ACCENT_HOVER,
             border_color=T.BORDER,
-            height=88,
+            checkmark_color=T.BG_PRIMARY,
+            corner_radius=T.BORDER_RADIUS,
+            command=self._sync_mode_from_modules,
+        ).pack(anchor="w", pady=4)
+
+    def _sync_mode_from_modules(self, *_args) -> None:
+        self.mode_var.set("full" if self.mod_seo.get() else "cro")
+
+    def _make_summary_card(
+        self, parent, title: str, value: str, caption: str, color: str
+    ) -> ctk.CTkLabel:
+        card = T.card_frame(parent)
+        card.pack(side="left", expand=True, fill="x", padx=(0, 8))
+        inner = ctk.CTkFrame(card, fg_color="transparent")
+        inner.pack(fill="x", padx=T.CARD_PADDING, pady=T.CARD_PADDING)
+        ctk.CTkLabel(
+            inner, text=title, font=T.font_tuple(T.CAPTION),
+            text_color=T.TEXT_MUTED, anchor="w",
+        ).pack(fill="x")
+        value_label = ctk.CTkLabel(
+            inner, text=value, font=T.font(28, "bold"), text_color=color, anchor="w"
         )
-        card.pack_propagate(False)
-
+        value_label.pack(fill="x", pady=(4, 0))
         ctk.CTkLabel(
-            card, text=title, font=T.font(15, "bold"), text_color=T.TEXT
-        ).pack(pady=(18, 2))
-        ctk.CTkLabel(
-            card, text=subtitle, font=T.font(12), text_color=T.TEXT_SECONDARY
-        ).pack()
-
-        def select(_e=None, v=value):
-            self.mode_var.set(v)
-            self._refresh_mode_cards()
-
-        card.bind("<Button-1>", select)
-        for child in card.winfo_children():
-            child.bind("<Button-1>", select)
-
-        card._mode_value = value  # type: ignore[attr-defined]
-        return card
-
-    def _refresh_mode_cards(self) -> None:
-        selected = self.mode_var.get()
-        for card in (self.cro_card, self.full_card):
-            val = getattr(card, "_mode_value", "")
-            if val == selected:
-                card.configure(border_color=T.ACCENT, fg_color=T.ACCENT_DIM)
-            else:
-                card.configure(border_color=T.BORDER, fg_color=T.CARD)
-
-    def _go_home(self) -> None:
-        if self._running:
-            return
-        from app.ui.home_screen import HomeScreen
-
-        self.app.show_screen(HomeScreen)
+            inner, text=caption, font=T.font_tuple(T.CAPTION),
+            text_color=T.TEXT_SECONDARY, anchor="w",
+        ).pack(fill="x")
+        return value_label
 
     def _append_log(self, message: str) -> None:
         self.log_box.configure(state="normal")
@@ -175,7 +179,7 @@ class AuditScreen(ctk.CTkFrame):
     def _start_audit(self) -> None:
         url = self.url_entry.get().strip()
         self.error_label.configure(text="")
-        self.success_banner.pack_forget()
+        self.summary_row.pack_forget()
         self.report_path = None
         self.output_dir = None
         self.open_btn.configure(state="disabled")
@@ -192,7 +196,7 @@ class AuditScreen(ctk.CTkFrame):
         mode = self.mode_var.get() or "cro"
         self._running = True
         self.start_btn.configure(state="disabled")
-        self.progress.pack(pady=(0, 8))
+        self.progress.pack(pady=(0, 8), before=self.log_box)
         self.progress.start()
         self._append_log(f"Starting audit ({mode}) for {url}...")
 
@@ -232,12 +236,17 @@ class AuditScreen(ctk.CTkFrame):
         pages = len(audit_data.get("pages_crawled") or [])
         findings = audit_data.get("findings") or []
         issues = sum(1 for f in findings if not f.get("passed"))
+        recs = sum(1 for f in findings if not f.get("passed") and f.get("fix"))
         score = (audit_data.get("scores") or {}).get("overall", "—")
-        self._append_log(f"Report saved: {report_path}")
-        self.success_label.configure(
-            text=f"✓  Report Ready — CRO {score}/10 · {pages} pages · {issues} issues"
+
+        self.score_value.configure(text=str(score))
+        self.issues_value.configure(text=str(issues))
+        self.recs_value.configure(text=str(recs))
+        self.summary_row.pack(fill="x", pady=(0, 8), before=self.log_box)
+
+        self._append_log(
+            f"Report saved: {report_path} · CRO {score}/10 · {pages} pages · {issues} issues"
         )
-        self.success_banner.pack(fill="x", pady=(0, 8), before=self.log_box)
 
     def _on_error(self, message: str) -> None:
         self._running = False

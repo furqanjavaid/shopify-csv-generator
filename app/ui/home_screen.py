@@ -1,140 +1,165 @@
-"""Home / mode select — premium landing."""
+"""Home / dashboard — sidebar + feature cards + recent tasks."""
 
 from __future__ import annotations
 
 import customtkinter as ctk
 
 from app.ui import theme as T
+from app.ui.sidebar import attach_sidebar
 
 
 class HomeScreen(ctk.CTkFrame):
-    """Landing with three feature cards."""
+    """Landing with feature cards, recent tasks, and system status."""
 
     def __init__(self, parent, app, **kwargs):
-        super().__init__(parent, fg_color=T.BG, corner_radius=0)
+        super().__init__(parent, fg_color=T.BG_PRIMARY, corner_radius=0)
         self.app = app
 
-        # Top brand bar
-        top = ctk.CTkFrame(self, fg_color="transparent")
-        top.pack(fill="x", padx=24, pady=(20, 0))
+        body = attach_sidebar(self, app, "home")
 
+        T.page_title(
+            body,
+            "Shopify Product Tools",
+            "Upload · Scrape · Audit — all in one place",
+        )
+
+        # Feature cards
+        cards = ctk.CTkFrame(body, fg_color="transparent")
+        cards.pack(fill="x", pady=(0, T.GRID_GAP))
+        cards.grid_columnconfigure((0, 1, 2), weight=1)
+
+        self._feature_card(
+            cards, 0, "📄", "Upload File",
+            "Convert any client spreadsheet to Shopify CSV",
+            "Open Upload", self._go_upload,
+        )
+        self._feature_card(
+            cards, 1, "🔗", "Scrape Store",
+            "Extract products from any Shopify store URL",
+            "Open Scraper", self._go_scraper,
+        )
+        self._feature_card(
+            cards, 2, "🔍", "Audit Store",
+            "Full CRO audit with Word report",
+            "Open Auditor", self._go_audit,
+        )
+
+        # Two columns: Recent Tasks + System Status
+        lower = ctk.CTkFrame(body, fg_color="transparent")
+        lower.pack(fill="both", expand=True, pady=(0, 8))
+        lower.grid_columnconfigure(0, weight=3)
+        lower.grid_columnconfigure(1, weight=2)
+        lower.grid_rowconfigure(0, weight=1)
+
+        self._recent_tasks(lower)
+        self._system_status(lower)
+
+        # Bottom bar
+        footer = ctk.CTkFrame(body, fg_color="transparent", height=28)
+        footer.pack(fill="x", side="bottom")
         ctk.CTkLabel(
-            top,
-            text="SENTIVO",
-            font=T.font(12, "bold"),
-            text_color=T.ACCENT,
+            footer, text="v1.0", font=T.font_tuple(T.CAPTION), text_color=T.TEXT_MUTED
         ).pack(side="left")
-
-        ctk.CTkLabel(
-            top,
-            text="  v1.0  ",
-            font=T.font(11),
-            text_color=T.TEXT_MUTED,
-            fg_color=T.SURFACE,
-            corner_radius=6,
-        ).pack(side="left", padx=10)
-
-        # Center hero
-        hero = ctk.CTkFrame(self, fg_color="transparent")
-        hero.pack(expand=True, fill="both")
-
-        ctk.CTkLabel(
-            hero,
-            text="Shopify Product Tools",
-            font=T.font(34, "bold"),
-            text_color=T.TEXT,
-        ).pack(pady=(40, 6))
-
-        ctk.CTkLabel(
-            hero,
-            text="Upload · Scrape · Audit — all in one place",
-            font=T.font(14),
-            text_color=T.TEXT_SECONDARY,
-        ).pack(pady=(0, 36))
-
-        cards = ctk.CTkFrame(hero, fg_color="transparent")
-        cards.pack()
-
-        self._feature_card(
-            cards,
-            "📂",
-            "Upload File",
-            "Convert any client spreadsheet to\nShopify CSV",
-            self._go_upload,
-        ).pack(side="left", padx=8)
-
-        self._feature_card(
-            cards,
-            "🔗",
-            "Scrape Store",
-            "Extract products from any Shopify\nstore URL",
-            self._go_scraper,
-        ).pack(side="left", padx=8)
-
-        self._feature_card(
-            cards,
-            "🔍",
-            "Audit Store",
-            "Full CRO + SEO audit with\nWord report",
-            self._go_audit,
-        ).pack(side="left", padx=8)
-
-        # Footer
-        footer = ctk.CTkFrame(self, fg_color="transparent")
-        footer.pack(side="bottom", fill="x", pady=(0, 20))
-
-        sep = ctk.CTkFrame(footer, fg_color=T.BORDER, height=1)
-        sep.pack(fill="x", padx=80, pady=(0, 12))
-
         ctk.CTkLabel(
             footer,
-            text="Built by Sentivo Limited",
-            font=T.font(11),
+            text="Python · CustomTkinter",
+            font=T.font_tuple(T.CAPTION),
             text_color=T.TEXT_MUTED,
-        ).pack()
+        ).pack(side="right")
 
-    def _feature_card(self, parent, icon: str, name: str, desc: str, command) -> ctk.CTkFrame:
-        card = ctk.CTkFrame(
-            parent,
-            fg_color=T.CARD,
-            corner_radius=12,
-            border_width=1,
-            border_color=T.BORDER,
-            width=250,
-            height=240,
-        )
-        card.pack_propagate(False)
+    def _feature_card(self, parent, col: int, icon: str, title: str, desc: str, btn: str, command) -> None:
+        card = T.card_frame(parent)
+        card.grid(row=0, column=col, sticky="nsew", padx=(0 if col == 0 else T.GRID_GAP // 2, 0 if col == 2 else T.GRID_GAP // 2))
 
-        ctk.CTkLabel(card, text=icon, font=T.font(32), text_color=T.TEXT).pack(
-            pady=(28, 8)
-        )
+        inner = ctk.CTkFrame(card, fg_color="transparent")
+        inner.pack(fill="both", expand=True, padx=T.CARD_PADDING, pady=T.CARD_PADDING)
+
+        ctk.CTkLabel(inner, text=icon, font=T.font(28), text_color=T.TEXT_PRIMARY, anchor="w").pack(fill="x")
         ctk.CTkLabel(
-            card, text=name, font=T.font(16, "bold"), text_color=T.TEXT
-        ).pack()
+            inner, text=title, font=T.font_tuple(T.H3), text_color=T.TEXT_PRIMARY, anchor="w"
+        ).pack(fill="x", pady=(8, 4))
         ctk.CTkLabel(
-            card,
+            inner,
             text=desc,
-            font=T.font(12),
+            font=T.font_tuple(T.BODY),
             text_color=T.TEXT_SECONDARY,
-            justify="center",
-        ).pack(pady=(8, 16))
+            anchor="w",
+            wraplength=220,
+            justify="left",
+        ).pack(fill="x", pady=(0, 16))
 
-        open_btn = T.primary_button(card, "Open →", command, width=120, height=34)
-        open_btn.pack(pady=(0, 20))
+        T.primary_button(inner, btn, command, width=140).pack(anchor="w")
 
-        def on_enter(_e=None):
-            card.configure(border_color=T.ACCENT)
+    def _recent_tasks(self, parent) -> None:
+        card = T.card_frame(parent)
+        card.grid(row=0, column=0, sticky="nsew", padx=(0, T.GRID_GAP // 2))
 
-        def on_leave(_e=None):
-            card.configure(border_color=T.BORDER)
+        head = ctk.CTkFrame(card, fg_color="transparent")
+        head.pack(fill="x", padx=T.CARD_PADDING, pady=(T.CARD_PADDING, 8))
+        ctk.CTkLabel(
+            head, text="Recent Tasks", font=T.font_tuple(T.H3), text_color=T.TEXT_PRIMARY, anchor="w"
+        ).pack(fill="x")
 
-        card.bind("<Enter>", on_enter)
-        card.bind("<Leave>", on_leave)
-        for child in card.winfo_children():
-            child.bind("<Enter>", on_enter)
-            child.bind("<Leave>", on_leave)
+        # Header row
+        cols = ("Type", "Name", "Status", "Date")
+        widths = (70, 160, 100, 90)
+        header = ctk.CTkFrame(card, fg_color=T.BG_SURFACE_B, height=T.ROW_HEIGHT)
+        header.pack(fill="x", padx=1)
+        header.pack_propagate(False)
+        for i, (col, w) in enumerate(zip(cols, widths)):
+            ctk.CTkLabel(
+                header, text=col, font=T.font(12, "bold"), text_color=T.TEXT_MUTED,
+                width=w, anchor="w",
+            ).pack(side="left", padx=(12 if i == 0 else 8, 0))
 
-        return card
+        rows = [
+            ("Upload", "spring_catalog.csv", "success", "Success", "Today"),
+            ("Scrape", "store.myshopify.com", "warning", "Running", "Today"),
+            ("Audit", "example.com", "success", "Success", "Yesterday"),
+            ("Upload", "client_products.xlsx", "error", "Failed", "Mon"),
+        ]
+        for idx, (typ, name, level, status, date) in enumerate(rows):
+            bg = T.BG_SURFACE_A if idx % 2 == 0 else T.BG_SURFACE_B
+            row = ctk.CTkFrame(card, fg_color=bg, height=T.ROW_HEIGHT)
+            row.pack(fill="x", padx=1)
+            row.pack_propagate(False)
+            values = (typ, name, None, date)
+            for i, (val, w) in enumerate(zip(values, widths)):
+                if i == 2:
+                    T.status_dot(row, status, level).pack(side="left", padx=8)
+                else:
+                    ctk.CTkLabel(
+                        row, text=val, font=T.font_tuple(T.CAPTION),
+                        text_color=T.TEXT_SECONDARY, width=w, anchor="w",
+                    ).pack(side="left", padx=(12 if i == 0 else 8, 0))
+
+    def _system_status(self, parent) -> None:
+        card = T.card_frame(parent)
+        card.grid(row=0, column=1, sticky="nsew", padx=(T.GRID_GAP // 2, 0))
+
+        inner = ctk.CTkFrame(card, fg_color="transparent")
+        inner.pack(fill="both", expand=True, padx=T.CARD_PADDING, pady=T.CARD_PADDING)
+
+        ctk.CTkLabel(
+            inner, text="System Status", font=T.font_tuple(T.H3),
+            text_color=T.TEXT_PRIMARY, anchor="w",
+        ).pack(fill="x", pady=(0, 12))
+
+        items = [
+            ("Parser engine", "success", "Ready"),
+            ("Scraper", "success", "Ready"),
+            ("Auditor", "success", "Ready"),
+            ("Playwright", "warning", "Optional"),
+        ]
+        for label, level, status in items:
+            row = ctk.CTkFrame(inner, fg_color="transparent", height=T.ROW_HEIGHT)
+            row.pack(fill="x")
+            row.pack_propagate(False)
+            ctk.CTkLabel(
+                row, text=label, font=T.font_tuple(T.LABEL),
+                text_color=T.TEXT_SECONDARY, anchor="w",
+            ).pack(side="left")
+            T.status_dot(row, status, level).pack(side="right")
 
     def _go_upload(self) -> None:
         from app.ui.upload_screen import UploadScreen

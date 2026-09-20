@@ -1,4 +1,4 @@
-"""Column mapping screen — premium card rows."""
+"""Column mapping screen — two-column table + Auto Map."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import customtkinter as ctk
 from app.core.column_mapper import SKIP_LABEL, SHOPIFY_FIELDS, ColumnMapper
 from app.core.shopify_generator import ShopifyGenerator
 from app.ui import theme as T
+from app.ui.sidebar import attach_sidebar
 
 STATUS_VALUES = ["Active", "Draft", "Archived"]
 PUBLISHED_VALUES = ["TRUE", "FALSE"]
@@ -86,7 +87,7 @@ class MappingScreen(ctk.CTkFrame):
         suggested_filename: str | None = None,
         **kwargs,
     ):
-        super().__init__(parent, fg_color=T.BG, corner_radius=0)
+        super().__init__(parent, fg_color=T.BG_PRIMARY, corner_radius=0)
         self.app = app
         self.parsed_data = parsed_data or {"headers": [], "rows": [], "row_count": 0}
         self.suggested_filename = suggested_filename or "shopify_products.csv"
@@ -96,100 +97,119 @@ class MappingScreen(ctk.CTkFrame):
         self.auto_mapping = self.mapper.auto_map(self.parsed_data["headers"])
         self.dropdowns: list[dict[str, Any]] = []
 
-        T.header_bar(self, "Column Mapping", self._go_home, "Step 2 of 3")
+        body = attach_sidebar(self, app, "upload")
 
-        body = ctk.CTkFrame(self, fg_color="transparent")
-        body.pack(fill="both", expand=True, padx=24, pady=(12, 0))
+        top = ctk.CTkFrame(body, fg_color="transparent")
+        top.pack(fill="x", pady=(0, T.GRID_GAP))
 
+        title_wrap = ctk.CTkFrame(top, fg_color="transparent")
+        title_wrap.pack(side="left", fill="x", expand=True)
         ctk.CTkLabel(
-            body,
-            text="AI-detected mappings shown below. Adjust any field using dropdowns.",
-            font=T.font(13),
-            text_color=T.TEXT_SECONDARY,
-            anchor="w",
-        ).pack(fill="x", pady=(0, 8))
+            title_wrap, text="Column Mapping",
+            font=T.font_tuple(T.H1), text_color=T.TEXT_PRIMARY, anchor="w",
+        ).pack(fill="x")
+        ctk.CTkLabel(
+            title_wrap,
+            text="Map client columns to Shopify fields. Adjust any dropdown as needed.",
+            font=T.font_tuple(T.BODY), text_color=T.TEXT_SECONDARY, anchor="w",
+        ).pack(fill="x", pady=(4, 0))
+
+        right = ctk.CTkFrame(top, fg_color="transparent")
+        right.pack(side="right")
+        T.step_indicator(right, current=2, total=4).pack(side="left", padx=(0, 12))
+        T.secondary_button(right, "Auto Map", self._auto_map, width=110).pack(side="left")
 
         self.error_label = ctk.CTkLabel(
-            body, text="", font=T.font(12), text_color=T.DANGER
+            body, text="", font=T.font_tuple(T.CAPTION), text_color=T.ERROR
         )
         self.error_label.pack()
 
-        self.table = ctk.CTkScrollableFrame(
-            body,
-            fg_color=T.SURFACE,
-            corner_radius=12,
-            border_width=1,
-            border_color=T.BORDER,
-        )
-        self.table.pack(fill="both", expand=True, pady=(4, 8))
+        # Table header
+        table_card = T.card_frame(body)
+        table_card.pack(fill="both", expand=True, pady=(4, 12))
 
+        header = ctk.CTkFrame(table_card, fg_color=T.BG_SURFACE_B, height=T.ROW_HEIGHT)
+        header.pack(fill="x", padx=1, pady=(1, 0))
+        header.pack_propagate(False)
+        ctk.CTkLabel(
+            header, text="Client Column", font=T.font(12, "bold"),
+            text_color=T.TEXT_MUTED, width=220, anchor="w",
+        ).pack(side="left", padx=16)
+        ctk.CTkLabel(
+            header, text="Shopify Column", font=T.font(12, "bold"),
+            text_color=T.TEXT_MUTED, width=260, anchor="w",
+        ).pack(side="left", padx=8)
+        ctk.CTkLabel(
+            header, text="Confidence", font=T.font(12, "bold"),
+            text_color=T.TEXT_MUTED, anchor="e",
+        ).pack(side="right", padx=16)
+
+        self.table = ctk.CTkScrollableFrame(
+            table_card, fg_color=T.BG_SURFACE_A, corner_radius=0,
+        )
+        self.table.pack(fill="both", expand=True, padx=1, pady=(0, 1))
+
+        self._rebuild_rows()
+
+        actions = ctk.CTkFrame(body, fg_color="transparent")
+        actions.pack(fill="x", side="bottom")
+        self.generate_btn = T.primary_button(
+            actions, "Generate Shopify CSV →", self._generate, width=220
+        )
+        self.generate_btn.pack(side="right")
+
+    def _rebuild_rows(self) -> None:
+        for child in self.table.winfo_children():
+            child.destroy()
+        self.dropdowns.clear()
         for item in self.auto_mapping:
             self._add_mapping_row(item["client_col"], item["shopify_field"])
 
-        bottom = ctk.CTkFrame(self, fg_color=T.SURFACE, height=64, corner_radius=0)
-        bottom.pack(fill="x", side="bottom")
-        bottom.pack_propagate(False)
-
-        bottom_inner = ctk.CTkFrame(bottom, fg_color="transparent")
-        bottom_inner.pack(fill="both", expand=True, padx=24)
-
-        self.generate_btn = T.primary_button(
-            bottom_inner,
-            "Generate Shopify CSV →",
-            self._generate,
-            width=220,
-        )
-        self.generate_btn.pack(side="right", pady=12)
+    def _auto_map(self) -> None:
+        self.auto_mapping = self.mapper.auto_map(self.parsed_data["headers"])
+        self.error_label.configure(text="")
+        self._rebuild_rows()
 
     def _add_mapping_row(self, client_col: str, shopify_field: str | None) -> None:
-        card = ctk.CTkFrame(
-            self.table,
-            fg_color=T.CARD,
-            corner_radius=10,
-            border_width=1,
-            border_color=T.BORDER,
-            height=52,
-        )
-        card.pack(fill="x", padx=8, pady=4)
-        card.pack_propagate(False)
-
-        inner = ctk.CTkFrame(card, fg_color="transparent")
-        inner.pack(fill="both", expand=True, padx=12, pady=8)
-
-        T.pill(inner, client_col[:36], T.AMBER_BG, T.AMBER).pack(side="left")
+        idx = len(self.dropdowns)
+        bg = T.BG_SURFACE_A if idx % 2 == 0 else T.BG_SURFACE_B
+        row = ctk.CTkFrame(self.table, fg_color=bg, height=T.ROW_HEIGHT, corner_radius=0)
+        row.pack(fill="x")
+        row.pack_propagate(False)
 
         ctk.CTkLabel(
-            inner, text="→", font=T.font(14), text_color=T.TEXT_MUTED, width=30
-        ).pack(side="left", padx=8)
+            row, text=client_col[:40], font=T.font_tuple(T.LABEL),
+            text_color=T.TEXT_PRIMARY, width=220, anchor="w",
+        ).pack(side="left", padx=16)
 
         mode, options, selected, fixed_field = self._dropdown_config(
             client_col, shopify_field
         )
 
         combo = ctk.CTkComboBox(
-            inner,
+            row,
             values=options,
             width=260,
-            height=30,
-            corner_radius=6,
-            fg_color=T.BLUE_DIM,
+            height=32,
+            corner_radius=T.BORDER_RADIUS,
+            fg_color=T.BG_SURFACE_B,
             border_color=T.BORDER,
-            button_color=T.BORDER_HOVER,
+            button_color=T.BORDER,
             button_hover_color=T.ACCENT_HOVER,
-            dropdown_fg_color=T.SURFACE,
-            dropdown_hover_color=T.CARD,
-            text_color=T.TEXT,
+            dropdown_fg_color=T.BG_SURFACE_A,
+            dropdown_hover_color=T.BG_SURFACE_B,
+            text_color=T.TEXT_PRIMARY,
             font=T.font(12),
             state="readonly",
         )
         combo.set(selected)
-        combo.pack(side="left", padx=(0, 10))
+        combo.pack(side="left", padx=8)
 
         conf = _confidence(
             client_col,
             fixed_field or (selected if selected != SKIP_LABEL else None),
         )
-        T.confidence_badge(inner, conf).pack(side="right")
+        T.confidence_badge(row, conf).pack(side="right", padx=16)
 
         if mode == "field":
             combo.configure(
@@ -278,11 +298,6 @@ class MappingScreen(ctk.CTkFrame):
         if text in {"false", "0", "no", "n"}:
             return "FALSE"
         return None
-
-    def _go_home(self) -> None:
-        from app.ui.home_screen import HomeScreen
-
-        self.app.show_screen(HomeScreen)
 
     def _collect_mapping(self) -> list[dict]:
         mapping = []
