@@ -1,0 +1,65 @@
+name: Build and Release Sentivo Tools
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'version.json'  # Only trigger when version changes
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install pyinstaller
+          pip install -r requirements.txt
+
+      - name: Get version
+        id: version
+        run: |
+          $version = (Get-Content version.json | ConvertFrom-Json).version
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+        shell: pwsh
+
+      - name: Build exe
+        run: python build.py
+
+      - name: Download Inno Setup
+        run: |
+          curl -L "https://github.com/jrsoftware/issrc/releases/download/is-6_3_3/innosetup-6.3.3.exe" -o innosetup.exe
+          Start-Process -FilePath "innosetup.exe" -Args "/VERYSILENT /NORESTART" -Wait
+        shell: pwsh
+
+      - name: Download Python installer
+        run: |
+          curl -L "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe" -o "installer/python-3.11.9-amd64.exe"
+        shell: pwsh
+
+      - name: Build installer
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "installer/sentivo_setup.iss"
+        shell: pwsh
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.VERSION }}
+          name: Sentivo Tools v${{ steps.version.outputs.VERSION }}
+          body_path: CHANGELOG.md
+          files: installer/output/SentivoToolsSetup.exe
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
