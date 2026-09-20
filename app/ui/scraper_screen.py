@@ -22,6 +22,30 @@ class ScraperScreen(ctk.CTkFrame):
         self.source_url: str = ""
         self.suggested_filename: str = "shopify_products.csv"
 
+        # Action bar pinned to screen bottom (packed on show, before content shrinks)
+        self.action_bar = ctk.CTkFrame(self, fg_color=T.BG_SURFACE_A, corner_radius=0, height=56)
+        self.action_bar.pack_propagate(False)
+        self.count_badge = ctk.CTkLabel(
+            self.action_bar, text="", font=T.font(12, "bold"), text_color=T.ACCENT
+        )
+        self.count_badge.pack(side="left", padx=24)
+        self.next_btn = ctk.CTkButton(
+            self.action_bar,
+            text="Generate Shopify CSV →",
+            command=self._go_mapping,
+            width=200,
+            **T.primary_btn(),
+        )
+        self.next_btn.pack(side="right", padx=(0, 24), pady=8)
+        self.clear_btn = ctk.CTkButton(
+            self.action_bar,
+            text="Clear",
+            command=self._clear_results,
+            width=100,
+            **T.secondary_btn(),
+        )
+        self.clear_btn.pack(side="right", padx=(0, 8), pady=8)
+
         body = attach_sidebar(self, app, "scraper")
 
         T.page_title(
@@ -108,31 +132,6 @@ class ScraperScreen(ctk.CTkFrame):
         )
         self.preview_frame.pack(fill="both", expand=True, padx=12, pady=(0, 12))
 
-        # Action bar — outside preview_card, shown only after scrape completes
-        self.action_bar = ctk.CTkFrame(body, fg_color="transparent")
-        self.count_badge = ctk.CTkLabel(
-            self.action_bar, text="", font=T.font(12, "bold"), text_color=T.ACCENT
-        )
-        self.count_badge.pack(side="left", padx=0)
-
-        self.next_btn = ctk.CTkButton(
-            self.action_bar,
-            text="Generate Shopify CSV →",
-            command=self._go_mapping,
-            width=200,
-            **T.primary_btn(),
-        )
-        self.next_btn.pack(side="right")
-
-        self.clear_btn = ctk.CTkButton(
-            self.action_bar,
-            text="Clear",
-            command=self._clear_results,
-            width=100,
-            **T.secondary_btn(),
-        )
-        self.clear_btn.pack(side="right", padx=(0, 8))
-
     def _append_log(self, message: str) -> None:
         if not self.log_box.winfo_ismapped():
             self.log_box.pack(fill="x", pady=(8, 8), after=self.strategy_label)
@@ -143,7 +142,7 @@ class ScraperScreen(ctk.CTkFrame):
 
     def _show_action_bar(self) -> None:
         if not self.action_bar.winfo_ismapped():
-            self.action_bar.pack(fill="x", pady=(8, 12))
+            self.action_bar.pack(side="bottom", fill="x", pady=12, padx=24)
 
     def _hide_action_bar(self) -> None:
         self.action_bar.pack_forget()
@@ -251,20 +250,24 @@ class ScraperScreen(ctk.CTkFrame):
             return
 
         headers = self.parsed_data["headers"]
-        preview_headers = [
-            h
-            for h in (
-                "Title",
-                "Vendor",
-                "SKU",
-                "Price",
-                "Compare-at price",
-                "Option1 name",
-                "Option1 value",
-                "Product image URL",
-            )
-            if h in headers
-        ] or headers[:8]
+        priority = [
+            "Title",
+            "Vendor",
+            "Variant Price",
+            "Variant SKU",
+            "Image Src",
+            "Option1 Name",
+            "Option1 Value",
+            # App crawler column names (same fields, different labels)
+            "Price",
+            "SKU",
+            "Product image URL",
+            "Option1 name",
+            "Option1 value",
+        ]
+        preview_headers = [h for h in priority if h in headers]
+        if not preview_headers:
+            preview_headers = headers[:8]
 
         rows = self.parsed_data["rows"][:5]
 
