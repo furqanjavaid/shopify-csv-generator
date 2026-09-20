@@ -25,11 +25,18 @@ class Sidebar(ctk.CTkFrame):
             width=T.SIDEBAR_WIDTH,
             fg_color=T.BG_SURFACE_A,
             corner_radius=0,
+            border_width=0,
             **kwargs,
         )
         self.app = app
         self.active_page = active_page
         self.pack_propagate(False)
+
+        # Right edge border (stands out in light mode)
+        self._edge = ctk.CTkFrame(
+            self, width=1, fg_color=T.BORDER, corner_radius=0
+        )
+        self._edge.place(relx=1.0, rely=0, relheight=1.0, x=0, anchor="ne")
 
         # Brand
         brand = ctk.CTkFrame(self, fg_color="transparent")
@@ -47,6 +54,7 @@ class Sidebar(ctk.CTkFrame):
             font=T.font_tuple(T.CAPTION),
             text_color=T.TEXT_MUTED,
             anchor="w",
+            wraplength=180,
         ).pack(fill="x", pady=(2, 0))
 
         # Nav items

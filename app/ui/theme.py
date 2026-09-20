@@ -136,14 +136,20 @@ def input_field() -> dict:
 
 
 def card_frame(master, **kw) -> ctk.CTkFrame:
-    return ctk.CTkFrame(
-        master,
-        fg_color=BG_SURFACE_A,
-        corner_radius=BORDER_RADIUS,
-        border_width=1,
-        border_color=BORDER,
-        **kw,
-    )
+    """Card surface — always uses current theme colors + visible border."""
+    opts = {
+        "fg_color": BG_SURFACE_A,
+        "corner_radius": BORDER_RADIUS,
+        "border_width": 1,
+        "border_color": BORDER,
+    }
+    opts.update(kw)
+    # Enforce border so cards stay visible in light mode (#FFF on #F5F5F0)
+    opts["border_width"] = 1
+    opts["border_color"] = BORDER
+    if "fg_color" not in kw:
+        opts["fg_color"] = BG_SURFACE_A
+    return ctk.CTkFrame(master, **opts)
 
 
 # ── BUTTON / INPUT FACTORIES ────────────────────────────

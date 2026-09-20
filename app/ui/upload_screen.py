@@ -25,7 +25,8 @@ class UploadScreen(ctk.CTkFrame):
 
         # Persistent bottom bar FIRST
         self.bottom_bar = ctk.CTkFrame(
-            self, fg_color=T.BG_SURFACE_A, height=64, corner_radius=0
+            self, fg_color=T.BG_SURFACE_A, height=64, corner_radius=0,
+            border_width=1, border_color=T.BORDER,
         )
         self.bottom_bar.pack(side="bottom", fill="x")
         self.bottom_bar.pack_propagate(False)
@@ -52,14 +53,16 @@ class UploadScreen(ctk.CTkFrame):
         ctk.CTkLabel(
             title_wrap, text="Upload Product File",
             font=T.font_tuple(T.H1), text_color=T.TEXT_PRIMARY, anchor="w",
+            wraplength=520,
         ).pack(fill="x")
         ctk.CTkLabel(
             title_wrap, text="Import a client spreadsheet to begin mapping",
             font=T.font_tuple(T.BODY), text_color=T.TEXT_SECONDARY, anchor="w",
+            wraplength=520,
         ).pack(fill="x", pady=(4, 0))
         T.step_indicator(top, current=1, total=4).pack(side="right", padx=(12, 0))
 
-        # Drop zone (dashed look via thicker border)
+        # Drop zone
         self.drop_zone = ctk.CTkFrame(
             body,
             fg_color=T.BG_SURFACE_A,
@@ -78,12 +81,13 @@ class UploadScreen(ctk.CTkFrame):
         ctk.CTkLabel(
             dz_inner, text="Click to select file or drag & drop",
             font=T.font_tuple(T.H3), text_color=T.TEXT_PRIMARY,
+            wraplength=400,
         ).pack(pady=(4, 2))
         ctk.CTkLabel(
             dz_inner, text=".csv  ·  .xlsx  ·  .xls",
             font=T.font_tuple(T.CAPTION), text_color=T.TEXT_MUTED,
+            wraplength=400,
         ).pack()
-        # Visual dashed hint
         ctk.CTkLabel(
             dz_inner, text="─ ─ ─ ─ ─ ─ ─ ─",
             font=T.font_tuple(T.CAPTION), text_color=T.BORDER,
@@ -98,27 +102,34 @@ class UploadScreen(ctk.CTkFrame):
         self.status_pill.pack(fill="x", pady=(0, 8))
 
         self.error_label = ctk.CTkLabel(
-            body, text="", font=T.font_tuple(T.CAPTION), text_color=T.ERROR
+            body, text="", font=T.font_tuple(T.CAPTION), text_color=T.ERROR,
+            wraplength=560, justify="left", anchor="w",
         )
-        self.error_label.pack()
+        self.error_label.pack(fill="x")
 
-        # Preview card
-        preview_card = T.card_frame(body)
-        preview_card.pack(fill="both", expand=True, pady=(4, 12))
-
+        # Preview card — hidden until a file is parsed
+        self.preview_card = T.card_frame(body)
         ctk.CTkLabel(
-            preview_card, text="Preview",
+            self.preview_card, text="Preview",
             font=T.font(12, "bold"), text_color=T.TEXT_SECONDARY, anchor="w",
+            wraplength=400,
         ).pack(fill="x", padx=T.CARD_PADDING, pady=(12, 4))
 
         self.preview_frame = ctk.CTkScrollableFrame(
-            preview_card,
+            self.preview_card,
             fg_color=T.BG_SURFACE_B,
             orientation="horizontal",
             corner_radius=T.BORDER_RADIUS,
             height=160,
         )
         self.preview_frame.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+
+    def _show_preview_card(self) -> None:
+        if not self.preview_card.winfo_ismapped():
+            self.preview_card.pack(fill="both", expand=True, pady=(4, 12))
+
+    def _hide_preview_card(self) -> None:
+        self.preview_card.pack_forget()
 
     def _drop_enter(self, _e=None) -> None:
         self.drop_zone.configure(border_color=T.ACCENT)
@@ -171,6 +182,7 @@ class UploadScreen(ctk.CTkFrame):
                 T.TEXT_SECONDARY,
             ).pack(side="left")
 
+            self._show_preview_card()
             self._render_preview()
             self.next_btn.configure(
                 state="normal", fg_color=T.ACCENT, text_color=T.BG_PRIMARY
@@ -185,6 +197,7 @@ class UploadScreen(ctk.CTkFrame):
                 state="disabled", fg_color=T.BG_SURFACE_B, text_color=T.TEXT_MUTED
             )
             self._clear_preview()
+            self._hide_preview_card()
 
     def _clear_preview(self) -> None:
         for child in self.preview_frame.winfo_children():
@@ -206,6 +219,7 @@ class UploadScreen(ctk.CTkFrame):
                 col, text=header, font=T.font(11, "bold"),
                 text_color=T.ACCENT, width=120, anchor="w",
                 fg_color=T.BG_SURFACE_A, corner_radius=T.BORDER_RADIUS,
+                wraplength=110,
             ).pack(anchor="w", pady=(0, 4), ipady=2)
 
             for i, row in enumerate(rows):
@@ -214,7 +228,7 @@ class UploadScreen(ctk.CTkFrame):
                 ctk.CTkLabel(
                     col, text=value or "—", font=T.font(11),
                     text_color=T.TEXT_SECONDARY, width=120, anchor="w",
-                    fg_color=bg,
+                    fg_color=bg, wraplength=110,
                 ).pack(anchor="w", ipady=2)
 
     def _go_mapping(self) -> None:
