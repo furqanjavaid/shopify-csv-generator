@@ -10,7 +10,17 @@ import pandas as pd
 
 from app.utils.helpers import clean_value
 
-# Sheet names containing any of these (case-insensitive) are skipped first
+# Prefer these sheet names when present (case-insensitive, substring OK)
+_PREFERRED_SHEET_KEYWORDS = (
+    "raw merged data",
+    "raw merged",
+    "merged data",
+    "products",
+    "product data",
+    "data",
+)
+
+# Sheet names containing any of these (case-insensitive) are skipped unless preferred
 _SKIP_SHEET_KEYWORDS = (
     "overview",
     "summary",
@@ -19,6 +29,10 @@ _SKIP_SHEET_KEYWORDS = (
     "readme",
     "info",
     "template",
+    "product review",
+    "missing data",
+    "brand & category",
+    "brand and category",
 )
 
 
@@ -33,6 +47,7 @@ class FileParser:
         suffix = path.suffix.lower()
         if suffix == ".csv":
             raw = self._read_csv_raw(path)
+            print(f"[FileParser] Reading CSV: {path.name}")
         elif suffix in {".xlsx", ".xls"}:
             raw = self._read_excel_selected_sheet(path)
         else:
@@ -56,7 +71,7 @@ class FileParser:
         for col in df.columns:
             df[col] = df[col].map(clean_value)
 
-        # Drop fully-blank rows after cleanup
+        # Drop fully-blank rows after cleanup (keep all columns)
         df = df[df.apply(lambda r: any(str(v).strip() for v in r), axis=1)]
 
         headers = list(df.columns)
@@ -64,6 +79,10 @@ class FileParser:
 
         if not headers or not rows:
             raise ValueError("File is empty or has no data rows after cleanup.")
+
+        print(f"[FileParser] Columns passed to mapping screen ({len(headers)}):")
+        for i, h in enumerate(headers, start=1):
+            print(f"  {i:3d}. {h!r}")
 
         return {
             "headers": headers,
@@ -121,19 +140,20 @@ class FileParser:
         if not sheets:
             raise ValueError("Excel file has no sheets.")
 
+        print(f"[FileParser] Excel sheets found: {list(sheets.keys())}")
         selected_name = self._select_sheet(sheets)
+        print(f"[FileParser] Selected sheet: {selected_name!r}")
         return sheets[selected_name]
 
     def _select_sheet(self, sheets: dict[str, pd.DataFrame]) -> str:
         """
-        Skip overview/summary/etc. sheets, then pick the sheet with the most
-        columns that also has at least 2 data rows. Fallback: most columns.
+        Prefer 'Raw Merged Data' (and similar). Skip overview/review sheets.
+        Fallback: sheet with the most columns and data rows.
         """
 
         def col_count(df: pd.DataFrame) -> int:
             if df is None or df.empty:
                 return 0
-            # Count columns that have at least one non-empty cell in the scan window
             return int(df.shape[1])
 
         def data_row_count(df: pd.DataFrame) -> int:
@@ -145,6 +165,19 @@ class FileParser:
             )
             return int(nonempty.sum())
 
+        # 1) Exact / preferred sheet names first
+        for name in sheets:
+            lower = str(name).strip().lower()
+            if lower == "raw merged data" or "raw merged" in lower:
+                print(f"[FileParser] Preferring sheet by name: {name!r}")
+                return name
+
+        for pref in _PREFERRED_SHEET_KEYWORDS:
+            for name in sheets:
+                if pref in str(name).strip().lower():
+                    print(f"[FileParser] Preferring sheet keyword {pref!r}: {name!r}")
+                    return name
+
         candidates: list[tuple[str, pd.DataFrame]] = []
         for name, df in sheets.items():
             lower = str(name).lower()
@@ -154,7 +187,6 @@ class FileParser:
 
         pool = candidates if candidates else list(sheets.items())
 
-        # Prefer sheets with >= 2 data rows; among those, most columns
         with_data = [(n, d) for n, d in pool if data_row_count(d) >= 2]
         search = with_data if with_data else pool
 
@@ -227,7 +259,16 @@ class FileParser:
     # ------------------------------------------------------------------
 
     def _cleanup_columns(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Drop Unnamed / mostly-empty columns; strip values."""
+        """
+        Keep ALL real columns for the mapping screen.
+
+        Do NOT drop columns for:
+        - names containing /, &, or spaces
+        - sparse / mostly-empty data
+        - looking like internal or review columns
+
+        Only drop true Excel placeholder columns named Unnamed:*.
+        """
         if df is None or df.empty:
             return df
 
@@ -236,24 +277,11 @@ class FileParser:
             name = clean_value(col)
             if name.lower().startswith("unnamed"):
                 continue
-
-            series = df[col]
-            total = len(series)
-            if total == 0:
-                continue
-            empty = sum(1 for v in series if not self._is_nonempty(v))
-            if empty / total > 0.8:
-                continue
-
             keep_cols.append(col)
 
         if not keep_cols:
-            # Fall back to keeping non-Unnamed columns even if sparse
-            keep_cols = [
-                c
-                for c in df.columns
-                if not clean_value(c).lower().startswith("unnamed")
-            ]
+            # Fall back: keep everything including Unnamed if that's all we have
+            keep_cols = list(df.columns)
 
         if not keep_cols:
             return df.iloc[0:0]
