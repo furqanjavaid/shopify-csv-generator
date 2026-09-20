@@ -116,7 +116,7 @@ class Sidebar(ctk.CTkFrame):
 
             self.app.show_screen(AuditScreen)
         elif page_id == "settings":
-            from app.ui.sidebar import SettingsScreen
+            from app.ui.settings_screen import SettingsScreen
 
             self.app.show_screen(SettingsScreen)
 
@@ -137,48 +137,3 @@ def attach_sidebar(parent, app, active_page: str) -> ctk.CTkFrame:
     inner = ctk.CTkFrame(content, fg_color="transparent")
     inner.pack(fill="both", expand=True, padx=T.PAGE_PADDING, pady=T.PAGE_PADDING)
     return inner
-
-
-class SettingsScreen(ctk.CTkFrame):
-    """Minimal settings placeholder — keeps nav consistent."""
-
-    def __init__(self, parent, app, **kwargs):
-        super().__init__(parent, fg_color=T.BG_PRIMARY, corner_radius=0)
-        self.app = app
-        body = attach_sidebar(self, app, "settings")
-        T.page_title(body, "Settings", "App preferences and defaults")
-
-        card = T.card_frame(body)
-        card.pack(fill="x", pady=(0, T.GRID_GAP))
-        inner = ctk.CTkFrame(card, fg_color="transparent")
-        inner.pack(fill="x", padx=T.CARD_PADDING, pady=T.CARD_PADDING)
-
-        ctk.CTkLabel(
-            inner,
-            text="Theme",
-            font=T.font_tuple(T.H3),
-            text_color=T.TEXT_PRIMARY,
-            anchor="w",
-        ).pack(fill="x")
-        ctk.CTkLabel(
-            inner,
-            text="Dark · Amber accent (system default)",
-            font=T.font_tuple(T.BODY),
-            text_color=T.TEXT_SECONDARY,
-            anchor="w",
-        ).pack(fill="x", pady=(4, 12))
-
-        ctk.CTkLabel(
-            inner,
-            text="Output",
-            font=T.font_tuple(T.H3),
-            text_color=T.TEXT_PRIMARY,
-            anchor="w",
-        ).pack(fill="x")
-        ctk.CTkLabel(
-            inner,
-            text="CSV files save via Save dialog · Audits write to outputs/",
-            font=T.font_tuple(T.BODY),
-            text_color=T.TEXT_SECONDARY,
-            anchor="w",
-        ).pack(fill="x", pady=(4, 0))

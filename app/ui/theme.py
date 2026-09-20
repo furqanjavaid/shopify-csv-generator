@@ -323,3 +323,68 @@ def page_title(parent, title: str, subtitle: str = "") -> ctk.CTkFrame:
             anchor="w",
         ).pack(fill="x", pady=(4, 0))
     return wrap
+
+
+# ── LIGHT / DARK PALETTES ───────────────────────────────
+LIGHT_THEME = {
+    "BG_PRIMARY": "#F5F5F0",
+    "BG_SURFACE_A": "#FFFFFF",
+    "BG_SURFACE_B": "#EFEFEA",
+    "BORDER": "#DEDDD8",
+    "TEXT_PRIMARY": "#111111",
+    "TEXT_SECONDARY": "#555550",
+    "TEXT_MUTED": "#999990",
+    "ACCENT": "#C49833",
+    "ACCENT_HOVER": "#B08820",
+}
+
+DARK_THEME = {
+    "BG_PRIMARY": "#111111",
+    "BG_SURFACE_A": "#141414",
+    "BG_SURFACE_B": "#1A1A1A",
+    "BORDER": "#2A2A2A",
+    "TEXT_PRIMARY": "#F0EDE8",
+    "TEXT_SECONDARY": "#B9B3AA",
+    "TEXT_MUTED": "#6B6560",
+    "ACCENT": "#D4A843",
+    "ACCENT_HOVER": "#C49833",
+}
+
+
+def apply_theme(mode: str | None = None) -> str:
+    """Apply light or dark palette to module-level color constants. Returns mode."""
+    global BG_PRIMARY, BG_SURFACE_A, BG_SURFACE_B, BORDER
+    global TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED, ACCENT, ACCENT_HOVER
+    global BG, SURFACE, CARD, TEXT, BLUE, BLUE_DIM, ACCENT_DIM, AMBER_BG, BORDER_HOVER
+
+    if mode is None:
+        try:
+            from app.utils.config import get_theme
+
+            mode = get_theme()
+        except Exception:
+            mode = "dark"
+
+    mode = "light" if str(mode).lower() == "light" else "dark"
+    palette = LIGHT_THEME if mode == "light" else DARK_THEME
+
+    BG_PRIMARY = palette["BG_PRIMARY"]
+    BG_SURFACE_A = palette["BG_SURFACE_A"]
+    BG_SURFACE_B = palette["BG_SURFACE_B"]
+    BORDER = palette["BORDER"]
+    TEXT_PRIMARY = palette["TEXT_PRIMARY"]
+    TEXT_SECONDARY = palette["TEXT_SECONDARY"]
+    TEXT_MUTED = palette["TEXT_MUTED"]
+    ACCENT = palette["ACCENT"]
+    ACCENT_HOVER = palette["ACCENT_HOVER"]
+
+    BG = BG_PRIMARY
+    SURFACE = BG_SURFACE_A
+    CARD = BG_SURFACE_A
+    TEXT = TEXT_PRIMARY
+    BLUE = ACCENT
+    BLUE_DIM = BG_SURFACE_B
+    ACCENT_DIM = "#E8D9B0" if mode == "light" else "#2A2210"
+    AMBER_BG = ACCENT_DIM
+    BORDER_HOVER = "#C8C7C2" if mode == "light" else "#3A3A3A"
+    return mode

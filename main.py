@@ -1,7 +1,7 @@
 """Shopify Product Tools — desktop entry point.
 
 Screens: HomeScreen, UploadScreen, ScraperScreen, MappingScreen,
-SuccessScreen, AuditScreen.
+SuccessScreen, AuditScreen, SettingsScreen.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ import customtkinter as ctk
 from app.ui import theme as T
 from app.ui.audit_screen import AuditScreen  # noqa: F401
 from app.ui.home_screen import HomeScreen
+from app.utils.config import get_theme
 
 
 class App(ctk.CTk):
@@ -53,7 +54,9 @@ class App(ctk.CTk):
 
 
 def main() -> None:
-    ctk.set_appearance_mode("dark")
+    theme = get_theme()
+    T.apply_theme(theme)
+    ctk.set_appearance_mode("dark" if theme == "dark" else "light")
     ctk.set_default_color_theme("dark-blue")
     app = App()
     app.mainloop()
