@@ -147,6 +147,7 @@ def take_screenshot(page, name: str, screenshot_dir: str) -> str:
         "mobile": "homepage_mobile.png",
         "product": "product_desktop.png",
         "cart": "cart_after_atc.png",
+        "collections": "collections_all.png",
     }.get(name)
     fname = stable or f"{name}_{int(time.time())}.png"
     path = os.path.join(screenshot_dir, fname)
@@ -159,6 +160,236 @@ def take_screenshot(page, name: str, screenshot_dir: str) -> str:
         except Exception:
             pass
     return fname
+
+
+def _normalize_price(text: str) -> str:
+    """Extract a comparable price token like 29.99 from noisy label text."""
+    if not text:
+        return ""
+    cleaned = re.sub(r"\s+", " ", text).strip()
+    matches = re.findall(r"\d[\d,]*\.?\d*", cleaned.replace(",", ""))
+    if not matches:
+        return cleaned.lower()[:40]
+    # Prefer the last amount (often the sale price after compare-at)
+    return matches[-1]
+
+
+def _safe_goto(page, target: str, timeout: int = 15000) -> bool:
+    try:
+        page.goto(target, wait_until="domcontentloaded", timeout=timeout)
+        return True
+    except Exception:
+        try:
+            page.goto(target, wait_until="load", timeout=timeout)
+            return True
+        except Exception:
+            return False
+
+
+def check_dead_links(page, base_url: str) -> list[str]:
+    """Find internal links that 404."""
+    dead_links: list[str] = []
+    seen: set[str] = set()
+    session = _session()
+    links = page.query_selector_all("a[href]")
+
+    for link in links[:20]:
+        href = link.get_attribute("href") or ""
+        if not href or href.startswith(("#", "mailto:", "tel:", "javascript:")):
+            continue
+        if not (href.startswith("/") or base_url in href):
+            continue
+        full_url = urljoin(base_url, href).split("#")[0]
+        if full_url in seen or full_url.rstrip("/") == base_url.rstrip("/"):
+            continue
+        seen.add(full_url)
+        try:
+            resp = session.head(full_url, timeout=3, allow_redirects=True)
+            if resp.status_code == 404:
+                dead_links.append(full_url)
+            elif resp.status_code >= 400:
+                # Some stores block HEAD — retry with GET
+                resp = session.get(full_url, timeout=5, allow_redirects=True, stream=True)
+                resp.close()
+                if resp.status_code == 404:
+                    dead_links.append(full_url)
+        except Exception:
+            pass
+
+    return dead_links
+
+
+def check_price_consistency(browser, collection_page, base_url: str) -> list[dict]:
+    """Compare collection card prices vs PDP prices for a few products."""
+    issues: list[dict] = []
+    anchors = collection_page.query_selector_all("a[href*='/products/']")
+    checked = 0
+    seen_urls: set[str] = set()
+
+    for anchor in anchors:
+        if checked >= 3:
+            break
+        try:
+            href = anchor.get_attribute("href") or ""
+            if "/products/" not in href:
+                continue
+            product_url = urljoin(base_url, href).split("#")[0]
+            if product_url in seen_urls:
+                continue
+            seen_urls.add(product_url)
+
+            collection_price_raw = ""
+            try:
+                collection_price_raw = anchor.evaluate(
+                    """el => {
+                        const n = el.closest(
+                          '.card, .product-card, .card-wrapper, li, article, .grid__item'
+                        ) || el.parentElement;
+                        if (!n) return '';
+                        const p = n.querySelector(
+                          "[class*='price']:not([class*='compare'])"
+                        ) || n.querySelector("[class*='price']");
+                        return p ? (p.innerText || '') : '';
+                    }"""
+                ) or ""
+            except Exception:
+                collection_price_raw = ""
+            collection_price = _normalize_price(collection_price_raw)
+            if not collection_price:
+                continue
+
+            product_page = browser.new_page(viewport={"width": 1440, "height": 900})
+            try:
+                if not _safe_goto(product_page, product_url, timeout=15000):
+                    continue
+                product_page.wait_for_timeout(800)
+                pdp_el = product_page.query_selector(
+                    "[class*='price']:not([class*='compare']):not([class*='compare-at'])"
+                )
+                if not pdp_el:
+                    pdp_el = product_page.query_selector("[class*='price']")
+                pdp_raw = (pdp_el.inner_text().strip() if pdp_el else "")
+                pdp_price = _normalize_price(pdp_raw)
+                if pdp_price and collection_price and pdp_price != collection_price:
+                    issues.append({
+                        "product_url": product_url,
+                        "collection_price": collection_price_raw[:60] or collection_price,
+                        "pdp_price": pdp_raw[:60] or pdp_price,
+                    })
+                checked += 1
+            finally:
+                product_page.close()
+        except Exception:
+            continue
+
+    return issues
+
+
+def check_policy_pages(browser, base_url: str) -> dict[str, Any]:
+    findings: dict[str, Any] = {}
+    policy_urls = [
+        "/policies/refund-policy",
+        "/policies/terms-of-service",
+        "/policies/shipping-policy",
+        "/policies/privacy-policy",
+    ]
+
+    for path in policy_urls:
+        page = None
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            target = urljoin(base_url + "/", path.lstrip("/"))
+            ok = _safe_goto(page, target, timeout=10000)
+            if not ok:
+                findings[path] = {"exists": False, "word_count": 0, "thin": True}
+                continue
+            # Soft 404 / missing policy pages often still return 200 with little content
+            title = (page.title() or "").lower()
+            body = ""
+            try:
+                body = page.inner_text("main, .page-content, .shopify-policy__container, body")
+            except Exception:
+                body = page.inner_text("body")
+            word_count = len(body.split())
+            missing = (
+                word_count < 40
+                or "page not found" in title
+                or "404" in title
+                or "couldn't find" in body.lower()[:400]
+            )
+            findings[path] = {
+                "exists": not missing,
+                "word_count": word_count,
+                "thin": (not missing) and word_count < 200,
+            }
+        except Exception:
+            findings[path] = {"exists": False, "word_count": 0, "thin": True}
+        finally:
+            if page is not None:
+                try:
+                    page.close()
+                except Exception:
+                    pass
+
+    return findings
+
+
+def crawl_extra_pages(browser, base_url: str, progress: ProgressCallback = None) -> dict[str, Any]:
+    """Visit common Shopify pages; return reachable URLs + soft-fail info."""
+    candidates = [
+        base_url,
+        urljoin(base_url + "/", "collections/all"),
+        urljoin(base_url + "/", "cart"),
+        urljoin(base_url + "/", "pages/about"),
+        urljoin(base_url + "/", "pages/about-us"),
+        urljoin(base_url + "/", "pages/contact"),
+        urljoin(base_url + "/", "pages/contact-us"),
+        urljoin(base_url + "/", "policies/refund-policy"),
+        urljoin(base_url + "/", "policies/terms-of-service"),
+        urljoin(base_url + "/", "policies/shipping-policy"),
+    ]
+    reachable: list[str] = []
+    about_found = False
+    contact_found = False
+    collections_url = ""
+
+    page = browser.new_page(viewport={"width": 1440, "height": 900})
+    try:
+        for target in candidates:
+            try:
+                if not _safe_goto(page, target, timeout=12000):
+                    continue
+                title = (page.title() or "").lower()
+                if "404" in title or "not found" in title:
+                    continue
+                body_snip = ""
+                try:
+                    body_snip = page.inner_text("body")[:300].lower()
+                except Exception:
+                    pass
+                if "couldn't find" in body_snip or "page not found" in body_snip:
+                    continue
+                final = page.url.split("#")[0]
+                if final not in reachable:
+                    reachable.append(final)
+                path = urlparse(final).path.lower()
+                if "/pages/about" in path:
+                    about_found = True
+                if "/pages/contact" in path:
+                    contact_found = True
+                if "/collections/all" in path or path.rstrip("/").endswith("/collections/all"):
+                    collections_url = final
+            except Exception:
+                continue
+    finally:
+        page.close()
+
+    return {
+        "pages_crawled": reachable,
+        "about_found": about_found,
+        "contact_found": contact_found,
+        "collections_url": collections_url,
+    }
 
 
 # ─────────────────────────────────────────────
@@ -276,6 +507,7 @@ def run_playwright_audit(
         "hero_cta_count": 0,
         "nav_links_count": 0,
         "has_visible_nav": False,
+        "nav_hamburger_only": False,
         "has_announcement_bar": False,
         "trust_badge_count": 0,
         "email_capture_count": 0,
@@ -300,6 +532,12 @@ def run_playwright_audit(
         "cart_has_trust": False,
         "cart_has_upsell": False,
         "cart_flow_error": "",
+        "dead_links": [],
+        "policy_pages": {},
+        "price_mismatches": [],
+        "about_found": False,
+        "contact_found": False,
+        "extra_pages_crawled": [],
         "screenshots": {},
     }
 
@@ -309,7 +547,7 @@ def run_playwright_audit(
     cart_screenshot = ""
     product_url: str | None = product_url_hint
 
-    _emit(progress, "[2/2] Playwright phase — desktop homepage…")
+    _emit(progress, "Crawling homepage...")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -327,7 +565,6 @@ def run_playwright_audit(
         h1 = page.query_selector("h1")
         findings["has_h1"] = bool(h1)
         findings["h1_text"] = h1.inner_text().strip() if h1 else ""
-        # Also check if H1 is empty/whitespace
         findings["h1_has_content"] = bool(findings["h1_text"])
 
         hero_btns = page.query_selector_all(
@@ -335,9 +572,19 @@ def run_playwright_audit(
         )
         findings["hero_cta_count"] = len(hero_btns)
 
-        nav_links = page.query_selector_all("nav a, header a")
-        findings["nav_links_count"] = len(nav_links)
-        findings["has_visible_nav"] = len(nav_links) > 3
+        # Navigation depth — prefer visible nav links
+        nav_links = page.query_selector_all("nav a, header nav a, header a")
+        visible_nav = []
+        for link in nav_links:
+            try:
+                if link.is_visible():
+                    visible_nav.append(link)
+            except Exception:
+                continue
+        nav_count = len(visible_nav) if visible_nav else len(nav_links)
+        findings["nav_links_count"] = nav_count
+        findings["has_visible_nav"] = nav_count > 3
+        findings["nav_hamburger_only"] = nav_count < 3
 
         announcement = page.query_selector(
             ".announcement-bar, [class*='announcement'], [class*='promo-bar']"
@@ -369,10 +616,18 @@ def run_playwright_audit(
             )
             findings["carousel_slide_count"] = len(slides)
 
+        # Dead links from homepage
+        _emit(progress, "Validating internal links...")
+        findings["dead_links"] = check_dead_links(page, url)
+
+        # Multi-page crawl (about/contact/collections/cart/policies soft-check)
+        crawl_info = crawl_extra_pages(browser, url, progress)
+        findings["extra_pages_crawled"] = crawl_info.get("pages_crawled") or []
+        findings["about_found"] = bool(crawl_info.get("about_found"))
+        findings["contact_found"] = bool(crawl_info.get("contact_found"))
+
         # Find product link
-        if progress:
-            progress("Finding product page...")
-        _emit(progress, "      Finding product page…")
+        _emit(progress, "Checking product pages...")
 
         if not product_url:
             product_link = page.query_selector("a[href*='/products/']")
@@ -382,6 +637,19 @@ def run_playwright_audit(
 
         findings["product_url"] = product_url
 
+        # Price consistency via /collections/all when available
+        collections_url = crawl_info.get("collections_url") or urljoin(
+            url + "/", "collections/all"
+        )
+        try:
+            if _safe_goto(page, collections_url, timeout=15000):
+                take_screenshot(page, "collections", screenshot_dir)
+                findings["price_mismatches"] = check_price_consistency(
+                    browser, page, url
+                )
+        except Exception:
+            findings["price_mismatches"] = []
+
         # ── PRODUCT PAGE ──
         if product_url:
             _emit(progress, f"      Auditing product: {product_url}")
@@ -390,7 +658,6 @@ def run_playwright_audit(
             except Exception:
                 page.goto(product_url, wait_until="domcontentloaded", timeout=30000)
             page.evaluate("window.scrollTo(0, 0)")
-            # Wait for images to load after JS renders (configurator themes)
             page.wait_for_timeout(3000)
             try:
                 page.wait_for_selector("img[src*='cdn.shopify']", timeout=5000)
@@ -403,7 +670,6 @@ def run_playwright_audit(
                 "form[action*='/cart/add'] button, .product-form__submit"
             )
             if not atc:
-                # Text fallback
                 for el in page.query_selector_all("button, a, input[type='submit']"):
                     try:
                         if not el.is_visible():
@@ -423,7 +689,6 @@ def run_playwright_audit(
                 findings["atc_above_fold"] = False
                 findings["atc_y_position"] = 9999
 
-            # Broader image search — Shopify CDN / JS-rendered configurators
             all_images = page.query_selector_all(
                 "img[src*='cdn.shopify'], img[src*='shopify.com']"
             )
@@ -450,7 +715,6 @@ def run_playwright_audit(
             findings["price_visible"] = bool(price)
             findings["price_text"] = (price.inner_text().strip() if price else "")[:80]
 
-            # Reviews on product page — be specific, avoid false positives
             review_selectors = [
                 ".stamped-badge",
                 ".yotpo",
@@ -466,14 +730,13 @@ def run_playwright_audit(
                 if page.query_selector(sel):
                     review_found = True
                     break
-            # Also check review count > 0
             review_count_el = page.query_selector(
                 "[class*='review-count'], .stamped-badge-caption"
             )
             if review_count_el:
                 count_text = review_count_el.inner_text()
                 if "0" in count_text and len(count_text) < 5:
-                    review_found = False  # "0 reviews" = not really present
+                    review_found = False
             findings["product_has_reviews"] = review_found
 
             page_text = page.inner_text("body").lower()
@@ -499,9 +762,7 @@ def run_playwright_audit(
             _emit(progress, "      No /products/ link found — skipping product checks")
 
         # ── MOBILE VIEWPORT ──
-        if progress:
-            progress("Checking mobile experience...")
-        _emit(progress, "      Checking mobile experience…")
+        _emit(progress, "Checking mobile experience...")
         mobile_page = browser.new_page(viewport={"width": 390, "height": 844})
         try:
             mobile_page.goto(url, wait_until="networkidle", timeout=30000)
@@ -545,9 +806,7 @@ def run_playwright_audit(
                     )
 
         # ── CART FLOW ──
-        if progress:
-            progress("Testing cart flow...")
-        _emit(progress, "      Testing cart flow…")
+        _emit(progress, "Testing cart flow...")
         if product_url:
             cart_page = browser.new_page(viewport={"width": 1440, "height": 900})
             try:
@@ -607,6 +866,10 @@ def run_playwright_audit(
             else:
                 findings["cart_flow_error"] = "ATC button not found for cart flow"
                 _emit(progress, "      Cart flow skipped — ATC not found")
+
+        # Policy pages
+        _emit(progress, "Checking policy pages...")
+        findings["policy_pages"] = check_policy_pages(browser, url)
 
         browser.close()
 
@@ -696,10 +959,21 @@ def calculate_scores(findings: dict) -> dict:
         mkt -= 1
     if not findings.get("has_h1") or not findings.get("h1_has_content"):
         mkt -= 2
-    if not findings.get("has_visible_nav"):
+    if not findings.get("has_visible_nav") or findings.get("nav_hamburger_only"):
         mkt -= 1  # hamburger only = penalty
     if findings.get("has_carousel"):
         mkt -= 1  # carousel = CRO risk
+    if findings.get("dead_links"):
+        mkt -= min(2.0, 0.5 * len(findings.get("dead_links") or []))
+    policies = findings.get("policy_pages") or {}
+    missing_policies = sum(1 for v in policies.values() if not v.get("exists"))
+    thin_policies = sum(1 for v in policies.values() if v.get("exists") and v.get("thin"))
+    if missing_policies:
+        mkt -= min(2.0, 0.5 * missing_policies)
+    if thin_policies:
+        mkt -= min(1.0, 0.25 * thin_policies)
+    if findings.get("price_mismatches"):
+        mkt -= min(2.0, len(findings.get("price_mismatches") or []))
     scores_named["Marketing"] = max(0.0, round(mkt, 1))
 
     overall = (
@@ -1015,6 +1289,92 @@ def build_report_findings(raw: dict, base_url: str) -> list[dict]:
         [base_url],
     ))
 
+    # Dead links
+    dead = raw.get("dead_links") or []
+    findings.append(_finding(
+        200, "Dead Internal Links", "HIGH", "marketing",
+        len(dead) == 0,
+        "No dead internal links found" if not dead
+        else f"{len(dead)} internal link(s) return 404",
+        "; ".join(dead[:5]) if dead else "First 20 homepage links OK",
+        "Broken links erode trust and waste crawl budget",
+        "Fix or remove 404 links from header, footer, and homepage",
+        dead[:5] or [base_url],
+        home_shot,
+        status="pass" if not dead else "fail",
+    ))
+
+    # Navigation depth
+    nav_count = raw.get("nav_links_count", 0)
+    hamburger_only = bool(raw.get("nav_hamburger_only"))
+    findings.append(_finding(
+        201, "Navigation Depth", "MEDIUM", "marketing",
+        not hamburger_only,
+        "Visible top-level navigation present" if not hamburger_only
+        else "Navigation appears hamburger-only / very sparse",
+        f"Visible nav links: {nav_count}; hamburger_only={hamburger_only}",
+        "Sparse nav makes discovery harder and increases bounce",
+        "Expose key collections/pages in a desktop header menu",
+        [base_url],
+        home_shot,
+        status="pass" if not hamburger_only else "warning",
+    ))
+
+    # Policy pages
+    policies = raw.get("policy_pages") or {}
+    missing = [p for p, info in policies.items() if not info.get("exists")]
+    thin = [
+        f"{p} ({info.get('word_count', 0)} words)"
+        for p, info in policies.items()
+        if info.get("exists") and info.get("thin")
+    ]
+    policy_ok = not missing and not thin
+    policy_evidence_parts = []
+    for p, info in policies.items():
+        if not info.get("exists"):
+            policy_evidence_parts.append(f"{p}: missing")
+        elif info.get("thin"):
+            policy_evidence_parts.append(f"{p}: thin ({info.get('word_count')} words)")
+        else:
+            policy_evidence_parts.append(f"{p}: ok ({info.get('word_count')} words)")
+    findings.append(_finding(
+        202, "Policy Pages", "HIGH" if missing else "MEDIUM", "marketing",
+        policy_ok,
+        "Policy pages present with adequate content" if policy_ok
+        else (
+            f"Missing policies: {', '.join(missing)}"
+            if missing
+            else f"Thin policy content: {', '.join(thin)}"
+        ),
+        "; ".join(policy_evidence_parts) if policy_evidence_parts else "No policy scan data",
+        "Missing/thin policies reduce trust and can cause checkout drop-off",
+        "Publish refund, shipping, terms, and privacy policies with clear copy (200+ words)",
+        [urljoin(base_url + "/", p.lstrip("/")) for p in (missing or list(policies.keys())[:4])],
+        home_shot,
+        status="pass" if policy_ok else ("fail" if missing else "warning"),
+    ))
+
+    # Price consistency
+    mismatches = raw.get("price_mismatches") or []
+    findings.append(_finding(
+        203, "Price Consistency", "HIGH", "product_page",
+        len(mismatches) == 0,
+        "Collection and PDP prices match" if not mismatches
+        else f"{len(mismatches)} collection vs PDP price mismatch(es)",
+        "; ".join(
+            f"{m.get('product_url', '')}: collection={m.get('collection_price')} "
+            f"vs pdp={m.get('pdp_price')}"
+            for m in mismatches[:3]
+        )
+        if mismatches
+        else "Sampled collection cards match PDP prices",
+        "Price mismatches create distrust and support tickets",
+        "Ensure collection cards use the same price source as the product template",
+        [m.get("product_url", base_url) for m in mismatches[:4]] or [base_url],
+        product_shot,
+        status="pass" if not mismatches else "fail",
+    ))
+
     return findings
 
 
@@ -1074,7 +1434,7 @@ async def run_audit(
     elif req.get("has_email_capture_static"):
         raw["has_email_capture"] = True
 
-    _emit(progress, "      Building scores & findings…")
+    _emit(progress, "Building scores...")
     scores = calculate_scores(raw)
     findings = build_report_findings(raw, base_url)
 
@@ -1085,7 +1445,10 @@ async def run_audit(
     product_pages = []
     if raw.get("product_url"):
         product_pages = [raw["product_url"]]
-    pages_crawled = [base_url] + product_pages
+    pages_crawled = []
+    for u in [base_url] + list(raw.get("extra_pages_crawled") or []) + product_pages:
+        if u and u not in pages_crawled:
+            pages_crawled.append(u)
 
     _emit(progress, f"CRO Score: {scores['overall']}/10")
 
@@ -1100,6 +1463,13 @@ async def run_audit(
         "findings": findings,
         "scores": scores,
         "results": findings_to_legacy_results(findings),
+        "dead_links": raw.get("dead_links") or [],
+        "policy_pages": raw.get("policy_pages") or {},
+        "price_mismatches": raw.get("price_mismatches") or [],
+        "nav_summary": {
+            "nav_link_count": raw.get("nav_links_count", 0),
+            "nav_hamburger_only": bool(raw.get("nav_hamburger_only")),
+        },
     }
 
     json_path = os.path.join(output_dir, "audit_data.json")

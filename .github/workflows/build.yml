@@ -37,11 +37,12 @@ jobs:
       - name: Build exe
         run: python build.py
 
-      - name: Download Inno Setup
-        run: |
-          curl -L "https://github.com/jrsoftware/issrc/releases/download/is-6_3_3/innosetup-6.3.3.exe" -o innosetup.exe
-          Start-Process -FilePath "innosetup.exe" -Args "/VERYSILENT /NORESTART" -Wait
+      - name: Install Inno Setup
         shell: pwsh
+        run: |
+          choco install innosetup --yes --no-progress
+          Write-Host "Inno Setup installed"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /? 2>&1 | Select-Object -First 1
 
       - name: Download Python installer
         run: |

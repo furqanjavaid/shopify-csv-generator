@@ -303,6 +303,94 @@ def generate_report(audit_data: dict, output_dir: str) -> str:
         for f in passes:
             add_para(doc, f"✓ {f.get('check_name')}: {f.get('evidence', '')[:80]}", size=8, color=RGB_GREY, space_after=1)
 
+    # ── Multi-page site health sections ──
+    doc.add_page_break()
+    add_section_bar(doc, "SITE HEALTH — MULTI-PAGE CRAWL", bg="2C3E50")
+
+    raw = audit_data.get("raw_findings") or {}
+    pages = audit_data.get("pages_crawled") or []
+    add_para(doc, f"Pages crawled: {len(pages)}", size=10, bold=True, space_after=4)
+    for u in pages[:12]:
+        add_para(doc, f"• {u}", size=8, color=RGB_GREY, space_after=1)
+
+    # Dead Links
+    add_para(doc, "Dead Links", size=12, bold=True, color=RGB_RED, space_after=4)
+    dead = audit_data.get("dead_links") or raw.get("dead_links") or []
+    if dead:
+        for link in dead[:15]:
+            add_para(doc, f"• 404: {link}", size=9, space_after=2)
+    else:
+        add_para(doc, "• No 404 internal links found in sampled homepage links.", size=9, color=RGB_GREEN)
+
+    # Policy Pages
+    add_para(doc, "Policy Pages", size=12, bold=True, color=RGB_ORANGE, space_after=4)
+    policies = audit_data.get("policy_pages") or raw.get("policy_pages") or {}
+    if policies:
+        for path, info in policies.items():
+            if not info.get("exists"):
+                add_para(doc, f"• {path} — missing", size=9, color=RGB_RED, space_after=2)
+            elif info.get("thin"):
+                add_para(
+                    doc,
+                    f"• {path} — thin content ({info.get('word_count', 0)} words)",
+                    size=9,
+                    color=RGB_ORANGE,
+                    space_after=2,
+                )
+            else:
+                add_para(
+                    doc,
+                    f"• {path} — OK ({info.get('word_count', 0)} words)",
+                    size=9,
+                    color=RGB_GREEN,
+                    space_after=2,
+                )
+    else:
+        add_para(doc, "• Policy scan unavailable.", size=9, color=RGB_GREY)
+
+    # Navigation
+    add_para(doc, "Navigation", size=12, bold=True, space_after=4)
+    nav = audit_data.get("nav_summary") or {}
+    nav_count = nav.get("nav_link_count", raw.get("nav_links_count", 0))
+    hamburger = nav.get("nav_hamburger_only", raw.get("nav_hamburger_only", False))
+    if hamburger:
+        add_para(
+            doc,
+            f"• Hamburger-only / sparse nav detected ({nav_count} visible links).",
+            size=9,
+            color=RGB_ORANGE,
+            space_after=2,
+        )
+    else:
+        add_para(
+            doc,
+            f"• Expanded navigation present ({nav_count} visible links).",
+            size=9,
+            color=RGB_GREEN,
+            space_after=2,
+        )
+
+    # Price Consistency
+    add_para(doc, "Price Consistency", size=12, bold=True, space_after=4)
+    mismatches = audit_data.get("price_mismatches") or raw.get("price_mismatches") or []
+    if mismatches:
+        for m in mismatches[:8]:
+            add_para(
+                doc,
+                f"• {m.get('product_url', '')}: collection={m.get('collection_price')} "
+                f"vs PDP={m.get('pdp_price')}",
+                size=9,
+                color=RGB_RED,
+                space_after=2,
+            )
+    else:
+        add_para(
+            doc,
+            "• No collection vs PDP price mismatches in sampled products.",
+            size=9,
+            color=RGB_GREEN,
+        )
+
     doc.add_page_break()
     add_section_bar(doc, "ABOUT SENTIVO")
     add_para(
