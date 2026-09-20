@@ -266,6 +266,9 @@ class AuditScreen(ctk.CTkFrame):
         self._append_log(
             f"Report saved: {report_path} · CRO {score}/10 · {pages} pages · {issues} issues"
         )
+        from app.utils.task_history import save_task
+
+        save_task("Audit", audit_data.get("store_url") or "", "Success")
 
     def _on_error(self, message: str) -> None:
         self._running = False

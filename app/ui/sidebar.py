@@ -5,6 +5,7 @@ from __future__ import annotations
 import customtkinter as ctk
 
 from app.ui import theme as T
+from app.ui.theme import current_colors
 
 # page_id -> (label, screen factory key)
 NAV_ITEMS = [
@@ -21,10 +22,11 @@ class Sidebar(ctk.CTkFrame):
     """220px left nav. Pass active_page: home | upload | scraper | audit | settings."""
 
     def __init__(self, master, app, active_page: str = "home", **kwargs):
+        c = current_colors()
         super().__init__(
             master,
             width=T.SIDEBAR_WIDTH,
-            fg_color=T.BG_SURFACE_A,
+            fg_color=c["BG_SURFACE_A"],
             corner_radius=0,
             border_width=0,
             **kwargs,
@@ -32,10 +34,15 @@ class Sidebar(ctk.CTkFrame):
         self.app = app
         self.active_page = active_page
         self.pack_propagate(False)
+        self._build()
+
+    def _build(self) -> None:
+        c = current_colors()
+        self.configure(fg_color=c["BG_SURFACE_A"])
 
         # Right edge border (stands out in light mode)
         self._edge = ctk.CTkFrame(
-            self, width=1, fg_color=T.BORDER, corner_radius=0
+            self, width=1, fg_color=c["BORDER"], corner_radius=0
         )
         self._edge.place(relx=1.0, rely=0, relheight=1.0, x=0, anchor="ne")
 
@@ -46,14 +53,14 @@ class Sidebar(ctk.CTkFrame):
             brand,
             text="Sentivo Tools",
             font=T.font_tuple(T.H2),
-            text_color=T.TEXT_PRIMARY,
+            text_color=c["TEXT_PRIMARY"],
             anchor="w",
         ).pack(fill="x")
         ctk.CTkLabel(
             brand,
             text="by Sentivo Limited",
             font=T.font_tuple(T.CAPTION),
-            text_color=T.TEXT_MUTED,
+            text_color=c["TEXT_MUTED"],
             anchor="w",
             wraplength=180,
         ).pack(fill="x", pady=(2, 0))
@@ -72,11 +79,12 @@ class Sidebar(ctk.CTkFrame):
             foot,
             text="v1.0",
             font=T.font_tuple(T.CAPTION),
-            text_color=T.TEXT_MUTED,
+            text_color=c["TEXT_MUTED"],
             anchor="w",
         ).pack(fill="x")
 
     def _nav_item(self, parent, page_id: str, label: str) -> None:
+        c = current_colors()
         active = page_id == self.active_page
         row = ctk.CTkFrame(parent, fg_color="transparent", height=T.ROW_HEIGHT)
         row.pack(fill="x", pady=2)
@@ -86,7 +94,7 @@ class Sidebar(ctk.CTkFrame):
         accent = ctk.CTkFrame(
             row,
             width=3,
-            fg_color=T.ACCENT if active else "transparent",
+            fg_color=c["ACCENT"] if active else "transparent",
             corner_radius=0,
         )
         accent.pack(side="left", fill="y")
@@ -96,8 +104,8 @@ class Sidebar(ctk.CTkFrame):
             text=label,
             anchor="w",
             fg_color="transparent",
-            hover_color=T.BG_SURFACE_B,
-            text_color=T.TEXT_PRIMARY if active else T.TEXT_SECONDARY,
+            hover_color=c["BG_SURFACE_B"],
+            text_color=c["TEXT_PRIMARY"] if active else c["TEXT_SECONDARY"],
             font=T.font_tuple(T.LABEL),
             corner_radius=T.BORDER_RADIUS,
             height=T.ROW_HEIGHT - 4,
@@ -139,12 +147,13 @@ def attach_sidebar(parent, app, active_page: str) -> ctk.CTkFrame:
     Pack sidebar + return the main content frame (BG_PRIMARY, padded).
     Use on every screen for consistent layout.
     """
-    shell = ctk.CTkFrame(parent, fg_color=T.BG_PRIMARY, corner_radius=0)
+    c = current_colors()
+    shell = ctk.CTkFrame(parent, fg_color=c["BG_PRIMARY"], corner_radius=0)
     shell.pack(fill="both", expand=True)
 
     Sidebar(shell, app, active_page=active_page).pack(side="left", fill="y")
 
-    content = ctk.CTkFrame(shell, fg_color=T.BG_PRIMARY, corner_radius=0)
+    content = ctk.CTkFrame(shell, fg_color=c["BG_PRIMARY"], corner_radius=0)
     content.pack(side="left", fill="both", expand=True)
 
     inner = ctk.CTkFrame(content, fg_color="transparent")

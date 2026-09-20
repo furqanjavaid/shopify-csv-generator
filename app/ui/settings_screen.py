@@ -6,6 +6,7 @@ import customtkinter as ctk
 
 from app.ui import theme as T
 from app.ui.sidebar import attach_sidebar
+from app.ui.theme import current_colors
 from app.utils.config import get_theme, set_theme
 
 
@@ -13,7 +14,8 @@ class SettingsScreen(ctk.CTkFrame):
     """App settings including light/dark theme toggle."""
 
     def __init__(self, parent, app, **kwargs):
-        super().__init__(parent, fg_color=T.BG_PRIMARY, corner_radius=0)
+        c = current_colors()
+        super().__init__(parent, fg_color=c["BG_PRIMARY"], corner_radius=0)
         self.app = app
         body = attach_sidebar(self, app, "settings")
         T.page_title(body, "Settings", "App preferences and defaults")
@@ -29,7 +31,7 @@ class SettingsScreen(ctk.CTkFrame):
             inner,
             text="Appearance",
             font=T.font(14, "bold"),
-            text_color=T.TEXT_PRIMARY,
+            text_color=c["TEXT_PRIMARY"],
         ).pack(side="left")
 
         current = get_theme()
@@ -38,12 +40,12 @@ class SettingsScreen(ctk.CTkFrame):
             values=["Dark", "Light"],
             command=self._on_theme_change,
             font=T.font(13),
-            fg_color=T.BG_SURFACE_B,
-            selected_color=T.ACCENT,
-            selected_hover_color=T.ACCENT_HOVER,
-            unselected_color=T.BG_SURFACE_B,
-            unselected_hover_color=T.BORDER,
-            text_color=T.TEXT_PRIMARY,
+            fg_color=c["BG_SURFACE_B"],
+            selected_color=c["ACCENT"],
+            selected_hover_color=c["ACCENT_HOVER"],
+            unselected_color=c["BG_SURFACE_B"],
+            unselected_hover_color=c["BORDER"],
+            text_color=c["TEXT_PRIMARY"],
         )
         toggle.set("Dark" if current == "dark" else "Light")
         toggle.pack(side="right")
@@ -58,14 +60,14 @@ class SettingsScreen(ctk.CTkFrame):
             out_inner,
             text="Output",
             font=T.font_tuple(T.H3),
-            text_color=T.TEXT_PRIMARY,
+            text_color=c["TEXT_PRIMARY"],
             anchor="w",
         ).pack(fill="x")
         ctk.CTkLabel(
             out_inner,
             text="CSV files save via Save dialog · Audits write to outputs/",
             font=T.font_tuple(T.BODY),
-            text_color=T.TEXT_SECONDARY,
+            text_color=c["TEXT_SECONDARY"],
             anchor="w",
         ).pack(fill="x", pady=(4, 0))
 
@@ -76,8 +78,8 @@ class SettingsScreen(ctk.CTkFrame):
         ctk.set_appearance_mode(theme_val)
         # Rebuild this screen + window chrome so palette applies immediately
         try:
-            self.app.configure(fg_color=T.BG_PRIMARY)
-            self.app.container.configure(fg_color=T.BG_PRIMARY)
+            self.app.configure(fg_color=T.get("BG_PRIMARY"))
+            self.app.container.configure(fg_color=T.get("BG_PRIMARY"))
         except Exception:
             pass
         self.app.show_screen(SettingsScreen)

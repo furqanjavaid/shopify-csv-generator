@@ -6,33 +6,6 @@ import tkinter.font as tkfont
 
 import customtkinter as ctk
 
-# ── COLORS ──────────────────────────────────────────────
-BG_PRIMARY = "#111111"       # Main background
-BG_SURFACE_A = "#141414"     # Card / panel background
-BG_SURFACE_B = "#1A1A1A"     # Table row alternate, input bg
-BORDER = "#2A2A2A"           # Subtle borders
-ACCENT = "#D4A843"           # Amber — buttons, active states, highlights
-SUCCESS = "#3CA370"
-WARNING = "#D4A843"
-ERROR = "#C75B5B"
-TEXT_PRIMARY = "#F0EDE8"     # Off-white
-TEXT_SECONDARY = "#B9B3AA"   # Muted labels
-TEXT_MUTED = "#6B6560"       # Captions, placeholders
-
-# Compatibility aliases (main.py + older references)
-BG = BG_PRIMARY
-SURFACE = BG_SURFACE_A
-CARD = BG_SURFACE_A
-DANGER = ERROR
-ACCENT_HOVER = "#C49833"
-ACCENT_DIM = "#2A2210"
-BLUE = ACCENT
-BLUE_DIM = BG_SURFACE_B
-AMBER = WARNING
-AMBER_BG = "#2A2210"
-BORDER_HOVER = "#3A3A3A"
-TEXT = TEXT_PRIMARY
-
 # ── TYPOGRAPHY ──────────────────────────────────────────
 _FONT_CACHE: str | None = None
 
@@ -77,6 +50,121 @@ ROW_HEIGHT = 44
 WINDOW_MIN = (960, 640)
 
 
+def current_colors() -> dict[str, str]:
+    """Return colors based on current appearance mode."""
+    mode = ctk.get_appearance_mode().lower()
+    if mode == "light":
+        return {
+            "BG_PRIMARY": "#F5F5F0",
+            "BG_SURFACE_A": "#FFFFFF",
+            "BG_SURFACE_B": "#EFEFEA",
+            "BORDER": "#DEDDD8",
+            "TEXT_PRIMARY": "#111111",
+            "TEXT_SECONDARY": "#555550",
+            "TEXT_MUTED": "#999990",
+            "ACCENT": "#C49833",
+            "ACCENT_HOVER": "#B08820",
+            "SUCCESS": "#2D7A4F",
+            "WARNING": "#C49833",
+            "ERROR": "#B94C3F",
+            "ACCENT_DIM": "#E8D9B0",
+            "AMBER_BG": "#E8D9B0",
+            "BORDER_HOVER": "#C8C7C2",
+            "BTN_ON_ACCENT": "#111111",
+        }
+    return {
+        "BG_PRIMARY": "#111111",
+        "BG_SURFACE_A": "#141414",
+        "BG_SURFACE_B": "#1A1A1A",
+        "BORDER": "#2A2A2A",
+        "TEXT_PRIMARY": "#F0EDE8",
+        "TEXT_SECONDARY": "#B9B3AA",
+        "TEXT_MUTED": "#6B6560",
+        "ACCENT": "#D4A843",
+        "ACCENT_HOVER": "#C49833",
+        "SUCCESS": "#3CA370",
+        "WARNING": "#D4A843",
+        "ERROR": "#C75B5B",
+        "ACCENT_DIM": "#2A2210",
+        "AMBER_BG": "#2A2210",
+        "BORDER_HOVER": "#3A3A3A",
+        "BTN_ON_ACCENT": "#111111",
+    }
+
+
+def get(key: str) -> str:
+    """Look up a theme color by name (dynamic)."""
+    colors = current_colors()
+    if key in colors:
+        return colors[key]
+    # Compatibility aliases
+    aliases = {
+        "BG": "BG_PRIMARY",
+        "SURFACE": "BG_SURFACE_A",
+        "CARD": "BG_SURFACE_A",
+        "DANGER": "ERROR",
+        "TEXT": "TEXT_PRIMARY",
+        "BLUE": "ACCENT",
+        "BLUE_DIM": "BG_SURFACE_B",
+        "AMBER": "WARNING",
+    }
+    if key in aliases:
+        return colors[aliases[key]]
+    raise KeyError(key)
+
+
+def __getattr__(name: str):
+    """Make T.BG_PRIMARY / T.TEXT_PRIMARY etc. resolve dynamically."""
+    try:
+        return get(name)
+    except KeyError as exc:
+        raise AttributeError(f"module 'theme' has no attribute {name!r}") from exc
+
+
+# Keep legacy palette dicts for any external readers
+LIGHT_THEME = {
+    "BG_PRIMARY": "#F5F5F0",
+    "BG_SURFACE_A": "#FFFFFF",
+    "BG_SURFACE_B": "#EFEFEA",
+    "BORDER": "#DEDDD8",
+    "TEXT_PRIMARY": "#111111",
+    "TEXT_SECONDARY": "#555550",
+    "TEXT_MUTED": "#999990",
+    "ACCENT": "#C49833",
+    "ACCENT_HOVER": "#B08820",
+}
+
+DARK_THEME = {
+    "BG_PRIMARY": "#111111",
+    "BG_SURFACE_A": "#141414",
+    "BG_SURFACE_B": "#1A1A1A",
+    "BORDER": "#2A2A2A",
+    "TEXT_PRIMARY": "#F0EDE8",
+    "TEXT_SECONDARY": "#B9B3AA",
+    "TEXT_MUTED": "#6B6560",
+    "ACCENT": "#D4A843",
+    "ACCENT_HOVER": "#C49833",
+}
+
+
+def apply_theme(mode: str | None = None) -> str:
+    """Sync CustomTkinter appearance mode. Colors resolve via current_colors()."""
+    if mode is None:
+        try:
+            from app.utils.config import get_theme
+
+            mode = get_theme()
+        except Exception:
+            mode = "dark"
+
+    mode = "light" if str(mode).lower() == "light" else "dark"
+    try:
+        ctk.set_appearance_mode(mode)
+    except Exception:
+        pass
+    return mode
+
+
 def font(size: int = 13, weight: str = "normal") -> ctk.CTkFont:
     return ctk.CTkFont(family=_resolve_ui_font(), size=size, weight=weight)
 
@@ -88,10 +176,11 @@ def font_tuple(spec: tuple) -> ctk.CTkFont:
 
 # ── COMPONENT STYLE DICTS ───────────────────────────────
 def primary_btn() -> dict:
+    c = current_colors()
     return {
-        "fg_color": ACCENT,
-        "text_color": "#111111",
-        "hover_color": ACCENT_HOVER,
+        "fg_color": c["ACCENT"],
+        "text_color": c["BTN_ON_ACCENT"],
+        "hover_color": c["ACCENT_HOVER"],
         "corner_radius": BORDER_RADIUS,
         "height": BTN_HEIGHT,
         "font": font_tuple(BTN_TEXT),
@@ -99,12 +188,13 @@ def primary_btn() -> dict:
 
 
 def secondary_btn() -> dict:
+    c = current_colors()
     return {
         "fg_color": "transparent",
-        "text_color": TEXT_PRIMARY,
-        "border_color": BORDER,
+        "text_color": c["TEXT_PRIMARY"],
+        "border_color": c["BORDER"],
         "border_width": 1,
-        "hover_color": BG_SURFACE_B,
+        "hover_color": c["BG_SURFACE_B"],
         "corner_radius": BORDER_RADIUS,
         "height": BTN_HEIGHT,
         "font": font_tuple(BTN_TEXT),
@@ -112,10 +202,11 @@ def secondary_btn() -> dict:
 
 
 def ghost_btn() -> dict:
+    c = current_colors()
     return {
         "fg_color": "transparent",
-        "text_color": ACCENT,
-        "hover_color": BG_SURFACE_B,
+        "text_color": c["ACCENT"],
+        "hover_color": c["BG_SURFACE_B"],
         "corner_radius": BORDER_RADIUS,
         "height": BTN_HEIGHT,
         "font": font_tuple(BTN_TEXT),
@@ -123,12 +214,13 @@ def ghost_btn() -> dict:
 
 
 def input_field() -> dict:
+    c = current_colors()
     return {
-        "fg_color": BG_SURFACE_B,
-        "border_color": BORDER,
+        "fg_color": c["BG_SURFACE_B"],
+        "border_color": c["BORDER"],
         "border_width": 1,
-        "text_color": TEXT_PRIMARY,
-        "placeholder_text_color": TEXT_MUTED,
+        "text_color": c["TEXT_PRIMARY"],
+        "placeholder_text_color": c["TEXT_MUTED"],
         "corner_radius": BORDER_RADIUS,
         "height": INPUT_HEIGHT,
         "font": font_tuple(BODY),
@@ -137,18 +229,18 @@ def input_field() -> dict:
 
 def card_frame(master, **kw) -> ctk.CTkFrame:
     """Card surface — always uses current theme colors + visible border."""
+    c = current_colors()
     opts = {
-        "fg_color": BG_SURFACE_A,
+        "fg_color": c["BG_SURFACE_A"],
         "corner_radius": BORDER_RADIUS,
         "border_width": 1,
-        "border_color": BORDER,
+        "border_color": c["BORDER"],
     }
     opts.update(kw)
-    # Enforce border so cards stay visible in light mode (#FFF on #F5F5F0)
     opts["border_width"] = 1
-    opts["border_color"] = BORDER
+    opts["border_color"] = c["BORDER"]
     if "fg_color" not in kw:
-        opts["fg_color"] = BG_SURFACE_A
+        opts["fg_color"] = c["BG_SURFACE_A"]
     return ctk.CTkFrame(master, **opts)
 
 
@@ -182,6 +274,7 @@ def back_button(parent, command) -> ctk.CTkButton:
 
 
 def styled_entry(parent, placeholder: str = "", height: int | None = None, **kw) -> ctk.CTkEntry:
+    c = current_colors()
     style = input_field()
     if height is not None:
         style["height"] = height
@@ -189,10 +282,10 @@ def styled_entry(parent, placeholder: str = "", height: int | None = None, **kw)
     entry = ctk.CTkEntry(parent, placeholder_text=placeholder, **style)
 
     def on_focus_in(_e=None):
-        entry.configure(border_color=ACCENT)
+        entry.configure(border_color=get("ACCENT"))
 
     def on_focus_out(_e=None):
-        entry.configure(border_color=BORDER)
+        entry.configure(border_color=get("BORDER"))
 
     entry.bind("<FocusIn>", on_focus_in)
     entry.bind("<FocusOut>", on_focus_out)
@@ -201,7 +294,8 @@ def styled_entry(parent, placeholder: str = "", height: int | None = None, **kw)
 
 def header_bar(parent, title: str, back_cmd, step: str | None = None) -> ctk.CTkFrame:
     """Legacy top bar — prefer sidebar layout on new screens."""
-    bar = ctk.CTkFrame(parent, fg_color=BG_SURFACE_A, corner_radius=0, height=56)
+    c = current_colors()
+    bar = ctk.CTkFrame(parent, fg_color=c["BG_SURFACE_A"], corner_radius=0, height=56)
     bar.pack(fill="x")
     bar.pack_propagate(False)
 
@@ -210,22 +304,22 @@ def header_bar(parent, title: str, back_cmd, step: str | None = None) -> ctk.CTk
 
     back_button(inner, back_cmd).pack(side="left")
     ctk.CTkLabel(
-        inner, text=title, font=font_tuple(H3), text_color=TEXT_PRIMARY
+        inner, text=title, font=font_tuple(H3), text_color=c["TEXT_PRIMARY"]
     ).pack(side="left", padx=16)
 
     if step:
         ctk.CTkLabel(
-            inner, text=step, font=font_tuple(CAPTION), text_color=TEXT_MUTED
+            inner, text=step, font=font_tuple(CAPTION), text_color=c["TEXT_MUTED"]
         ).pack(side="right")
     return bar
 
 
-def pill(parent, text: str, fg: str, text_color: str = TEXT_PRIMARY) -> ctk.CTkLabel:
+def pill(parent, text: str, fg: str, text_color: str | None = None) -> ctk.CTkLabel:
     return ctk.CTkLabel(
         parent,
         text=f"  {text}  ",
         font=font(12, "bold"),
-        text_color=text_color,
+        text_color=text_color if text_color is not None else get("TEXT_PRIMARY"),
         fg_color=fg,
         corner_radius=BORDER_RADIUS,
         height=28,
@@ -233,10 +327,11 @@ def pill(parent, text: str, fg: str, text_color: str = TEXT_PRIMARY) -> ctk.CTkL
 
 
 def confidence_badge(parent, level: str) -> ctk.CTkLabel:
+    c = current_colors()
     styles = {
-        "high": ("● High", SUCCESS),
-        "medium": ("● Medium", WARNING),
-        "low": ("● Low", ERROR),
+        "high": ("● High", c["SUCCESS"]),
+        "medium": ("● Medium", c["WARNING"]),
+        "low": ("● Low", c["ERROR"]),
     }
     text, color = styles.get(level, styles["low"])
     return ctk.CTkLabel(
@@ -251,8 +346,9 @@ def confidence_badge(parent, level: str) -> ctk.CTkLabel:
 
 
 def status_dot(parent, label: str, level: str = "success") -> ctk.CTkLabel:
-    colors = {"success": SUCCESS, "warning": WARNING, "error": ERROR}
-    color = colors.get(level, TEXT_SECONDARY)
+    c = current_colors()
+    colors = {"success": c["SUCCESS"], "warning": c["WARNING"], "error": c["ERROR"]}
+    color = colors.get(level, c["TEXT_SECONDARY"])
     return ctk.CTkLabel(
         parent,
         text=f"●  {label}",
@@ -263,26 +359,28 @@ def status_dot(parent, label: str, level: str = "success") -> ctk.CTkLabel:
 
 
 def progress_bar(parent, width: int = 500) -> ctk.CTkProgressBar:
+    c = current_colors()
     return ctk.CTkProgressBar(
         parent,
         width=width,
         height=6,
         mode="indeterminate",
-        progress_color=ACCENT,
-        fg_color=BORDER,
+        progress_color=c["ACCENT"],
+        fg_color=c["BORDER"],
         corner_radius=3,
     )
 
 
 def log_box(parent, height: int = 200) -> ctk.CTkTextbox:
+    c = current_colors()
     return ctk.CTkTextbox(
         parent,
         height=height,
-        fg_color=BG_SURFACE_B,
-        text_color=TEXT_SECONDARY,
+        fg_color=c["BG_SURFACE_B"],
+        text_color=c["TEXT_SECONDARY"],
         font=ctk.CTkFont(family=FONT_MONO, size=12),
         border_width=1,
-        border_color=BORDER,
+        border_color=c["BORDER"],
         corner_radius=BORDER_RADIUS,
         state="disabled",
     )
@@ -290,12 +388,13 @@ def log_box(parent, height: int = 200) -> ctk.CTkTextbox:
 
 def step_indicator(parent, current: int, total: int = 4) -> ctk.CTkFrame:
     """Numbered step circles: 1 → 2 → 3 → 4."""
+    c = current_colors()
     wrap = ctk.CTkFrame(parent, fg_color="transparent")
     for i in range(1, total + 1):
         active = i == current
         done = i < current
-        bg = ACCENT if active or done else BG_SURFACE_B
-        tc = "#111111" if active or done else TEXT_MUTED
+        bg = c["ACCENT"] if active or done else c["BG_SURFACE_B"]
+        tc = c["BTN_ON_ACCENT"] if active or done else c["TEXT_MUTED"]
         circle = ctk.CTkLabel(
             wrap,
             text=str(i),
@@ -309,88 +408,24 @@ def step_indicator(parent, current: int, total: int = 4) -> ctk.CTkFrame:
         circle.pack(side="left")
         if i < total:
             ctk.CTkLabel(
-                wrap, text="→", font=font(12), text_color=TEXT_MUTED, width=20
+                wrap, text="→", font=font(12), text_color=c["TEXT_MUTED"], width=20
             ).pack(side="left")
     return wrap
 
 
 def page_title(parent, title: str, subtitle: str = "") -> ctk.CTkFrame:
+    c = current_colors()
     wrap = ctk.CTkFrame(parent, fg_color="transparent")
     wrap.pack(fill="x", pady=(0, GRID_GAP))
     ctk.CTkLabel(
-        wrap, text=title, font=font_tuple(H1), text_color=TEXT_PRIMARY, anchor="w"
+        wrap, text=title, font=font_tuple(H1), text_color=c["TEXT_PRIMARY"], anchor="w"
     ).pack(fill="x")
     if subtitle:
         ctk.CTkLabel(
             wrap,
             text=subtitle,
             font=font_tuple(BODY),
-            text_color=TEXT_SECONDARY,
+            text_color=c["TEXT_SECONDARY"],
             anchor="w",
         ).pack(fill="x", pady=(4, 0))
     return wrap
-
-
-# ── LIGHT / DARK PALETTES ───────────────────────────────
-LIGHT_THEME = {
-    "BG_PRIMARY": "#F5F5F0",
-    "BG_SURFACE_A": "#FFFFFF",
-    "BG_SURFACE_B": "#EFEFEA",
-    "BORDER": "#DEDDD8",
-    "TEXT_PRIMARY": "#111111",
-    "TEXT_SECONDARY": "#555550",
-    "TEXT_MUTED": "#999990",
-    "ACCENT": "#C49833",
-    "ACCENT_HOVER": "#B08820",
-}
-
-DARK_THEME = {
-    "BG_PRIMARY": "#111111",
-    "BG_SURFACE_A": "#141414",
-    "BG_SURFACE_B": "#1A1A1A",
-    "BORDER": "#2A2A2A",
-    "TEXT_PRIMARY": "#F0EDE8",
-    "TEXT_SECONDARY": "#B9B3AA",
-    "TEXT_MUTED": "#6B6560",
-    "ACCENT": "#D4A843",
-    "ACCENT_HOVER": "#C49833",
-}
-
-
-def apply_theme(mode: str | None = None) -> str:
-    """Apply light or dark palette to module-level color constants. Returns mode."""
-    global BG_PRIMARY, BG_SURFACE_A, BG_SURFACE_B, BORDER
-    global TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED, ACCENT, ACCENT_HOVER
-    global BG, SURFACE, CARD, TEXT, BLUE, BLUE_DIM, ACCENT_DIM, AMBER_BG, BORDER_HOVER
-
-    if mode is None:
-        try:
-            from app.utils.config import get_theme
-
-            mode = get_theme()
-        except Exception:
-            mode = "dark"
-
-    mode = "light" if str(mode).lower() == "light" else "dark"
-    palette = LIGHT_THEME if mode == "light" else DARK_THEME
-
-    BG_PRIMARY = palette["BG_PRIMARY"]
-    BG_SURFACE_A = palette["BG_SURFACE_A"]
-    BG_SURFACE_B = palette["BG_SURFACE_B"]
-    BORDER = palette["BORDER"]
-    TEXT_PRIMARY = palette["TEXT_PRIMARY"]
-    TEXT_SECONDARY = palette["TEXT_SECONDARY"]
-    TEXT_MUTED = palette["TEXT_MUTED"]
-    ACCENT = palette["ACCENT"]
-    ACCENT_HOVER = palette["ACCENT_HOVER"]
-
-    BG = BG_PRIMARY
-    SURFACE = BG_SURFACE_A
-    CARD = BG_SURFACE_A
-    TEXT = TEXT_PRIMARY
-    BLUE = ACCENT
-    BLUE_DIM = BG_SURFACE_B
-    ACCENT_DIM = "#E8D9B0" if mode == "light" else "#2A2210"
-    AMBER_BG = ACCENT_DIM
-    BORDER_HOVER = "#C8C7C2" if mode == "light" else "#3A3A3A"
-    return mode

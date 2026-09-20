@@ -6,6 +6,7 @@ import customtkinter as ctk
 
 from app.ui import theme as T
 from app.ui.sidebar import attach_sidebar
+from app.utils.task_history import load_history
 
 
 class HomeScreen(ctk.CTkFrame):
@@ -143,35 +144,66 @@ class HomeScreen(ctk.CTkFrame):
                 anchor="w",
             ).grid(row=0, column=col, padx=4, sticky="w")
 
-        rows = [
-            ("Upload", "spring_catalog.csv", "success", "Success", "Today"),
-            ("Scrape", "store.myshopify.com", "warning", "Running", "Today"),
-            ("Audit", "example.com", "success", "Success", "Yesterday"),
-            ("Upload", "client_products.xlsx", "error", "Failed", "Mon"),
-        ]
-        for idx, (typ, name, level, status, date) in enumerate(rows):
-            bg = T.BG_SURFACE_A if idx % 2 == 0 else T.BG_SURFACE_B
-            row = ctk.CTkFrame(table, fg_color=bg, height=T.ROW_HEIGHT)
-            row.grid(row=idx + 1, column=0, columnspan=4, sticky="ew")
-            row.grid_propagate(False)
-            row.grid_columnconfigure(0, weight=1)
-            row.grid_columnconfigure(1, weight=3)
-            row.grid_columnconfigure(2, weight=2)
-            row.grid_columnconfigure(3, weight=1)
+        body_rows = ctk.CTkFrame(table, fg_color="transparent")
+        body_rows.grid(row=1, column=0, columnspan=4, sticky="nsew")
+        body_rows.grid_columnconfigure(0, weight=1)
+        body_rows.grid_columnconfigure(1, weight=3)
+        body_rows.grid_columnconfigure(2, weight=2)
+        body_rows.grid_columnconfigure(3, weight=1)
+        self._render_recent_tasks(body_rows)
+
+    def _render_recent_tasks(self, table_frame) -> None:
+        history = load_history()
+
+        if not history:
+            ctk.CTkLabel(
+                table_frame,
+                text="No tasks yet — run your first upload, scrape or audit",
+                font=T.font(13),
+                text_color=T.TEXT_MUTED,
+            ).grid(row=0, column=0, columnspan=4, pady=20)
+            return
+
+        for i, task in enumerate(history[:5]):  # show last 5
+            bg = T.BG_SURFACE_A if i % 2 == 0 else T.BG_SURFACE_B
+            status_color = T.SUCCESS if task["status"] == "Success" else T.ERROR
 
             ctk.CTkLabel(
-                row, text=typ, font=T.font_tuple(T.CAPTION),
-                text_color=T.TEXT_SECONDARY, width=80, anchor="w",
-            ).grid(row=0, column=0, padx=4, sticky="w")
+                table_frame,
+                text=task["type"],
+                font=T.font(13),
+                text_color=T.TEXT_SECONDARY,
+                fg_color=bg,
+                anchor="w",
+                width=80,
+            ).grid(row=i, column=0, sticky="ew", padx=4, pady=1)
             ctk.CTkLabel(
-                row, text=name, font=T.font_tuple(T.CAPTION),
-                text_color=T.TEXT_SECONDARY, width=160, anchor="w",
-            ).grid(row=0, column=1, padx=4, sticky="w")
-            T.status_dot(row, status, level).grid(row=0, column=2, padx=4, sticky="w")
+                table_frame,
+                text=task["name"][:25],
+                font=T.font(13),
+                text_color=T.TEXT_PRIMARY,
+                fg_color=bg,
+                anchor="w",
+                width=160,
+            ).grid(row=i, column=1, sticky="ew", padx=4, pady=1)
             ctk.CTkLabel(
-                row, text=date, font=T.font_tuple(T.CAPTION),
-                text_color=T.TEXT_SECONDARY, width=90, anchor="w",
-            ).grid(row=0, column=3, padx=4, sticky="w")
+                table_frame,
+                text=f"● {task['status']}",
+                font=T.font(13),
+                text_color=status_color,
+                fg_color=bg,
+                anchor="w",
+                width=100,
+            ).grid(row=i, column=2, sticky="ew", padx=4, pady=1)
+            ctk.CTkLabel(
+                table_frame,
+                text=task["date"],
+                font=T.font(12),
+                text_color=T.TEXT_MUTED,
+                fg_color=bg,
+                anchor="w",
+                width=90,
+            ).grid(row=i, column=3, sticky="ew", padx=4, pady=1)
 
     def _system_status(self, parent) -> None:
         card = T.card_frame(parent)

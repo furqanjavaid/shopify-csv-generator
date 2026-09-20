@@ -493,6 +493,9 @@ class ConverterScreen(ctk.CTkFrame):
             text=f"{converted} converted"
             + (f" · {skipped} skipped" if skipped else "")
         )
+        from app.utils.task_history import save_task
+
+        save_task("Convert", f"{result['converted']} images", "Success")
         self.clear_btn.configure(state="normal")
         self._show_complete_bar()
 

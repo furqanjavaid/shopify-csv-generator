@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from tkinter import filedialog
 
 import customtkinter as ctk
@@ -10,6 +11,7 @@ from app.core.file_parser import FileParser
 from app.ui import theme as T
 from app.ui.sidebar import attach_sidebar
 from app.utils.helpers import output_filename_from_upload
+from app.utils.task_history import save_task
 
 
 class UploadScreen(ctk.CTkFrame):
@@ -171,6 +173,7 @@ class UploadScreen(ctk.CTkFrame):
             self.filepath = path
             self.suggested_filename = output_filename_from_upload(path)
             filename = path.replace("\\", "/").split("/")[-1]
+            save_task("Upload", os.path.basename(path), "Success")
 
             T.pill(
                 self.status_pill, f"✓  {filename}", T.ACCENT_DIM, T.ACCENT

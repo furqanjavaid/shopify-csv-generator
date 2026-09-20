@@ -251,6 +251,9 @@ class ScraperScreen(ctk.CTkFrame):
         self.strategy_label.configure(
             text=f"{data.get('strategy_used', '')}  ·  → {self.suggested_filename}"
         )
+        from app.utils.task_history import save_task
+
+        save_task("Scrape", self.suggested_filename, "Success")
         self._append_log(f"Done — {count} rows ready")
         self._render_preview()
         self._enable_actions()

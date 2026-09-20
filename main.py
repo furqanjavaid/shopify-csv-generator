@@ -28,12 +28,12 @@ class App(ctk.CTk):
         self.geometry("980x700")
         self.minsize(960, 640)
         self.resizable(True, True)
-        self.configure(fg_color=T.BG)
+        self.configure(fg_color=T.get("BG_PRIMARY"))
 
         self._center_window()
         self._update_banner = None
 
-        self.container = ctk.CTkFrame(self, fg_color=T.BG, corner_radius=0)
+        self.container = ctk.CTkFrame(self, fg_color=T.get("BG_PRIMARY"), corner_radius=0)
         self.container.pack(fill="both", expand=True)
 
         self.current_screen = None
