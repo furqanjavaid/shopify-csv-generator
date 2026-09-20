@@ -17,6 +17,7 @@ build/*
 *.egg-info/
 .eggs/
 *.spec
+!sentivo.spec
 .DS_Store
 Thumbs.db
 .idea/
