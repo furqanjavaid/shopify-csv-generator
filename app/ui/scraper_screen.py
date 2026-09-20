@@ -30,8 +30,53 @@ class ScraperScreen(ctk.CTkFrame):
             "Extract products from any Shopify collection URL",
         )
 
+        # Top / middle / bottom split — bottom bar reserved first
+        main_area = ctk.CTkFrame(body, fg_color="transparent")
+        main_area.pack(fill="both", expand=True)
+
+        # Bottom bar FIRST (always visible; buttons disabled until scrape completes)
+        self.action_bar = ctk.CTkFrame(
+            main_area, fg_color=T.BG_SURFACE_A, height=64, corner_radius=0
+        )
+        self.action_bar.pack(side="bottom", fill="x", padx=0, pady=0)
+        self.action_bar.pack_propagate(False)
+
+        self.count_badge = ctk.CTkLabel(
+            self.action_bar, text="", font=T.font(12, "bold"), text_color=T.ACCENT
+        )
+        self.count_badge.pack(side="left", padx=16, pady=12)
+
+        self.next_btn = ctk.CTkButton(
+            self.action_bar,
+            text="Generate Shopify CSV →",
+            command=self._go_mapping,
+            width=200,
+            **T.primary_btn(),
+        )
+        self.clear_btn = ctk.CTkButton(
+            self.action_bar,
+            text="Clear",
+            command=self._clear_results,
+            width=100,
+            **T.secondary_btn(),
+        )
+        self.clear_btn.pack(side="right", padx=8, pady=12)
+        self.next_btn.pack(side="right", padx=(0, 16), pady=12)
+        self.next_btn.configure(
+            state="disabled", fg_color=T.BG_SURFACE_B, text_color=T.TEXT_MUTED
+        )
+        self.clear_btn.configure(state="disabled")
+
+        # Middle — preview (expands)
+        middle = ctk.CTkFrame(main_area, fg_color="transparent")
+        middle.pack(fill="both", expand=True)
+
+        # Top — controls above preview
+        top = ctk.CTkFrame(main_area, fg_color="transparent")
+        top.pack(fill="x", before=middle)
+
         # URL + Scrape
-        url_card = T.card_frame(body)
+        url_card = T.card_frame(top)
         url_card.pack(fill="x", pady=(0, T.GRID_GAP))
         url_inner = ctk.CTkFrame(url_card, fg_color="transparent")
         url_inner.pack(fill="x", padx=T.CARD_PADDING, pady=T.CARD_PADDING)
@@ -48,7 +93,7 @@ class ScraperScreen(ctk.CTkFrame):
         self.scrape_btn.pack(side="right")
 
         # Options checkboxes (UI only — crawl uses defaults)
-        opts = ctk.CTkFrame(body, fg_color="transparent")
+        opts = ctk.CTkFrame(top, fg_color="transparent")
         opts.pack(fill="x", pady=(0, 8))
         self.var_variants = ctk.BooleanVar(value=True)
         self.var_images = ctk.BooleanVar(value=True)
@@ -72,11 +117,11 @@ class ScraperScreen(ctk.CTkFrame):
             ).pack(side="left", padx=(0, 20))
 
         self.error_label = ctk.CTkLabel(
-            body, text="", font=T.font_tuple(T.CAPTION), text_color=T.ERROR
+            top, text="", font=T.font_tuple(T.CAPTION), text_color=T.ERROR
         )
         self.error_label.pack()
 
-        self.progress_section = ctk.CTkFrame(body, fg_color="transparent")
+        self.progress_section = ctk.CTkFrame(top, fg_color="transparent")
         self.progress_section.pack(fill="x")
         self.progress = T.progress_bar(self.progress_section)
         self.loading_label = ctk.CTkLabel(
@@ -84,16 +129,16 @@ class ScraperScreen(ctk.CTkFrame):
             text_color=T.ACCENT,
         )
 
-        self.log_box = T.log_box(body, height=110)
+        self.log_box = T.log_box(top, height=110)
 
         self.strategy_label = ctk.CTkLabel(
-            body, text="", font=T.font_tuple(T.CAPTION), text_color=T.TEXT_SECONDARY
+            top, text="", font=T.font_tuple(T.CAPTION), text_color=T.TEXT_SECONDARY
         )
         self.strategy_label.pack()
 
-        # Preview table
-        preview_card = T.card_frame(body)
-        preview_card.pack(fill="x", pady=(8, 0))
+        # Preview table in middle
+        preview_card = T.card_frame(middle)
+        preview_card.pack(fill="both", expand=True, pady=(8, 8))
         ctk.CTkLabel(
             preview_card, text="Results Preview",
             font=T.font(12, "bold"), text_color=T.TEXT_SECONDARY, anchor="w",
@@ -106,30 +151,7 @@ class ScraperScreen(ctk.CTkFrame):
             corner_radius=T.BORDER_RADIUS,
             height=160,
         )
-        self.preview_frame.pack(fill="x", padx=12, pady=(0, 8))
-
-        # Action bar — inside preview_card, after scrollable table
-        self.action_bar = ctk.CTkFrame(preview_card, fg_color="transparent")
-        self.count_badge = ctk.CTkLabel(
-            self.action_bar, text="", font=T.font(12, "bold"), text_color=T.ACCENT
-        )
-        self.count_badge.pack(side="left")
-        self.next_btn = ctk.CTkButton(
-            self.action_bar,
-            text="Generate Shopify CSV →",
-            command=self._go_mapping,
-            width=200,
-            **T.primary_btn(),
-        )
-        self.next_btn.pack(side="right")
-        self.clear_btn = ctk.CTkButton(
-            self.action_bar,
-            text="Clear",
-            command=self._clear_results,
-            width=100,
-            **T.secondary_btn(),
-        )
-        self.clear_btn.pack(side="right", padx=(0, 8))
+        self.preview_frame.pack(fill="both", expand=True, padx=12, pady=(0, 12))
 
     def _append_log(self, message: str) -> None:
         if not self.log_box.winfo_ismapped():
@@ -140,11 +162,14 @@ class ScraperScreen(ctk.CTkFrame):
         self.log_box.configure(state="disabled")
 
     def _show_action_bar(self) -> None:
-        if not self.action_bar.winfo_ismapped():
-            self.action_bar.pack(fill="x", padx=T.CARD_PADDING, pady=(4, 12))
+        self.next_btn.configure(state="normal", **T.primary_btn())
+        self.clear_btn.configure(state="normal")
 
     def _hide_action_bar(self) -> None:
-        self.action_bar.pack_forget()
+        self.next_btn.configure(
+            state="disabled", fg_color=T.BG_SURFACE_B, text_color=T.TEXT_MUTED
+        )
+        self.clear_btn.configure(state="disabled")
 
     def _clear_results(self) -> None:
         """Reset scraper UI to initial empty state."""
