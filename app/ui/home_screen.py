@@ -48,9 +48,9 @@ class HomeScreen(ctk.CTkFrame):
             "Open Auditor", self._go_audit,
         )
 
-        # Bottom — Recent Tasks + System Status equal columns
+        # Bottom — Recent Tasks + System Status
         bottom = ctk.CTkFrame(content, fg_color="transparent")
-        bottom.pack(fill="both", expand=True)
+        bottom.pack(fill="both", expand=True, pady=(T.GRID_GAP, 0))
         bottom.grid_columnconfigure(0, weight=3)
         bottom.grid_columnconfigure(1, weight=2)
         bottom.grid_rowconfigure(0, weight=1)
@@ -116,16 +116,32 @@ class HomeScreen(ctk.CTkFrame):
             text_color=T.TEXT_PRIMARY, anchor="w",
         ).pack(fill="x")
 
-        cols = ("Type", "Name", "Status", "Date")
-        widths = (70, 160, 100, 90)
-        header = ctk.CTkFrame(card, fg_color=T.BG_SURFACE_B, height=T.ROW_HEIGHT)
-        header.pack(fill="x", padx=1)
-        header.pack_propagate(False)
-        for i, (col, w) in enumerate(zip(cols, widths)):
+        table = ctk.CTkFrame(card, fg_color="transparent")
+        table.pack(fill="both", expand=True, padx=1, pady=(0, T.CARD_PADDING))
+        table.grid_columnconfigure(0, weight=1)
+        table.grid_columnconfigure(1, weight=3)
+        table.grid_columnconfigure(2, weight=2)
+        table.grid_columnconfigure(3, weight=1)
+
+        # Table header row
+        header = ctk.CTkFrame(table, fg_color=T.BG_SURFACE_B, height=T.ROW_HEIGHT)
+        header.grid(row=0, column=0, columnspan=4, sticky="ew")
+        header.grid_propagate(False)
+        header.grid_columnconfigure(0, weight=1)
+        header.grid_columnconfigure(1, weight=3)
+        header.grid_columnconfigure(2, weight=2)
+        header.grid_columnconfigure(3, weight=1)
+        for col, (text, width) in enumerate([
+            ("Type", 80), ("Name", 160), ("Status", 100), ("Date", 90)
+        ]):
             ctk.CTkLabel(
-                header, text=col, font=T.font(12, "bold"), text_color=T.TEXT_MUTED,
-                width=w, anchor="w",
-            ).pack(side="left", padx=(12 if i == 0 else 8, 0))
+                header,
+                text=text,
+                font=T.font(12, "bold"),
+                text_color=T.TEXT_MUTED,
+                width=width,
+                anchor="w",
+            ).grid(row=0, column=col, padx=4, sticky="w")
 
         rows = [
             ("Upload", "spring_catalog.csv", "success", "Success", "Today"),
@@ -135,18 +151,27 @@ class HomeScreen(ctk.CTkFrame):
         ]
         for idx, (typ, name, level, status, date) in enumerate(rows):
             bg = T.BG_SURFACE_A if idx % 2 == 0 else T.BG_SURFACE_B
-            row = ctk.CTkFrame(card, fg_color=bg, height=T.ROW_HEIGHT)
-            row.pack(fill="x", padx=1)
-            row.pack_propagate(False)
-            values = (typ, name, None, date)
-            for i, (val, w) in enumerate(zip(values, widths)):
-                if i == 2:
-                    T.status_dot(row, status, level).pack(side="left", padx=8)
-                else:
-                    ctk.CTkLabel(
-                        row, text=val, font=T.font_tuple(T.CAPTION),
-                        text_color=T.TEXT_SECONDARY, width=w, anchor="w",
-                    ).pack(side="left", padx=(12 if i == 0 else 8, 0))
+            row = ctk.CTkFrame(table, fg_color=bg, height=T.ROW_HEIGHT)
+            row.grid(row=idx + 1, column=0, columnspan=4, sticky="ew")
+            row.grid_propagate(False)
+            row.grid_columnconfigure(0, weight=1)
+            row.grid_columnconfigure(1, weight=3)
+            row.grid_columnconfigure(2, weight=2)
+            row.grid_columnconfigure(3, weight=1)
+
+            ctk.CTkLabel(
+                row, text=typ, font=T.font_tuple(T.CAPTION),
+                text_color=T.TEXT_SECONDARY, width=80, anchor="w",
+            ).grid(row=0, column=0, padx=4, sticky="w")
+            ctk.CTkLabel(
+                row, text=name, font=T.font_tuple(T.CAPTION),
+                text_color=T.TEXT_SECONDARY, width=160, anchor="w",
+            ).grid(row=0, column=1, padx=4, sticky="w")
+            T.status_dot(row, status, level).grid(row=0, column=2, padx=4, sticky="w")
+            ctk.CTkLabel(
+                row, text=date, font=T.font_tuple(T.CAPTION),
+                text_color=T.TEXT_SECONDARY, width=90, anchor="w",
+            ).grid(row=0, column=3, padx=4, sticky="w")
 
     def _system_status(self, parent) -> None:
         card = T.card_frame(parent)

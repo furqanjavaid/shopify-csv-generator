@@ -17,7 +17,7 @@ def load_config() -> dict:
                 return data
         except Exception:
             pass
-    return {"theme": "dark"}
+    return {"theme": "light"}
 
 
 def save_config(data: dict) -> None:
@@ -28,7 +28,7 @@ def save_config(data: dict) -> None:
 
 
 def get_theme() -> str:
-    theme = load_config().get("theme", "dark")
+    theme = load_config().get("theme", "light")
     return "light" if str(theme).lower() == "light" else "dark"
 
 
