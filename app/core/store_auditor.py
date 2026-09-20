@@ -272,6 +272,7 @@ def run_playwright_audit(
     findings: dict[str, Any] = {
         "has_h1": False,
         "h1_text": "",
+        "h1_has_content": False,
         "hero_cta_count": 0,
         "nav_links_count": 0,
         "has_visible_nav": False,
@@ -325,7 +326,9 @@ def run_playwright_audit(
 
         h1 = page.query_selector("h1")
         findings["has_h1"] = bool(h1)
-        findings["h1_text"] = (h1.inner_text().strip() if h1 else "")[:120]
+        findings["h1_text"] = h1.inner_text().strip() if h1 else ""
+        # Also check if H1 is empty/whitespace
+        findings["h1_has_content"] = bool(findings["h1_text"])
 
         hero_btns = page.query_selector_all(
             "a.button, button, .btn, [class*='hero'] a, [class*='banner'] a"
@@ -416,11 +419,23 @@ def run_playwright_audit(
                 findings["atc_y_position"] = 9999
 
             product_images = page.query_selector_all(
-                ".product__media img, [class*='product-image'] img, "
-                ".product-single__photo img, [class*='product__media'] img, "
-                ".product-gallery img, [class*='media-gallery'] img"
+                ".product__media img, "
+                "[class*='product-image'] img, "
+                ".product-single__photo img, "
+                "[class*='product-gallery'] img, "
+                "[class*='product-media'] img, "
+                ".product img, "
+                "img[src*='products']"
             )
-            findings["product_image_count"] = len(product_images)
+            # Deduplicate by src
+            seen: set[str] = set()
+            unique_images = []
+            for img in product_images:
+                src = img.get_attribute("src") or ""
+                if src and src not in seen:
+                    seen.add(src)
+                    unique_images.append(img)
+            findings["product_image_count"] = len(unique_images)
 
             price = page.query_selector(
                 "[class*='price']:not([class*='compare']):not([class*='compare-at'])"
@@ -428,11 +443,31 @@ def run_playwright_audit(
             findings["price_visible"] = bool(price)
             findings["price_text"] = (price.inner_text().strip() if price else "")[:80]
 
-            reviews = page.query_selector(
-                "[class*='review'], [class*='rating'], .stamped-badge, "
-                ".yotpo, .judge-me, .jdgm-preview-badge, .loox-rating"
+            # Reviews on product page — be specific, avoid false positives
+            review_selectors = [
+                ".stamped-badge",
+                ".yotpo",
+                ".judge-me-widget",
+                "[class*='review-count']",
+                "[class*='rating-count']",
+                "span[class*='reviews']",
+                ".spr-badge",
+                "[data-rating]",
+            ]
+            review_found = False
+            for sel in review_selectors:
+                if page.query_selector(sel):
+                    review_found = True
+                    break
+            # Also check review count > 0
+            review_count_el = page.query_selector(
+                "[class*='review-count'], .stamped-badge-caption"
             )
-            findings["product_has_reviews"] = bool(reviews)
+            if review_count_el:
+                count_text = review_count_el.inner_text()
+                if "0" in count_text and len(count_text) < 5:
+                    review_found = False  # "0 reviews" = not really present
+            findings["product_has_reviews"] = review_found
 
             page_text = page.inner_text("body").lower()
             findings["has_urgency"] = any(kw in page_text for kw in URGENCY_KEYWORDS)
@@ -624,31 +659,37 @@ def calculate_scores(findings: dict) -> dict:
         mob -= 1
     scores_named["Mobile"] = max(0.0, round(mob, 1))
 
-    # Speed (15%)
+    # Speed (15%) — 10/10 only when load < 1s
     spd = 10.0
     load = findings.get("homepage_load_time", 999)
     if load > 3:
-        spd -= 4
+        spd -= 5
     elif load > 2:
+        spd -= 3
+    elif load > 1.5:
         spd -= 2
     elif load > 1:
         spd -= 1
     if findings.get("has_carousel"):
+        spd -= 2  # carousel = LCP risk
+    if findings.get("carousel_slide_count", 0) > 2:
         spd -= 1
     scores_named["Speed"] = max(0.0, round(spd, 1))
 
     # Marketing (10%)
     mkt = 10.0
-    if not findings.get("has_email_capture") and not findings.get("has_email_capture_static"):
+    if not findings.get("has_email_capture"):
         mkt -= 3
-    if findings.get("trust_badge_count", 0) < 2 and not findings.get("has_trust_text"):
+    if findings.get("trust_badge_count", 0) < 2:
         mkt -= 2
     if not findings.get("has_announcement_bar"):
         mkt -= 1
-    if not findings.get("has_h1"):
+    if not findings.get("has_h1") or not findings.get("h1_has_content"):
         mkt -= 2
-    if not findings.get("has_meta_title") or not findings.get("has_meta_description"):
-        mkt -= 1
+    if not findings.get("has_visible_nav"):
+        mkt -= 1  # hamburger only = penalty
+    if findings.get("has_carousel"):
+        mkt -= 1  # carousel = CRO risk
     scores_named["Marketing"] = max(0.0, round(mkt, 1))
 
     overall = (
@@ -891,13 +932,13 @@ def build_report_findings(raw: dict, base_url: str) -> list[dict]:
     ))
 
     # 14 Hero / H1
-    hero_ok = bool(raw.get("has_h1")) and raw.get("hero_cta_count", 0) > 0
+    hero_ok = bool(raw.get("h1_has_content")) and raw.get("hero_cta_count", 0) > 0
     findings.append(_finding(
         14, "Homepage Hero CTA", "LOW", "marketing",
         hero_ok,
         "Homepage has H1 + CTA elements" if hero_ok
         else "Homepage missing clear H1 or hero CTA",
-        f"H1={'yes' if raw.get('has_h1') else 'no'} "
+        f"H1={'yes' if raw.get('h1_has_content') else 'no'} "
         f"('{raw.get('h1_text', '')[:40]}'); "
         f"CTA-like elements: {raw.get('hero_cta_count', 0)}",
         "Weak hero CTAs increase bounce",
