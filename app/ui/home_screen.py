@@ -26,11 +26,11 @@ class HomeScreen(ctk.CTkFrame):
             "Upload · Scrape · Audit — all in one place",
         )
 
-        # Feature cards — equal width + equal height via uniform grid
+        # Feature cards — equal width, fixed compact height
         cards_frame = ctk.CTkFrame(content, fg_color="transparent")
         cards_frame.pack(fill="x", pady=(0, T.GRID_GAP))
         cards_frame.grid_columnconfigure((0, 1, 2), weight=1, uniform="card")
-        cards_frame.grid_rowconfigure(0, weight=1)
+        cards_frame.grid_rowconfigure(0, minsize=180, weight=0)
 
         self._feature_card(
             cards_frame, 0, "📄", "Upload File",
@@ -77,29 +77,29 @@ class HomeScreen(ctk.CTkFrame):
         padx = (0, 8) if col == 0 else (8, 0) if col == 2 else 8
         card = T.card_frame(parent)
         card.grid(row=0, column=col, padx=padx, sticky="nsew")
-
-        # Top content
-        top = ctk.CTkFrame(card, fg_color="transparent")
-        top.pack(fill="x", padx=T.CARD_PADDING, pady=(T.CARD_PADDING, 0))
+        card.configure(height=180)
+        card.pack_propagate(False)
 
         ctk.CTkLabel(
-            top, text=icon, font=T.font(28), text_color=T.TEXT_PRIMARY, anchor="w"
-        ).pack(fill="x")
+            card, text=icon, font=T.font(24), text_color=T.TEXT_PRIMARY, anchor="w",
+        ).pack(anchor="w", padx=T.CARD_PADDING, pady=(T.CARD_PADDING, 4))
+
         ctk.CTkLabel(
-            top, text=title, font=T.font_tuple(T.H3), text_color=T.TEXT_PRIMARY, anchor="w"
-        ).pack(fill="x", pady=(8, 4))
+            card, text=title, font=T.font(16, "bold"), text_color=T.TEXT_PRIMARY, anchor="w",
+        ).pack(anchor="w", padx=T.CARD_PADDING)
+
         ctk.CTkLabel(
-            top,
+            card,
             text=desc,
-            font=T.font_tuple(T.BODY),
+            font=T.font(13),
             text_color=T.TEXT_SECONDARY,
             anchor="w",
-            wraplength=220,
+            wraplength=200,
             justify="left",
-        ).pack(fill="x")
+        ).pack(anchor="w", padx=T.CARD_PADDING, pady=(4, 0))
 
-        # Spacer pushes button to card bottom
-        ctk.CTkFrame(card, fg_color="transparent").pack(fill="both", expand=True)
+        # Small fixed spacer — not expanding
+        ctk.CTkFrame(card, fg_color="transparent", height=12).pack()
 
         T.primary_button(card, btn, command).pack(
             fill="x", padx=T.CARD_PADDING, pady=(0, T.CARD_PADDING)
