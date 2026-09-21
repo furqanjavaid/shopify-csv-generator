@@ -640,5 +640,45 @@ def drafts_to_parsed_data(drafts: list[dict[str, str]]) -> dict[str, Any]:
 
 
 def crawl(url: str, progress: Optional[ProgressCallback] = None) -> dict[str, Any]:
-    """Module-level entry point used by the UI."""
-    return CollectionCrawler().crawl(url, progress=progress)
+    """
+    Module-level entry point used by the UI.
+
+    Detects Shopify via /products.json; otherwise uses Playwright HTML scraping
+    (WooCommerce / Custom).
+    """
+    from app.core.html_catalog_scraper import (
+        HtmlCatalogScraper,
+        detect_platform,
+        detect_shopify,
+    )
+
+    url = (url or "").strip()
+    if not url.startswith(("http://", "https://")):
+        raise CollectionCrawlError("URL must start with http:// or https://")
+
+    parsed = urlparse(url)
+    if not parsed.netloc:
+        raise CollectionCrawlError("Invalid URL.")
+    base_url = f"{parsed.scheme}://{parsed.netloc}"
+
+    CollectionCrawler._emit(progress, "Detecting platform…")
+    try:
+        is_shopify = detect_shopify(base_url)
+    except Exception:
+        is_shopify = False
+
+    if is_shopify:
+        CollectionCrawler._emit(progress, "Platform: Shopify")
+        result = CollectionCrawler().crawl(url, progress=progress)
+        result["platform"] = "Shopify"
+        return result
+
+    platform = detect_platform(url)
+    if platform == "Shopify":
+        # detect_platform confirmed Shopify via a second path — still use JSON crawler
+        result = CollectionCrawler().crawl(url, progress=progress)
+        result["platform"] = "Shopify"
+        return result
+
+    CollectionCrawler._emit(progress, f"Platform: {platform}")
+    return HtmlCatalogScraper().scrape(url, progress=progress, platform=platform)

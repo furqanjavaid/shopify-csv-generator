@@ -57,7 +57,7 @@ class ScraperScreen(ctk.CTkFrame):
         T.page_title(
             body,
             "URL Scraper",
-            "Extract products from any Shopify collection URL",
+            "Extract products from Shopify, WooCommerce, or any catalog URL",
         )
 
         main_area = ctk.CTkFrame(body, fg_color="transparent")
@@ -77,14 +77,55 @@ class ScraperScreen(ctk.CTkFrame):
 
         self.url_entry = T.styled_entry(
             url_inner,
-            placeholder="https://your-store.com/collections/all",
+            placeholder="https://your-store.com/collections/all or /shop",
         )
         self.url_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        self.url_entry.bind("<FocusOut>", self._on_url_changed)
+        self.url_entry.bind("<Return>", self._on_url_changed)
 
         self.scrape_btn = T.primary_button(
             url_inner, "Scrape →", self._start_scrape, width=120
         )
         self.scrape_btn.pack(side="right")
+
+        self.platform_label = ctk.CTkLabel(
+            url_card,
+            text="",
+            font=T.font_tuple(T.CAPTION),
+            text_color=T.ACCENT,
+            anchor="w",
+        )
+        self.platform_label.pack(fill="x", padx=T.CARD_PADDING, pady=(0, 6))
+
+        # Category picker (shown when homepage URL is entered)
+        self._category_options: dict[str, str] = {}  # label -> url
+        self.category_row = ctk.CTkFrame(url_card, fg_color="transparent")
+        self.category_hint = ctk.CTkLabel(
+            self.category_row,
+            text="Homepage detected — select a category to scrape:",
+            font=T.font_tuple(T.CAPTION),
+            text_color=T.TEXT_SECONDARY,
+            anchor="w",
+        )
+        self.category_hint.pack(fill="x", pady=(0, 4))
+        self.category_menu = ctk.CTkOptionMenu(
+            self.category_row,
+            values=["Select a category…"],
+            font=T.font_tuple(T.LABEL),
+            fg_color=T.BG_SURFACE_B,
+            button_color=T.ACCENT,
+            button_hover_color=T.ACCENT_HOVER,
+            text_color=T.TEXT_PRIMARY,
+            dropdown_fg_color=T.BG_SURFACE_A,
+            dropdown_hover_color=T.BG_SURFACE_B,
+            dropdown_text_color=T.TEXT_PRIMARY,
+            width=420,
+            command=self._on_category_selected,
+        )
+        self.category_menu.pack(fill="x", pady=(0, 10))
+        self.category_menu.set("Select a category…")
+        # Hidden until homepage + categories found
+        # (packed by _show_category_picker)
 
         opts = ctk.CTkFrame(top, fg_color="transparent")
         opts.pack(fill="x", pady=(0, 8))
@@ -171,6 +212,39 @@ class ScraperScreen(ctk.CTkFrame):
         self.log_box.see("end")
         self.log_box.configure(state="disabled")
 
+    def _hide_category_picker(self) -> None:
+        self._category_options = {}
+        try:
+            self.category_menu.configure(values=["Select a category…"])
+            self.category_menu.set("Select a category…")
+        except Exception:
+            pass
+        if self.category_row.winfo_ismapped():
+            self.category_row.pack_forget()
+
+    def _show_category_picker(self, categories: list[dict]) -> None:
+        if not categories:
+            self._hide_category_picker()
+            return
+        self._category_options = {
+            c["label"]: c["url"] for c in categories if c.get("label") and c.get("url")
+        }
+        labels = list(self._category_options.keys())
+        self.category_menu.configure(values=labels)
+        self.category_menu.set(labels[0])
+        if not self.category_row.winfo_ismapped():
+            self.category_row.pack(fill="x", padx=T.CARD_PADDING, after=self.platform_label)
+
+    def _on_category_selected(self, _label: str) -> None:
+        # Selection is read at scrape time; no-op otherwise
+        pass
+
+    def _selected_category_url(self) -> str | None:
+        if not self._category_options:
+            return None
+        label = self.category_menu.get()
+        return self._category_options.get(label)
+
     def _clear_results(self) -> None:
         """Reset scraper UI to initial empty state."""
         self.parsed_data = None
@@ -180,6 +254,8 @@ class ScraperScreen(ctk.CTkFrame):
         self.error_label.configure(text="")
         self.strategy_label.configure(text="")
         self.count_badge.configure(text="")
+        self.platform_label.configure(text="")
+        self._hide_category_picker()
         self.log_box.configure(state="normal")
         self.log_box.delete("1.0", "end")
         self.log_box.configure(state="disabled")
@@ -192,14 +268,52 @@ class ScraperScreen(ctk.CTkFrame):
         self.loading_label.pack_forget()
         self.scrape_btn.configure(state="normal")
 
+    def _on_url_changed(self, _event=None) -> None:
+        """Detect platform after URL entry; discover categories on homepage."""
+        url = self.url_entry.get().strip()
+        if not is_valid_url(url):
+            self.platform_label.configure(text="")
+            self._hide_category_picker()
+            return
+        self.platform_label.configure(text="Detecting platform…")
+        self._hide_category_picker()
+
+        def _detect() -> None:
+            try:
+                from app.core.html_catalog_scraper import (
+                    detect_platform,
+                    discover_category_links,
+                    is_homepage_url,
+                )
+
+                platform = detect_platform(url)
+                categories: list[dict] = []
+                if is_homepage_url(url):
+                    categories = discover_category_links(url)
+
+                def _apply() -> None:
+                    self.platform_label.configure(text=f"Detected: {platform}")
+                    if categories:
+                        self._show_category_picker(categories)
+                        self.platform_label.configure(
+                            text=f"Detected: {platform} · {len(categories)} categories found"
+                        )
+                    else:
+                        self._hide_category_picker()
+
+                self.after(0, _apply)
+            except Exception:
+                self.after(0, lambda: self.platform_label.configure(text=""))
+                self.after(0, self._hide_category_picker)
+
+        threading.Thread(target=_detect, daemon=True).start()
+
     def _start_scrape(self) -> None:
         url = self.url_entry.get().strip()
         self.error_label.configure(text="")
         self.strategy_label.configure(text="")
         self.count_badge.configure(text="")
         self.parsed_data = None
-        self.source_url = url
-        self.suggested_filename = output_filename_from_url(url)
         self._disable_actions()
         self._clear_preview()
 
@@ -210,6 +324,34 @@ class ScraperScreen(ctk.CTkFrame):
         if not is_valid_url(url):
             self.error_label.configure(text="URL must start with http:// or https://")
             return
+
+        # Homepage → require category selection
+        from app.core.html_catalog_scraper import is_homepage_url
+
+        if is_homepage_url(url):
+            cat_url = self._selected_category_url()
+            if self._category_options:
+                if not cat_url:
+                    self.error_label.configure(
+                        text="Select a category from the dropdown before scraping."
+                    )
+                    return
+                url = cat_url
+                self._append_log(f"Using category: {self.category_menu.get()}")
+            elif not self.category_row.winfo_ismapped():
+                # Categories still loading or none found — try discover sync message
+                self.error_label.configure(
+                    text="This looks like a homepage. Wait for categories to load, or paste a category URL."
+                )
+                # Kick detection if needed
+                self._on_url_changed()
+                return
+
+        self.source_url = url
+        self.suggested_filename = output_filename_from_url(url)
+
+        if not self.platform_label.cget("text"):
+            self.platform_label.configure(text="Detecting platform…")
 
         self.scrape_btn.configure(state="disabled")
         self.loading_label.pack(pady=(0, 4))
@@ -248,8 +390,12 @@ class ScraperScreen(ctk.CTkFrame):
         extra = f"  ·  {len(errors)} error(s)" if errors else ""
         self.suggested_filename = output_filename_from_url(self.source_url)
         self.count_badge.configure(text=f"{count} products found{extra}")
+        platform = data.get("platform") or ""
+        strategy = data.get("strategy_used", "")
+        if platform:
+            self.platform_label.configure(text=f"Detected: {platform}")
         self.strategy_label.configure(
-            text=f"{data.get('strategy_used', '')}  ·  → {self.suggested_filename}"
+            text=f"{strategy}  ·  → {self.suggested_filename}"
         )
         from app.utils.task_history import save_task
 
