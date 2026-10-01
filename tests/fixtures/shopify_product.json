@@ -1,0 +1,55 @@
+{
+  "id": 1001,
+  "title": "Classic Tee",
+  "handle": "classic-tee",
+  "body_html": "<p>Soft cotton classic tee for everyday wear.</p>",
+  "vendor": "Acme Apparel",
+  "product_type": "T-Shirts",
+  "tags": ["cotton", "basics"],
+  "options": [
+    {"name": "Size", "values": ["S", "M", "L"]},
+    {"name": "Color", "values": ["Black", "White"]}
+  ],
+  "images": [
+    {"src": "https://cdn.example.com/classic-tee-black.jpg", "alt": "Classic Tee"},
+    {"src": "https://cdn.example.com/classic-tee-white.jpg", "alt": "Classic Tee White"}
+  ],
+  "variants": [
+    {
+      "sku": "CT-S-BLK",
+      "barcode": "111",
+      "option1": "S",
+      "option2": "Black",
+      "option3": null,
+      "price": "19.99",
+      "compare_at_price": "24.99",
+      "inventory_quantity": 12,
+      "available": true,
+      "grams": 200
+    },
+    {
+      "sku": "CT-M-BLK",
+      "barcode": "112",
+      "option1": "M",
+      "option2": "Black",
+      "option3": null,
+      "price": "19.99",
+      "compare_at_price": "24.99",
+      "inventory_quantity": 8,
+      "available": true,
+      "grams": 210
+    },
+    {
+      "sku": "CT-S-WHT",
+      "barcode": "113",
+      "option1": "S",
+      "option2": "White",
+      "option3": null,
+      "price": "19.99",
+      "compare_at_price": null,
+      "inventory_quantity": 5,
+      "available": true,
+      "grams": 200
+    }
+  ]
+}

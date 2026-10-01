@@ -1,8 +1,10 @@
-"""File upload screen — dashed drop zone + step progress."""
+"""File upload screen — mockup layout, existing parse → mapping flow."""
 
 from __future__ import annotations
 
 import os
+from datetime import datetime
+from pathlib import Path
 from tkinter import filedialog
 
 import customtkinter as ctk
@@ -11,11 +13,12 @@ from app.core.file_parser import FileParser
 from app.ui import theme as T
 from app.ui.sidebar import attach_sidebar
 from app.utils.helpers import output_filename_from_upload
+from app.utils.job_status import TOOL_FILE_UPLOAD
 from app.utils.task_history import save_task
 
 
 class UploadScreen(ctk.CTkFrame):
-    """Select a CSV/Excel file and preview the first rows."""
+    """Select a CSV/Excel file and continue to column mapping."""
 
     def __init__(self, parent, app, **kwargs):
         super().__init__(parent, fg_color=T.BG_PRIMARY, corner_radius=0)
@@ -24,133 +27,216 @@ class UploadScreen(ctk.CTkFrame):
         self.parsed_data: dict | None = None
         self.suggested_filename: str = "shopify_products.csv"
         self._hover_pulse = False
-
-        # Persistent bottom bar FIRST
-        self.bottom_bar = ctk.CTkFrame(
-            self, fg_color=T.BG_SURFACE_A, height=64, corner_radius=0,
-            border_width=1, border_color=T.BORDER,
-        )
-        self.bottom_bar.pack(side="bottom", fill="x")
-        self.bottom_bar.pack_propagate(False)
-
-        self.next_btn = ctk.CTkButton(
-            self.bottom_bar,
-            text="Next: Map Columns →",
-            command=self._go_mapping,
-            width=200,
-            **T.primary_btn(),
-        )
-        self.next_btn.pack(side="right", padx=16, pady=12)
-        self.next_btn.configure(
-            state="disabled", fg_color=T.BG_SURFACE_B, text_color=T.TEXT_MUTED
-        )
+        self._uploaded_meta: dict | None = None
 
         body = attach_sidebar(self, app, "upload")
+        body.grid_rowconfigure(3, weight=1)
 
-        # Title row + step indicator
-        top = ctk.CTkFrame(body, fg_color="transparent")
-        top.pack(fill="x", pady=(0, T.GRID_GAP))
-        title_wrap = ctk.CTkFrame(top, fg_color="transparent")
-        title_wrap.pack(side="left", fill="x", expand=True)
+        # Header
+        header = ctk.CTkFrame(body, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 16))
         ctk.CTkLabel(
-            title_wrap, text="Upload Product File",
-            font=T.font_tuple(T.H1), text_color=T.TEXT_PRIMARY, anchor="w",
-            wraplength=520,
-        ).pack(fill="x")
+            header, text="File Upload", font=T.font_tuple(T.H1), text_color=T.HEADING, anchor="w"
+        ).grid(row=0, column=0, sticky="w")
         ctk.CTkLabel(
-            title_wrap, text="Import a client spreadsheet to begin mapping",
-            font=T.font_tuple(T.BODY), text_color=T.TEXT_SECONDARY, anchor="w",
-            wraplength=520,
-        ).pack(fill="x", pady=(4, 0))
-        T.step_indicator(top, current=1, total=4).pack(side="right", padx=(12, 0))
+            header,
+            text="Import your data files (CSV and Excel) to process and extract valuable information.",
+            font=T.font_tuple(T.BODY),
+            text_color=T.TEXT_SECONDARY,
+            anchor="w",
+            wraplength=720,
+        ).grid(row=1, column=0, sticky="w", pady=(4, 0))
 
-        # Drop zone
-        self.drop_zone = ctk.CTkFrame(
-            body,
-            fg_color=T.BG_SURFACE_A,
-            corner_radius=T.BORDER_RADIUS,
-            border_width=2,
-            border_color=T.BORDER,
-            height=150,
-        )
-        self.drop_zone.pack(fill="x", pady=(0, 12))
-        self.drop_zone.pack_propagate(False)
+        # Upload card
+        upload_card = T.card_frame(body)
+        upload_card.grid(row=1, column=0, sticky="ew", pady=(0, 16))
+        upload_card.grid_columnconfigure(0, weight=1)
+        dz = ctk.CTkFrame(upload_card, fg_color="transparent")
+        dz.grid(row=0, column=0, sticky="ew", padx=24, pady=28)
+        dz.grid_columnconfigure(0, weight=1)
+        self.drop_zone = dz
 
-        dz_inner = ctk.CTkFrame(self.drop_zone, fg_color="transparent")
-        dz_inner.place(relx=0.5, rely=0.5, anchor="center")
-
-        ctk.CTkLabel(dz_inner, text="📄", font=T.font(28)).pack()
+        ctk.CTkLabel(dz, text="📄", font=T.font(32), text_color=T.HEADING).grid(row=0, column=0)
         ctk.CTkLabel(
-            dz_inner, text="Click to select file or drag & drop",
-            font=T.font_tuple(T.H3), text_color=T.TEXT_PRIMARY,
-            wraplength=400,
-        ).pack(pady=(4, 2))
+            dz,
+            text="Drag and drop your files here or click to browse and select files",
+            font=T.font(15, "bold"),
+            text_color=T.HEADING,
+            wraplength=560,
+        ).grid(row=1, column=0, pady=(10, 14))
+        self.choose_btn = T.primary_button(dz, "Choose Files", self._pick_file, width=160)
+        self.choose_btn.grid(row=2, column=0)
         ctk.CTkLabel(
-            dz_inner, text=".csv  ·  .xlsx  ·  .xls",
-            font=T.font_tuple(T.CAPTION), text_color=T.TEXT_MUTED,
-            wraplength=400,
-        ).pack()
-        ctk.CTkLabel(
-            dz_inner, text="─ ─ ─ ─ ─ ─ ─ ─",
-            font=T.font_tuple(T.CAPTION), text_color=T.BORDER,
-        ).pack(pady=(6, 0))
-
-        for w in (self.drop_zone, dz_inner, *dz_inner.winfo_children()):
+            dz,
+            text="Supports CSV and Excel files (.csv, .xlsx, .xls) up to 50MB per file",
+            font=T.font_tuple(T.CAPTION),
+            text_color=T.TEXT_MUTED,
+        ).grid(row=3, column=0, pady=(12, 0))
+        for w in (dz, *dz.winfo_children()):
             w.bind("<Button-1>", lambda _e: self._pick_file())
             w.bind("<Enter>", self._drop_enter)
             w.bind("<Leave>", self._drop_leave)
 
-        self.status_pill = ctk.CTkFrame(body, fg_color="transparent")
-        self.status_pill.pack(fill="x", pady=(0, 8))
+        # Stats row
+        stats = ctk.CTkFrame(body, fg_color="transparent")
+        stats.grid(row=2, column=0, sticky="ew", pady=(0, 16))
+        stats.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="st")
+        self._stat_values = {}
+        for col, (key, title, icon) in enumerate(
+            (
+                ("files", "Files uploaded", "▤"),
+                ("valid", "Valid files", "✓"),
+                ("issues", "Issues found", "⚠"),
+                ("rows", "Total rows", "▣"),
+            )
+        ):
+            card = T.card_frame(stats)
+            card.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 8, 0))
+            inner = ctk.CTkFrame(card, fg_color="transparent")
+            inner.grid(row=0, column=0, sticky="ew", padx=16, pady=14)
+            ctk.CTkLabel(
+                inner, text=f"{icon}  {title}", font=T.font(12), text_color=T.TEXT_MUTED, anchor="w"
+            ).grid(row=0, column=0, sticky="w")
+            val = ctk.CTkLabel(
+                inner, text="0", font=T.font(24, "bold"), text_color=T.HEADING, anchor="w"
+            )
+            val.grid(row=1, column=0, sticky="w", pady=(4, 0))
+            self._stat_values[key] = val
+
+        # Bottom: files table + side panels
+        bottom = ctk.CTkFrame(body, fg_color="transparent")
+        bottom.grid(row=3, column=0, sticky="nsew")
+        bottom.grid_columnconfigure(0, weight=7)
+        bottom.grid_columnconfigure(1, weight=3)
+        bottom.grid_rowconfigure(0, weight=1)
+
+        files_card = T.card_frame(bottom)
+        files_card.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        files_card.grid_columnconfigure(0, weight=1)
+        files_card.grid_rowconfigure(1, weight=1)
+        ctk.CTkLabel(
+            files_card,
+            text="Uploaded Files",
+            font=T.font(16, "bold"),
+            text_color=T.HEADING,
+            anchor="w",
+        ).grid(row=0, column=0, sticky="w", padx=18, pady=(16, 8))
+        self.files_table = ctk.CTkFrame(files_card, fg_color="transparent")
+        self.files_table.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 8))
+        self.files_table.grid_columnconfigure((0, 1, 2, 3, 4, 5), weight=1)
+        for col, h in enumerate(("#", "File Name", "Format", "Size", "Rows", "Status")):
+            ctk.CTkLabel(
+                self.files_table, text=h, font=T.font(11, "bold"), text_color=T.TEXT_MUTED, anchor="w"
+            ).grid(row=0, column=col, sticky="ew", padx=4)
+        self.files_empty = ctk.CTkLabel(
+            self.files_table,
+            text="No files uploaded yet",
+            font=T.font(13),
+            text_color=T.TEXT_MUTED,
+            anchor="w",
+        )
+        self.files_empty.grid(row=1, column=0, columnspan=6, sticky="w", padx=4, pady=16)
+
+        self.next_btn = T.primary_button(
+            files_card, "Process Files →", self._go_mapping, width=220
+        )
+        self.next_btn.grid(row=2, column=0, sticky="ew", padx=18, pady=(4, 8))
+        self.next_btn.configure(state="disabled", fg_color=T.BORDER, text_color=T.TEXT_MUTED)
+        ctk.CTkLabel(
+            files_card,
+            text="Process all valid files to extract and analyse the data.",
+            font=T.font_tuple(T.CAPTION),
+            text_color=T.TEXT_MUTED,
+            anchor="w",
+        ).grid(row=3, column=0, sticky="w", padx=18, pady=(0, 16))
+
+        side = ctk.CTkFrame(bottom, fg_color="transparent")
+        side.grid(row=0, column=1, sticky="nsew")
+        side.grid_columnconfigure(0, weight=1)
+        side.grid_rowconfigure(1, weight=1)
+
+        formats = T.card_frame(side)
+        formats.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        formats.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            formats, text="Accepted Formats", font=T.font(14, "bold"), text_color=T.HEADING, anchor="w"
+        ).grid(row=0, column=0, sticky="w", padx=16, pady=(14, 8))
+        for i, (name, badge) in enumerate((("CSV Files", "CSV"), ("Excel Files", "XLSX"))):
+            row = ctk.CTkFrame(formats, fg_color="transparent")
+            row.grid(row=i + 1, column=0, sticky="ew", padx=16, pady=4)
+            row.grid_columnconfigure(0, weight=1)
+            ctk.CTkLabel(row, text=name, font=T.font(13), text_color=T.TEXT_PRIMARY, anchor="w").grid(
+                row=0, column=0, sticky="w"
+            )
+            ctk.CTkLabel(
+                row,
+                text=f" {badge} ",
+                font=T.font(11, "bold"),
+                text_color=T.HEADING,
+                fg_color=T.ACCENT_DIM,
+                corner_radius=4,
+            ).grid(row=0, column=1, sticky="e")
+        ctk.CTkLabel(
+            formats,
+            text="Multiple uploads supported. Max 50MB per file.",
+            font=T.font(11),
+            text_color=T.TEXT_MUTED,
+            wraplength=220,
+            anchor="w",
+            justify="left",
+        ).grid(row=3, column=0, sticky="w", padx=16, pady=(8, 14))
+
+        recent = T.card_frame(side)
+        recent.grid(row=1, column=0, sticky="nsew")
+        recent.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            recent, text="Recent Uploads", font=T.font(14, "bold"), text_color=T.HEADING, anchor="w"
+        ).grid(row=0, column=0, sticky="w", padx=16, pady=(14, 8))
+        self.recent_host = ctk.CTkFrame(recent, fg_color="transparent")
+        self.recent_host.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 14))
+        self.recent_host.grid_columnconfigure(0, weight=1)
+        self._render_recent_empty()
 
         self.error_label = ctk.CTkLabel(
-            body, text="", font=T.font_tuple(T.CAPTION), text_color=T.ERROR,
-            wraplength=560, justify="left", anchor="w",
+            body, text="", font=T.font_tuple(T.CAPTION), text_color=T.ERROR, anchor="w"
         )
-        self.error_label.pack(fill="x")
+        self.error_label.grid(row=4, column=0, sticky="ew", pady=(8, 0))
 
-        # Preview card — hidden until a file is parsed
+        # Hidden preview host (keeps preview logic available)
         self.preview_card = T.card_frame(body)
-        ctk.CTkLabel(
-            self.preview_card, text="Preview",
-            font=T.font(12, "bold"), text_color=T.TEXT_SECONDARY, anchor="w",
-            wraplength=400,
-        ).pack(fill="x", padx=T.CARD_PADDING, pady=(12, 4))
-
         self.preview_frame = ctk.CTkScrollableFrame(
             self.preview_card,
             fg_color=T.BG_SURFACE_B,
             orientation="horizontal",
             corner_radius=T.BORDER_RADIUS,
-            height=160,
+            height=120,
         )
-        self.preview_frame.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        self.preview_frame.grid(row=0, column=0, sticky="ew", padx=12, pady=12)
+        self.preview_card.grid_remove()
 
-    def _show_preview_card(self) -> None:
-        if not self.preview_card.winfo_ismapped():
-            self.preview_card.pack(fill="both", expand=True, pady=(4, 12))
-
-    def _hide_preview_card(self) -> None:
-        self.preview_card.pack_forget()
+    def _render_recent_empty(self) -> None:
+        for child in self.recent_host.winfo_children():
+            child.destroy()
+        ctk.CTkLabel(
+            self.recent_host,
+            text="No recent uploads",
+            font=T.font(12),
+            text_color=T.TEXT_MUTED,
+            anchor="w",
+        ).grid(row=0, column=0, sticky="w")
 
     def _drop_enter(self, _e=None) -> None:
-        self.drop_zone.configure(border_color=T.ACCENT)
-        if not self._hover_pulse:
-            self._hover_pulse = True
-            self._pulse_border(0)
+        self.choose_btn.configure(fg_color=T.ACCENT_HOVER)
 
     def _drop_leave(self, _e=None) -> None:
-        self._hover_pulse = False
-        self.drop_zone.configure(border_color=T.BORDER)
-
-    def _pulse_border(self, step: int) -> None:
-        if not self._hover_pulse:
-            return
-        colors = [T.ACCENT, T.BORDER_HOVER, T.ACCENT, T.WARNING]
-        self.drop_zone.configure(border_color=colors[step % len(colors)])
-        self.after(400, lambda: self._pulse_border(step + 1))
+        self.choose_btn.configure(fg_color=T.ACCENT)
 
     def _pick_file(self) -> None:
+        store = getattr(self.app, "job_status", None)
+        if store is not None and store.is_running(TOOL_FILE_UPLOAD):
+            self.error_label.configure(text="Already running")
+            return
+
         path = filedialog.askopenfilename(
             title="Select product file",
             filetypes=[
@@ -164,75 +250,101 @@ class UploadScreen(ctk.CTkFrame):
             return
 
         self.error_label.configure(text="")
-        for child in self.status_pill.winfo_children():
-            child.destroy()
+        if store is not None and not store.try_begin(TOOL_FILE_UPLOAD):
+            self.error_label.configure(text="Already running")
+            return
 
         try:
             parser = FileParser()
             self.parsed_data = parser.parse(path)
             self.filepath = path
             self.suggested_filename = output_filename_from_upload(path)
-            filename = path.replace("\\", "/").split("/")[-1]
+            filename = Path(path).name
             save_task("Upload", os.path.basename(path), "Success")
-
-            T.pill(
-                self.status_pill, f"✓  {filename}", T.ACCENT_DIM, T.ACCENT
-            ).pack(side="left", padx=(0, 8))
-            T.pill(
-                self.status_pill,
-                f"{self.parsed_data['row_count']} rows · {len(self.parsed_data['headers'])} cols",
-                T.BG_SURFACE_B,
-                T.TEXT_SECONDARY,
-            ).pack(side="left")
-
-            self._show_preview_card()
-            self._render_preview()
+            size_kb = max(1, Path(path).stat().st_size // 1024)
+            fmt = Path(path).suffix.lstrip(".").upper() or "CSV"
+            self._uploaded_meta = {
+                "name": filename,
+                "format": fmt,
+                "size": f"{size_kb} KB",
+                "rows": str(self.parsed_data.get("row_count") or 0),
+                "status": "Valid",
+                "when": datetime.now().strftime("%H:%M"),
+            }
+            self._refresh_file_ui(ok=True)
             self.next_btn.configure(
-                state="normal", fg_color=T.ACCENT, text_color=T.BG_PRIMARY
+                state="normal", fg_color=T.ACCENT, text_color=T.BTN_ON_ACCENT
             )
-            self.drop_zone.configure(border_color=T.ACCENT)
         except ValueError as exc:
             self.parsed_data = None
             self.filepath = None
             self.suggested_filename = "shopify_products.csv"
             self.error_label.configure(text=str(exc))
-            self.next_btn.configure(
-                state="disabled", fg_color=T.BG_SURFACE_B, text_color=T.TEXT_MUTED
-            )
-            self._clear_preview()
-            self._hide_preview_card()
+            self._uploaded_meta = {
+                "name": Path(path).name,
+                "format": Path(path).suffix.lstrip(".").upper(),
+                "size": "—",
+                "rows": "0",
+                "status": "Validation Error",
+                "when": datetime.now().strftime("%H:%M"),
+            }
+            self._refresh_file_ui(ok=False)
+            self.next_btn.configure(state="disabled", fg_color=T.BORDER, text_color=T.TEXT_MUTED)
+        finally:
+            if store is not None:
+                store.set_idle(tool_id=TOOL_FILE_UPLOAD)
 
-    def _clear_preview(self) -> None:
-        for child in self.preview_frame.winfo_children():
-            child.destroy()
+    def _refresh_file_ui(self, *, ok: bool) -> None:
+        meta = self._uploaded_meta or {}
+        self._stat_values["files"].configure(text="1")
+        self._stat_values["valid"].configure(text="1" if ok else "0")
+        self._stat_values["issues"].configure(text="0" if ok else "1")
+        self._stat_values["rows"].configure(text=meta.get("rows") or "0")
 
-    def _render_preview(self) -> None:
-        self._clear_preview()
-        if not self.parsed_data:
-            return
+        self.files_empty.grid_remove()
+        # clear previous data rows (keep header row 0)
+        for child in self.files_table.winfo_children():
+            info = child.grid_info()
+            if info and int(info.get("row", 0)) > 0 and child is not self.files_empty:
+                child.destroy()
 
-        headers = self.parsed_data["headers"]
-        rows = self.parsed_data["rows"][:5]
-
-        for col_idx, header in enumerate(headers):
-            col = ctk.CTkFrame(self.preview_frame, fg_color="transparent")
-            col.grid(row=0, column=col_idx, padx=4, sticky="nw")
-
+        status_color = T.SUCCESS if ok else T.ERROR
+        vals = (
+            "1",
+            meta.get("name", ""),
+            meta.get("format", ""),
+            meta.get("size", ""),
+            meta.get("rows", ""),
+            f"● {meta.get('status', '')}",
+        )
+        colors = (
+            T.TEXT_MUTED,
+            T.TEXT_PRIMARY,
+            T.TEXT_SECONDARY,
+            T.TEXT_SECONDARY,
+            T.TEXT_SECONDARY,
+            status_color,
+        )
+        for col, (text, tc) in enumerate(zip(vals, colors)):
             ctk.CTkLabel(
-                col, text=header, font=T.font(11, "bold"),
-                text_color=T.ACCENT, width=120, anchor="w",
-                fg_color=T.BG_SURFACE_A, corner_radius=T.BORDER_RADIUS,
-                wraplength=110,
-            ).pack(anchor="w", pady=(0, 4), ipady=2)
+                self.files_table, text=text, font=T.font(12), text_color=tc, anchor="w"
+            ).grid(row=1, column=col, sticky="ew", padx=4, pady=6)
 
-            for i, row in enumerate(rows):
-                value = str(row.get(header, ""))[:40]
-                bg = T.BG_SURFACE_A if i % 2 == 0 else T.BG_SURFACE_B
-                ctk.CTkLabel(
-                    col, text=value or "—", font=T.font(11),
-                    text_color=T.TEXT_SECONDARY, width=120, anchor="w",
-                    fg_color=bg, wraplength=110,
-                ).pack(anchor="w", ipady=2)
+        for child in self.recent_host.winfo_children():
+            child.destroy()
+        row = ctk.CTkFrame(self.recent_host, fg_color="transparent")
+        row.grid(row=0, column=0, sticky="ew")
+        row.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            row, text=meta.get("name", ""), font=T.font(12), text_color=T.TEXT_PRIMARY, anchor="w"
+        ).grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(
+            row,
+            text=f"● {meta.get('status', '')}  {meta.get('when', '')}",
+            font=T.font(11),
+            text_color=status_color,
+            anchor="e",
+        ).grid(row=0, column=1, sticky="e")
 
     def _go_mapping(self) -> None:
         if not self.parsed_data:

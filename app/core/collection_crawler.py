@@ -639,12 +639,21 @@ def drafts_to_parsed_data(drafts: list[dict[str, str]]) -> dict[str, Any]:
     }
 
 
-def crawl(url: str, progress: Optional[ProgressCallback] = None) -> dict[str, Any]:
+def crawl(
+    url: str,
+    progress: Optional[ProgressCallback] = None,
+    *,
+    category_name: str = "",
+    categories: Optional[list] = None,
+) -> dict[str, Any]:
     """
     Module-level entry point used by the UI.
 
     Detects Shopify via /products.json; otherwise uses Playwright HTML scraping
     (WooCommerce / Custom).
+
+    ``category_name`` / ``categories`` apply to non-Shopify HTML scraping only.
+    When ``categories`` is a list of {label, url}, all are scraped and deduped.
     """
     from app.core.html_catalog_scraper import (
         HtmlCatalogScraper,
@@ -653,8 +662,38 @@ def crawl(url: str, progress: Optional[ProgressCallback] = None) -> dict[str, An
     )
 
     url = (url or "").strip()
-    if not url.startswith(("http://", "https://")):
+    if not url.startswith(("http://", "https://")) and not categories:
         raise CollectionCrawlError("URL must start with http:// or https://")
+
+    if categories:
+        # All-categories HTML scrape — pick a representative URL for platform detect
+        sample = next(
+            (c.get("url") for c in categories if c.get("url")),
+            url,
+        )
+        if not sample or not str(sample).startswith(("http://", "https://")):
+            raise CollectionCrawlError("No valid category URLs to scrape.")
+        parsed = urlparse(str(sample))
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+        CollectionCrawler._emit(progress, "Detecting platform…")
+        try:
+            is_shopify = detect_shopify(base_url)
+        except Exception:
+            is_shopify = False
+        if is_shopify:
+            # Shopify has no multi-category HTML mode here — crawl first category URL
+            CollectionCrawler._emit(progress, "Platform: Shopify")
+            result = CollectionCrawler().crawl(str(sample), progress=progress)
+            result["platform"] = "Shopify"
+            return result
+        platform = detect_platform(str(sample))
+        CollectionCrawler._emit(progress, f"Platform: {platform}")
+        return HtmlCatalogScraper().scrape(
+            str(sample),
+            progress=progress,
+            platform=platform,
+            categories=categories,
+        )
 
     parsed = urlparse(url)
     if not parsed.netloc:
@@ -675,10 +714,14 @@ def crawl(url: str, progress: Optional[ProgressCallback] = None) -> dict[str, An
 
     platform = detect_platform(url)
     if platform == "Shopify":
-        # detect_platform confirmed Shopify via a second path — still use JSON crawler
         result = CollectionCrawler().crawl(url, progress=progress)
         result["platform"] = "Shopify"
         return result
 
     CollectionCrawler._emit(progress, f"Platform: {platform}")
-    return HtmlCatalogScraper().scrape(url, progress=progress, platform=platform)
+    return HtmlCatalogScraper().scrape(
+        url,
+        progress=progress,
+        platform=platform,
+        category_name=category_name,
+    )

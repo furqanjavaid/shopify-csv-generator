@@ -2,116 +2,168 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import customtkinter as ctk
+from PIL import Image
 
 from app.ui import theme as T
 from app.ui.theme import current_colors
 
-# page_id -> (label, screen factory key)
+ASSETS_DIR = Path(__file__).resolve().parents[2] / "assets"
+LOGO_PATH = ASSETS_DIR / "sentivo-tools-logo.png"
+LOGO_MAX_WIDTH = 180
+
 NAV_ITEMS = [
-    ("home", "Home"),
-    ("upload", "File Upload"),
-    ("scraper", "URL Scraper"),
-    ("audit", "Store Auditor"),
-    ("converter", "🖼️ Image Converter"),
-    ("settings", "Settings"),
+    ("home", "Home", "⌂"),
+    ("upload", "File Upload", "◫"),
+    ("scraper", "URL Scraper", "↗"),
+    ("audit", "Store Auditor", "◎"),
+    ("converter", "Image Converter", "▣"),
+    ("settings", "Settings", "⚙"),
 ]
 
 
+def _load_sidebar_logo() -> ctk.CTkImage | None:
+    if not LOGO_PATH.exists():
+        return None
+    try:
+        img = Image.open(LOGO_PATH)
+        w, h = img.size
+        if w <= 0 or h <= 0:
+            return None
+        new_w = min(LOGO_MAX_WIDTH, w)
+        new_h = max(1, int(round(h * (new_w / w))))
+        return ctk.CTkImage(light_image=img, dark_image=img, size=(new_w, new_h))
+    except Exception:
+        return None
+
+
 class Sidebar(ctk.CTkFrame):
-    """220px left nav. Pass active_page: home | upload | scraper | audit | settings."""
+    """Navy left nav matching brand mockups."""
 
     def __init__(self, master, app, active_page: str = "home", **kwargs):
         c = current_colors()
         super().__init__(
             master,
             width=T.SIDEBAR_WIDTH,
-            fg_color=c["BG_SURFACE_A"],
+            fg_color=c["SIDEBAR_BG"],
             corner_radius=0,
             border_width=0,
             **kwargs,
         )
         self.app = app
         self.active_page = active_page
-        self.pack_propagate(False)
+        self.grid_propagate(False)
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+        self._logo_image = None
         self._build()
 
     def _build(self) -> None:
         c = current_colors()
-        self.configure(fg_color=c["BG_SURFACE_A"])
+        self.configure(fg_color=c["SIDEBAR_BG"])
 
-        # Right edge border (stands out in light mode)
-        self._edge = ctk.CTkFrame(
-            self, width=1, fg_color=c["BORDER"], corner_radius=0
-        )
-        self._edge.place(relx=1.0, rely=0, relheight=1.0, x=0, anchor="ne")
-
-        # Brand
         brand = ctk.CTkFrame(self, fg_color="transparent")
-        brand.pack(fill="x", padx=T.CARD_PADDING, pady=(28, 24))
-        ctk.CTkLabel(
-            brand,
-            text="Sentivo Tools",
-            font=T.font_tuple(T.H2),
-            text_color=c["TEXT_PRIMARY"],
-            anchor="w",
-        ).pack(fill="x")
+        brand.grid(row=0, column=0, sticky="ew", padx=16, pady=(24, 16))
+        brand.grid_columnconfigure(0, weight=1)
+
+        self._logo_image = _load_sidebar_logo()
+        if self._logo_image is not None:
+            ctk.CTkLabel(
+                brand, text="", image=self._logo_image, fg_color="transparent", anchor="w"
+            ).grid(row=0, column=0, sticky="w")
+        else:
+            ctk.CTkLabel(
+                brand,
+                text="Sentivo Tools",
+                font=T.font_tuple(T.H2),
+                text_color=c["SIDEBAR_TEXT"],
+                anchor="w",
+            ).grid(row=0, column=0, sticky="w")
+
         ctk.CTkLabel(
             brand,
             text="by Sentivo Limited",
-            font=T.font_tuple(T.CAPTION),
-            text_color=c["TEXT_MUTED"],
+            font=T.font(11),
+            text_color=c["GOLD"],
             anchor="w",
-            wraplength=180,
-        ).pack(fill="x", pady=(2, 0))
+        ).grid(row=1, column=0, sticky="w", pady=(6, 0))
 
-        # Nav items
         nav = ctk.CTkFrame(self, fg_color="transparent")
-        nav.pack(fill="x", padx=8)
+        nav.grid(row=1, column=0, sticky="nsew", padx=8, pady=(8, 0))
+        nav.grid_columnconfigure(0, weight=1)
 
-        for page_id, label in NAV_ITEMS:
-            self._nav_item(nav, page_id, label)
+        for i, (page_id, label, icon) in enumerate(NAV_ITEMS):
+            self._nav_item(nav, i, page_id, label, icon)
 
-        # Footer version
         foot = ctk.CTkFrame(self, fg_color="transparent")
-        foot.pack(side="bottom", fill="x", padx=T.CARD_PADDING, pady=16)
+        foot.grid(row=2, column=0, sticky="ew", padx=16, pady=16)
+        foot.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
             foot,
-            text="v1.0",
+            text="v1.0.0",
             font=T.font_tuple(T.CAPTION),
-            text_color=c["TEXT_MUTED"],
+            text_color=c["SIDEBAR_MUTED"],
             anchor="w",
-        ).pack(fill="x")
+        ).grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(
+            foot,
+            text="Sentivo Tools",
+            font=T.font(11),
+            text_color=c["SIDEBAR_MUTED"],
+            anchor="w",
+        ).grid(row=1, column=0, sticky="w", pady=(2, 0))
+        ctk.CTkLabel(
+            foot,
+            text="by Sentivo Limited",
+            font=T.font(10),
+            text_color=c["GOLD"],
+            anchor="w",
+        ).grid(row=2, column=0, sticky="w")
 
-    def _nav_item(self, parent, page_id: str, label: str) -> None:
+    def _nav_item(self, parent, row: int, page_id: str, label: str, icon: str) -> None:
         c = current_colors()
         active = page_id == self.active_page
-        row = ctk.CTkFrame(parent, fg_color="transparent", height=T.ROW_HEIGHT)
-        row.pack(fill="x", pady=2)
-        row.pack_propagate(False)
+        wrap = ctk.CTkFrame(
+            parent,
+            fg_color=c["SIDEBAR_ACTIVE_BORDER"] if active else "transparent",
+            height=T.ROW_HEIGHT,
+            corner_radius=6,
+        )
+        wrap.grid(row=row, column=0, sticky="ew", pady=2)
+        wrap.grid_propagate(False)
+        wrap.grid_columnconfigure(1, weight=1)
 
-        # Active left accent bar
         accent = ctk.CTkFrame(
-            row,
-            width=3,
-            fg_color=c["ACCENT"] if active else "transparent",
+            wrap,
+            width=4,
+            fg_color=c["SIDEBAR_ACTIVE_BORDER"] if active else "transparent",
             corner_radius=0,
         )
-        accent.pack(side="left", fill="y")
+        accent.grid(row=0, column=0, sticky="ns")
+
+        inner = ctk.CTkFrame(
+            wrap,
+            fg_color=c["SIDEBAR_ACTIVE_BORDER"] if active else "transparent",
+            corner_radius=6,
+        )
+        inner.grid(row=0, column=1, sticky="nsew", padx=(0, 2), pady=2)
+        inner.grid_columnconfigure(0, weight=1)
 
         btn = ctk.CTkButton(
-            row,
-            text=label,
+            inner,
+            text=f"  {icon}   {label}",
             anchor="w",
             fg_color="transparent",
-            hover_color=c["BG_SURFACE_B"],
-            text_color=c["TEXT_PRIMARY"] if active else c["TEXT_SECONDARY"],
+            hover_color=c["SIDEBAR_HOVER"],
+            text_color=c["SIDEBAR_TEXT"],
             font=T.font_tuple(T.LABEL),
-            corner_radius=T.BORDER_RADIUS,
-            height=T.ROW_HEIGHT - 4,
+            corner_radius=4,
+            height=T.ROW_HEIGHT - 8,
             command=lambda p=page_id: self._navigate(p),
         )
-        btn.pack(side="left", fill="both", expand=True, padx=(8, 4), pady=2)
+        btn.grid(row=0, column=0, sticky="ew", padx=4)
 
     def _navigate(self, page_id: str) -> None:
         if page_id == self.active_page:
@@ -144,18 +196,24 @@ class Sidebar(ctk.CTkFrame):
 
 def attach_sidebar(parent, app, active_page: str) -> ctk.CTkFrame:
     """
-    Pack sidebar + return the main content frame (BG_PRIMARY, padded).
-    Use on every screen for consistent layout.
+    Attach navy sidebar + return main content frame.
+    Content area uses grid; shell uses pack only where required by parent.
     """
     c = current_colors()
     shell = ctk.CTkFrame(parent, fg_color=c["BG_PRIMARY"], corner_radius=0)
     shell.pack(fill="both", expand=True)
+    shell.grid_columnconfigure(1, weight=1)
+    shell.grid_rowconfigure(0, weight=1)
 
-    Sidebar(shell, app, active_page=active_page).pack(side="left", fill="y")
+    Sidebar(shell, app, active_page=active_page).grid(row=0, column=0, sticky="ns")
 
     content = ctk.CTkFrame(shell, fg_color=c["BG_PRIMARY"], corner_radius=0)
-    content.pack(side="left", fill="both", expand=True)
+    content.grid(row=0, column=1, sticky="nsew")
+    content.grid_columnconfigure(0, weight=1)
+    content.grid_rowconfigure(0, weight=1)
 
     inner = ctk.CTkFrame(content, fg_color="transparent")
-    inner.pack(fill="both", expand=True, padx=T.PAGE_PADDING, pady=T.PAGE_PADDING)
+    inner.grid(row=0, column=0, sticky="nsew", padx=T.PAGE_PADDING, pady=T.PAGE_PADDING)
+    inner.grid_columnconfigure(0, weight=1)
+    inner.grid_rowconfigure(0, weight=1)
     return inner

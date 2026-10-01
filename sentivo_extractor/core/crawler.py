@@ -1,0 +1,981 @@
+"""Orchestrate discovery → extraction → normalize → validate → export."""
+
+from __future__ import annotations
+
+import logging
+from collections import Counter, defaultdict
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
+
+import yaml
+
+from sentivo_extractor.core.bug_report import BugReportCollector, print_failure_groups
+from sentivo_extractor.core.checkpoint import CheckpointStore
+from sentivo_extractor.core.confidence import confidence_band
+from sentivo_extractor.core.coverage import (
+    build_coverage_report,
+    coverage_enforcement_failed,
+    domain_of,
+)
+from sentivo_extractor.core.http_client import HttpClient
+from sentivo_extractor.core.image_checker import check_product_images
+from sentivo_extractor.core.image_pipeline import process_product_images
+from sentivo_extractor.core.input_csv import (
+    apply_seed_metadata,
+    read_seed_csv,
+    seed_metadata,
+)
+from sentivo_extractor.core.normalizer import normalize_product
+from sentivo_extractor.core.pdp_pipeline import (
+    PDPExtractionPipeline,
+    write_pdp_extraction_report,
+    write_retry_queue,
+)
+from sentivo_extractor.core.image_engine import write_image_report
+from sentivo_extractor.core.variant_engine import write_variant_report
+from sentivo_extractor.core.platform_detector import detect_platform
+from sentivo_extractor.core.product_discovery import (
+    canonicalize_product_url,
+    clear_sitemap_failure_cache,
+    discover_domain_products,
+    unique_preserve,
+)
+from sentivo_extractor.core.production_validation import (
+    STATUS_FAILED,
+    STATUS_RECOVERED,
+    STATUS_SUCCESS,
+    assess_production_fields,
+    build_validation_summary,
+    validation_row,
+    write_final_validation_report,
+)
+from sentivo_extractor.core.production_workbook import write_production_summary_workbook
+from sentivo_extractor.core.qa_report import sample_products_for_qa, write_qa_sample_workbook
+from sentivo_extractor.core.shopify_csv_exporter import (
+    export_failed_csv,
+    export_images_manifest,
+    export_shopify_csv,
+    export_validation_report,
+)
+from sentivo_extractor.core.shopify_preimport import (
+    apply_duplicate_sku_policy,
+    validate_shopify_csv,
+    write_preimport_validation_report,
+)
+from sentivo_extractor.core.site_rule_suggester import domain_from_url
+from sentivo_extractor.core.utils import DEFAULT_USER_AGENT, close_logger, setup_logger, write_json
+from sentivo_extractor.core.validator import validate_products
+from sentivo_extractor.extractors import build_default_registry
+
+
+class UniversalCrawler:
+    def __init__(self, options: dict[str, Any]) -> None:
+        self.options = options
+        self.output_dir = Path(options.get("output") or "output")
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.logger = setup_logger(log_dir=self.output_dir / "logs")
+        self.http = HttpClient(
+            user_agent=options.get("user_agent") or DEFAULT_USER_AGENT,
+            timeout=float(options.get("timeout") or 25),
+            delay_sec=float(options.get("delay") or 1.0),
+            retries=int(options.get("retries") or 3),
+            respect_robots=bool(options.get("respect_robots", True)),
+            logger=self.logger,
+        )
+        self.registry = build_default_registry()
+        self.site_rules = self._load_site_rules(options.get("site_rules_dir"))
+        self.overwrite = bool(options.get("overwrite"))
+        self.checkpoint = CheckpointStore(
+            self.output_dir / "checkpoint.json",
+            load_existing=not self.overwrite,
+        )
+        if self.overwrite:
+            self.checkpoint.reset()
+        # Cap discovered PDP URLs per domain. 0 / negative = unlimited.
+        raw_max = options.get("max_products_per_domain", 500)
+        try:
+            self.max_products_per_domain = int(raw_max)
+        except (TypeError, ValueError):
+            self.max_products_per_domain = 500
+        self.pilot = bool(options.get("pilot"))
+        self.pilot_size = int(options.get("pilot_size_per_domain") or 20)
+        if self.pilot:
+            if self.max_products_per_domain <= 0:
+                self.max_products_per_domain = self.pilot_size
+            else:
+                self.max_products_per_domain = min(
+                    self.max_products_per_domain, self.pilot_size
+                )
+        self.min_coverage_percent = float(options.get("min_coverage_percent") or 90)
+        self.enforce_expected_count = bool(options.get("enforce_expected_count"))
+        self.duplicate_sku_policy = str(options.get("duplicate_sku_policy") or "warn")
+        self.check_image_urls = bool(options.get("check_image_urls"))
+        self.qa_sample_size = int(options.get("qa_sample_size_per_domain") or 20)
+        self.qa_random_seed = int(options.get("qa_random_seed") or 42)
+        self.production_validation = bool(options.get("production_validation"))
+        self.strict_mode = bool(options.get("strict"))
+        if self.strict_mode:
+            self.production_validation = True
+        vendor_raw = str(options.get("vendor") or "").strip()
+        self.vendor_override = vendor_raw or None
+        self._url_meta: dict[str, dict[str, Any]] = {}
+        self._failed_reasons: list[tuple[str, str]] = []
+        self._discovered_by_domain: dict[str, int] = defaultdict(int)
+        self._pdp_reports: list[dict[str, Any]] = []
+        self._retry_queue: list[dict[str, Any]] = []
+        self._extraction_failed: list[dict[str, Any]] = []
+        self._variant_reports: list[dict[str, Any]] = []
+        self._image_reports: list[dict[str, Any]] = []
+        self._validation_rows: list[dict[str, Any]] = []
+        run_mode = "pilot" if self.pilot else (
+            "validation" if self.production_validation else "full"
+        )
+        self.bug_report = BugReportCollector(self.output_dir, run_mode=run_mode)
+        self._crawl_stats: dict[str, int] = {
+            "discovered": 0,
+            "processed": 0,
+            "skipped": 0,
+            "failed": 0,
+        }
+
+    def _load_site_rules(self, rules_dir: str | None) -> dict[str, Any]:
+        root = (
+            Path(rules_dir)
+            if rules_dir
+            else Path(__file__).resolve().parents[1] / "configs" / "site_rules"
+        )
+        rules: dict[str, Any] = {}
+        if not root.exists():
+            return rules
+        for path in root.glob("*.y*ml"):
+            try:
+                data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+                if data.get("suggestions_only"):
+                    continue  # never auto-trust suggestions
+                hosts = data.get("hosts") or data.get("domains") or []
+                if isinstance(hosts, str):
+                    hosts = [hosts]
+                for host in hosts:
+                    rules[str(host).lower().removeprefix("www.")] = data
+            except Exception as exc:
+                self.logger.warning("Failed loading site rule %s: %s", path, exc)
+        return rules
+
+    def _rules_for_url(self, url: str) -> dict[str, Any]:
+        host = domain_from_url(url)
+        return self.site_rules.get(host) or {}
+
+    def run(self, input_csv: Path) -> dict[str, Any]:
+        seeds = read_seed_csv(input_csv)
+
+        # Pilot overwrite guard
+        csv_out = self.output_dir / "shopify_import.csv"
+        if self.pilot and csv_out.exists() and not self.overwrite:
+            close_logger(self.logger)
+            raise RuntimeError(
+                f"Pilot output exists at {csv_out}. Pass --overwrite true to replace."
+            )
+
+        try:
+            return self._run_pipeline(input_csv, seeds, csv_out)
+        finally:
+            close_logger(self.logger)
+
+    def _run_pipeline(
+        self, input_csv: Path, seeds: list[dict[str, str]], csv_out: Path
+    ) -> dict[str, Any]:
+        clear_sitemap_failure_cache()
+        self.logger.info("Product Discovery Version: Unified")
+
+        # Overwrite: wipe checkpoint before any crawl work; never resume prior state.
+        if self.overwrite:
+            self.checkpoint.reset()
+            checkpoint_enabled = False
+        else:
+            checkpoint_enabled = True
+
+        completed_at_start = self.checkpoint.completed_count()
+        print(f"Checkpoint: {'enabled' if checkpoint_enabled else 'disabled'}")
+        print(f"Checkpoint file: {self.checkpoint.path}")
+        print(f"Completed products in checkpoint: {completed_at_start}")
+        self.logger.info(
+            "Checkpoint: %s | file=%s | completed=%s",
+            "enabled" if checkpoint_enabled else "disabled",
+            self.checkpoint.path,
+            completed_at_start,
+        )
+
+        product_urls = self._discover_all(seeds)
+        # Pilot: hard-cap per domain after discovery
+        if self.pilot:
+            product_urls = self._limit_urls_per_domain(product_urls, self.pilot_size)
+        self.logger.info("Discovered %s product URL(s)", len(product_urls))
+        print(f"Discovered {len(product_urls)} product URL(s)")
+
+        # Fresh product list when overwrite; otherwise resume with checkpoint products.
+        if self.overwrite:
+            products: list[dict[str, Any]] = []
+        else:
+            products = list(self.checkpoint.products())
+        completed = set(self.checkpoint.completed) if checkpoint_enabled else set()
+        failed_urls = set(self.checkpoint.failed) if checkpoint_enabled else set()
+        seen_in_run: set[str] = set()
+        processed = 0
+        skipped = 0
+        failed_count = 0
+        resuming = checkpoint_enabled and completed_at_start > 0
+
+        manifest_rows: list[dict[str, Any]] = []
+        raw_dir = self.output_dir / "raw_json_backup"
+        raw_dir.mkdir(parents=True, exist_ok=True)
+
+        for url in product_urls:
+            if url in seen_in_run:
+                skipped += 1
+                self.logger.info("Skip [duplicate]: %s", url)
+                continue
+            seen_in_run.add(url)
+
+            if url in completed:
+                skipped += 1
+                reason = "checkpoint_resume" if resuming else "already_completed"
+                self.logger.info("Skip [%s]: %s", reason, url)
+                continue
+            if url in failed_urls:
+                skipped += 1
+                self.logger.info("Skip [already_failed]: %s", url)
+                continue
+
+            try:
+                if self.production_validation:
+                    product, val_row = self._extract_and_validate_product(url)
+                    self._validation_rows.append(val_row)
+                    if not product:
+                        reason = str(val_row.get("Failure Reason") or "validation_failed")
+                        self.checkpoint.mark_failed(url, reason)
+                        failed_count += 1
+                        self.bug_report.record(
+                            url=url,
+                            reason=reason,
+                            stage="Production Validation",
+                            retry_count=int(val_row.get("Retry Count") or 0),
+                        )
+                        continue
+                else:
+                    product, _reason = self.extract_one(url)
+                    if not product:
+                        reason = "extraction_failed"
+                        for u, r in reversed(self._failed_reasons):
+                            if u == url:
+                                reason = r
+                                break
+                        self.checkpoint.mark_failed(url, reason)
+                        failed_count += 1
+                        continue
+                    product = normalize_product(product, base_url=url)
+                    meta = self._url_meta.get(canonicalize_product_url(url)) or self._url_meta.get(
+                        url
+                    ) or {}
+                    product = apply_seed_metadata(product, meta)
+                    from sentivo_extractor.core.confidence import apply_confidence
+
+                    product = apply_confidence(product)
+                rows = process_product_images(
+                    product,
+                    download=bool(self.options.get("download_images")),
+                    convert=True,
+                    images_dir=self.output_dir / "images"
+                    if self.options.get("download_images")
+                    else None,
+                    session=self.http.session,
+                )
+                manifest_rows.extend(rows)
+                write_json(raw_dir / f"{product.get('handle') or 'product'}.json", product)
+                products.append(product)
+                self.checkpoint.mark_done(url, product)
+                processed += 1
+                self.logger.info(
+                    "OK [%s/%.2f] %s",
+                    product.get("confidence_band"),
+                    float(product.get("confidence_score") or 0),
+                    product.get("title"),
+                )
+            except Exception as exc:  # noqa: BLE001
+                self.logger.error("FAIL %s: %s", url, exc)
+                self.checkpoint.mark_failed(url, str(exc))
+                self._failed_reasons.append((url, str(exc)))
+                failed_count += 1
+                html_snip = ""
+                try:
+                    html_snip = self.http.get_text(url)
+                except Exception:
+                    html_snip = ""
+                self.bug_report.record(
+                    url=url,
+                    reason=str(exc),
+                    stage="PDP Extraction",
+                    html=html_snip,
+                )
+
+        self._crawl_stats = {
+            "discovered": len(product_urls),
+            "processed": processed,
+            "skipped": skipped,
+            "failed": failed_count,
+        }
+        print(f"Products discovered: {len(product_urls)}")
+        print(f"Products processed: {processed}")
+        print(f"Products skipped: {skipped}")
+        print(f"Products failed: {failed_count}")
+        self.logger.info(
+            "Crawl end: discovered=%s processed=%s skipped=%s failed=%s",
+            len(product_urls),
+            processed,
+            skipped,
+            failed_count,
+        )
+
+        products = self._dedupe_products(products)
+        if self.vendor_override:
+            for product in products:
+                product["vendor"] = self.vendor_override
+
+        # Duplicate SKU policy
+        products, sku_failed, sku_warnings = apply_duplicate_sku_policy(
+            products, self.duplicate_sku_policy
+        )
+        for w in sku_warnings:
+            self.logger.warning(w)
+
+        report = validate_products(products)
+        passed = report["passed"]
+        failed = list(report["failed"]) + sku_failed + self._extraction_failed
+
+        export_shopify_csv(passed, csv_out)
+        export_failed_csv(failed, self.output_dir / "failed_products.csv")
+        # Mirror failed products to project output/ when run dir is nested
+        root_out = Path(__file__).resolve().parents[2] / "output"
+        if root_out.resolve() != self.output_dir.resolve():
+            try:
+                export_failed_csv(failed, root_out / "failed_products.csv")
+            except Exception:
+                pass
+
+        debug_dir = self.output_dir / "debug"
+        write_pdp_extraction_report(
+            self._pdp_reports, debug_dir / "product_extraction_report.json"
+        )
+        write_retry_queue(self._retry_queue, self.output_dir / "retry_queue.json")
+        try:
+            write_retry_queue(self._retry_queue, root_out / "retry_queue.json")
+        except Exception:
+            pass
+        try:
+            write_pdp_extraction_report(
+                self._pdp_reports,
+                root_out / "debug" / "product_extraction_report.json",
+            )
+        except Exception:
+            pass
+        write_variant_report(
+            self._variant_reports, debug_dir / "variant_report.json"
+        )
+        try:
+            write_variant_report(
+                self._variant_reports, root_out / "debug" / "variant_report.json"
+            )
+        except Exception:
+            pass
+        write_image_report(self._image_reports, debug_dir / "image_report.json")
+        try:
+            write_image_report(
+                self._image_reports, root_out / "debug" / "image_report.json"
+            )
+        except Exception:
+            pass
+
+        export_validation_report(
+            report["issues"], self.output_dir / "validation_report.xlsx"
+        )
+        export_images_manifest(manifest_rows, self.output_dir / "images_manifest.csv")
+
+        # Pre-import validation
+        allow_dup = self.duplicate_sku_policy in ("warn", "suffix", "blank")
+        preimport = validate_shopify_csv(csv_out, allow_duplicate_sku=allow_dup)
+        write_preimport_validation_report(
+            preimport, self.output_dir / "shopify_pre_import_validation.xlsx"
+        )
+
+        # QA sample workbook
+        qa_rows = sample_products_for_qa(
+            products,
+            per_domain=self.qa_sample_size,
+            seed=self.qa_random_seed,
+        )
+        qa_dir = self.output_dir / "qa"
+        write_qa_sample_workbook(qa_rows, qa_dir / "sample_review.xlsx")
+
+        # Image accessibility
+        image_issues: list[dict[str, Any]] = []
+        if self.check_image_urls:
+            image_issues = check_product_images(
+                products,
+                session=self.http.session,
+                timeout=float(self.options.get("timeout") or 10),
+            )
+
+        # Coverage
+        coverage_rows = build_coverage_report(
+            seeds=seeds,
+            discovered_urls=product_urls,
+            products=products,
+            min_coverage_percent=self.min_coverage_percent,
+        )
+
+        summary = self._build_production_summary(
+            seeds=seeds,
+            discovered=product_urls,
+            products=products,
+            report=report,
+            coverage_rows=coverage_rows,
+            preimport=preimport,
+            image_issues=image_issues,
+            sku_warnings=sku_warnings,
+        )
+
+        # Production workbook
+        yellow_items = [
+            {
+                "handle": p.get("handle"),
+                "title": p.get("title"),
+                "source_url": p.get("source_url"),
+                "confidence_score": p.get("confidence_score"),
+            }
+            for p in products
+            if confidence_band(float(p.get("confidence_score") or 0)) == "yellow"
+        ]
+        red_items = [
+            {
+                "handle": p.get("handle"),
+                "title": p.get("title"),
+                "source_url": p.get("source_url"),
+                "confidence_score": p.get("confidence_score"),
+            }
+            for p in products
+            if confidence_band(float(p.get("confidence_score") or 0)) == "red"
+        ]
+        domain_summary = self._domain_summary_rows(products, product_urls, coverage_rows)
+        extraction_errors = [
+            {"url": u, "domain": domain_from_url(u), "error": e}
+            for u, e in self._failed_reasons
+        ]
+        validation_errors = [
+            i for i in (report.get("issues") or []) if i.get("severity") == "error"
+        ] + [
+            i for i in (preimport.get("issues") or []) if i.get("severity") == "error"
+        ]
+
+        write_production_summary_workbook(
+            self.output_dir / "production_summary.xlsx",
+            overview=summary,
+            domain_summary=domain_summary,
+            extraction_errors=extraction_errors,
+            validation_errors=validation_errors,
+            yellow_items=yellow_items,
+            red_items=red_items,
+            image_issues=image_issues,
+            coverage=coverage_rows,
+        )
+
+        write_json(self.output_dir / "run_summary.json", summary)
+
+        # Bug report (failures only — no auto-fix)
+        for p in report.get("failed") or []:
+            src = str(p.get("source_url") or "")
+            if not src:
+                continue
+            self.bug_report.record(
+                url=src,
+                reason=str(p.get("_fail_reason") or "validation_failed"),
+                stage="Validation",
+            )
+        for p in sku_failed:
+            src = str(p.get("source_url") or "")
+            if src:
+                self.bug_report.record(
+                    url=src,
+                    reason=str(p.get("_fail_reason") or "duplicate_sku"),
+                    stage="Validation",
+                )
+        self.bug_report.extend_from_retry_queue(self._retry_queue)
+        bug_path = self.bug_report.write(
+            self.output_dir / "bug_report.xlsx",
+            retry_queue=self._retry_queue,
+        )
+        try:
+            self.bug_report.write(
+                root_out / "bug_report.xlsx",
+                retry_queue=self._retry_queue,
+            )
+        except Exception:
+            pass
+        print_failure_groups(self.bug_report.records)
+        self.logger.info("Bug report: %s (%s failures)", bug_path, len(self.bug_report.records))
+        summary["bug_report"] = str(bug_path)
+        summary["bug_failures"] = len(self.bug_report.records)
+
+        if self.production_validation and self._validation_rows:
+            val_summary = build_validation_summary(self._validation_rows)
+            write_final_validation_report(
+                self.output_dir / "final_validation_report.xlsx",
+                self._validation_rows,
+                val_summary,
+            )
+            try:
+                write_final_validation_report(
+                    root_out / "final_validation_report.xlsx",
+                    self._validation_rows,
+                    val_summary,
+                )
+            except Exception:
+                pass
+            summary["production_validation"] = val_summary
+
+        self._print_summary(summary)
+
+        if coverage_enforcement_failed(
+            coverage_rows, enforce=self.enforce_expected_count
+        ):
+            summary["coverage_enforcement"] = "failed"
+            self.logger.warning(
+                "Coverage below --min-coverage-percent for one or more domains"
+            )
+        return summary
+
+    def _limit_urls_per_domain(self, urls: list[str], limit: int) -> list[str]:
+        counts: dict[str, int] = defaultdict(int)
+        out: list[str] = []
+        for url in urls:
+            dom = domain_from_url(url)
+            if counts[dom] >= limit:
+                continue
+            counts[dom] += 1
+            out.append(url)
+        return out
+
+    def _remaining_for_domain(self, domain: str, already: int) -> int | None:
+        """Products still allowed for this domain, or None when uncapped."""
+        del domain
+        if self.max_products_per_domain <= 0:
+            return None
+        return self.max_products_per_domain - int(already or 0)
+
+    def _domain_summary_rows(
+        self,
+        products: list[dict[str, Any]],
+        discovered: list[str],
+        coverage_rows: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        by_dom_products: dict[str, list] = defaultdict(list)
+        for p in products:
+            by_dom_products[domain_from_url(str(p.get("source_url") or ""))].append(p)
+        cov_map = {r["domain"]: r for r in coverage_rows}
+        rows = []
+        domains = sorted(
+            set(by_dom_products)
+            | set(cov_map)
+            | {domain_from_url(u) for u in discovered}
+        )
+        for dom in domains:
+            if not dom:
+                continue
+            items = by_dom_products.get(dom) or []
+            bands = Counter(
+                confidence_band(float(p.get("confidence_score") or 0)) for p in items
+            )
+            cov = cov_map.get(dom) or {}
+            rows.append(
+                {
+                    "domain": dom,
+                    "discovered": cov.get(
+                        "discovered_count",
+                        sum(1 for u in discovered if domain_from_url(u) == dom),
+                    ),
+                    "extracted": len(items),
+                    "green": bands.get("green", 0),
+                    "yellow": bands.get("yellow", 0),
+                    "red": bands.get("red", 0),
+                    "expected_count": cov.get("expected_count", ""),
+                    "coverage_percent": cov.get("coverage_percent", ""),
+                    "coverage_status": cov.get("coverage_status", ""),
+                    "risk_level": cov.get("risk_level", ""),
+                }
+            )
+        return rows
+
+    def extract_one(
+        self, url: str, *, queue_on_failure: bool = True
+    ) -> tuple[dict[str, Any] | None, str]:
+        timeout_sec = float(self.options.get("product_timeout_sec") or 60)
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(
+                self._extract_one_impl, url, queue_on_failure=queue_on_failure
+            )
+            try:
+                return future.result(timeout=timeout_sec)
+            except FuturesTimeout:
+                reason = f"product_timeout:{int(timeout_sec)}s"
+                self.logger.error(
+                    "Product timeout (%ss) — marking failed, moving on: %s",
+                    int(timeout_sec),
+                    url,
+                )
+                if queue_on_failure:
+                    self._failed_reasons.append((url, reason))
+                    self._retry_queue.append(
+                        {
+                            "url": url,
+                            "reason": reason,
+                            "missing_fields": [],
+                            "methods_attempted": [],
+                            "field_sources": {},
+                        }
+                    )
+                    self._extraction_failed.append(
+                        {"source_url": url, "_fail_reason": reason}
+                    )
+                self.bug_report.record(
+                    url=url, reason=reason, stage="PDP Extraction"
+                )
+                return None, reason
+
+    def _extract_one_impl(
+        self, url: str, *, queue_on_failure: bool = True
+    ) -> tuple[dict[str, Any] | None, str]:
+        pipeline = PDPExtractionPipeline(
+            http=self.http,
+            options=self.options,
+            registry=self.registry,
+            site_rules=self._rules_for_url(url),
+            logger=self.logger,
+        )
+        outcome = pipeline.extract(url)
+        report = outcome.get("report")
+        if report:
+            self._pdp_reports.append(report)
+        variant_report = outcome.get("variant_report")
+        if variant_report:
+            self._variant_reports.append(variant_report)
+        image_report = outcome.get("image_report")
+        if image_report:
+            self._image_reports.append(image_report)
+
+        if not outcome.get("success"):
+            failed = outcome.get("failed_record") or {}
+            reason = str(outcome.get("reason") or "pdp_extraction_failed")
+            failed["_fail_reason"] = reason
+            failed.setdefault("source_url", url)
+            debug = outcome.get("debug_artifacts") or {}
+            self.bug_report.record(
+                url=url,
+                reason=reason,
+                stage="PDP Extraction",
+                html=str(debug.get("html") or ""),
+                screenshot_png=debug.get("screenshot_png"),
+                network_json=list(debug.get("network_json") or []),
+            )
+            if queue_on_failure:
+                self._extraction_failed.append(failed)
+                self._failed_reasons.append((url, reason))
+                self._retry_queue.append(
+                    {
+                        "url": url,
+                        "reason": reason,
+                        "missing_fields": failed.get("missing_fields") or [],
+                        "methods_attempted": (report or {}).get("methods_attempted") or [],
+                        "field_sources": failed.get("field_sources") or {},
+                    }
+                )
+            self.logger.error("PDP FAIL %s: %s", url, reason)
+            return None, reason
+
+        product = outcome.get("product")
+        if not product:
+            self.bug_report.record(url=url, reason="empty_product", stage="PDP Extraction")
+            return None, "empty_product"
+        return product, ""
+
+    def _extract_and_validate_product(
+        self, url: str
+    ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+        max_attempts = 2
+        retry_count = 0
+        last_reason = "extraction_failed"
+        last_fields: dict[str, str] = {}
+
+        for attempt in range(max_attempts):
+            queue_fail = attempt == max_attempts - 1
+            product, reason = self.extract_one(url, queue_on_failure=queue_fail)
+            if not product:
+                last_reason = reason or last_reason
+                if attempt < max_attempts - 1:
+                    retry_count += 1
+                    self.logger.info(
+                        "Production validation retry (extract) %s", url
+                    )
+                    continue
+                return None, validation_row(
+                    url=url,
+                    product=None,
+                    status=STATUS_FAILED,
+                    retry_count=retry_count,
+                    failure_reason=last_reason,
+                )
+
+            product = normalize_product(product, base_url=url)
+            meta = self._url_meta.get(canonicalize_product_url(url)) or self._url_meta.get(
+                url
+            ) or {}
+            product = apply_seed_metadata(product, meta)
+            from sentivo_extractor.core.confidence import apply_confidence
+
+            product = apply_confidence(product)
+            check = assess_production_fields(product)
+            last_fields = check["fields"]
+            if not check["missing"]:
+                status = STATUS_RECOVERED if retry_count else STATUS_SUCCESS
+                return product, validation_row(
+                    url=url,
+                    product=product,
+                    status=status,
+                    retry_count=retry_count,
+                    field_status=check["fields"],
+                )
+
+            last_reason = check["failure_reason"]
+            if attempt < max_attempts - 1:
+                retry_count += 1
+                self.logger.info(
+                    "Production validation retry (fields) %s: %s",
+                    url,
+                    last_reason,
+                )
+                continue
+
+            self._upsert_retry_queue(
+                url,
+                reason=last_reason,
+                missing_fields=check["missing"],
+            )
+            html_snip = ""
+            try:
+                html_snip = self.http.get_text(url)
+            except Exception:
+                html_snip = ""
+            self.bug_report.record(
+                url=url,
+                reason=last_reason,
+                stage="Production Validation",
+                html=html_snip,
+                retry_count=retry_count,
+            )
+            return None, validation_row(
+                url=url,
+                product=product,
+                status=STATUS_FAILED,
+                retry_count=retry_count,
+                failure_reason=last_reason,
+                field_status=last_fields,
+            )
+
+        return None, validation_row(
+            url=url,
+            product=None,
+            status=STATUS_FAILED,
+            retry_count=retry_count,
+            failure_reason=last_reason,
+        )
+
+    def _upsert_retry_queue(
+        self, url: str, *, reason: str, missing_fields: list[str]
+    ) -> None:
+        entry = {
+            "url": url,
+            "reason": reason,
+            "missing_fields": missing_fields,
+            "methods_attempted": [],
+            "field_sources": {},
+        }
+        for idx, item in enumerate(self._retry_queue):
+            if item.get("url") == url:
+                self._retry_queue[idx] = entry
+                return
+        self._retry_queue.append(entry)
+        self._failed_reasons.append((url, reason))
+
+    def _discover_all(self, seeds: list[dict[str, str]]) -> list[str]:
+        urls: list[str] = []
+        per_domain_count: dict[str, int] = defaultdict(int)
+
+        for seed in seeds:
+            url = (seed.get("url") or "").strip()
+            if not url:
+                continue
+            kind = (seed.get("type") or "auto").strip().lower()
+            meta = seed_metadata(seed)
+            domain = domain_from_url(url)
+
+            if kind in ("product", "pdp"):
+                cu = canonicalize_product_url(url)
+                urls.append(cu)
+                self._url_meta[cu] = meta
+                per_domain_count[domain] += 1
+                continue
+
+            remaining = self._remaining_for_domain(domain, per_domain_count[domain])
+            if remaining is not None and remaining <= 0:
+                self.logger.info(
+                    "max_products_per_domain reached for %s — skipping more discovery",
+                    domain,
+                )
+                continue
+
+            card_sel = None
+            rules = self._rules_for_url(url)
+            sels = rules.get("selectors") or {}
+            if isinstance(sels.get("product_card"), list) and sels["product_card"]:
+                card_sel = sels["product_card"][0]
+
+            try:
+                disc = discover_domain_products(
+                    url,
+                    self.http.get_text,
+                    max_products=remaining if remaining is not None else 10**9,
+                    follow_sitemaps=True,
+                    card_selector=card_sel,
+                    platform=None,  # inferred from HTML inside unified discovery
+                    logger=self.logger,
+                )
+                found = disc["product_urls"]
+                if not found:
+                    found = [canonicalize_product_url(url)]
+                for pu in found:
+                    self._url_meta[pu] = meta
+                urls.extend(found)
+                per_domain_count[domain] += len(found)
+            except Exception as exc:
+                self.logger.warning("Discovery failed for %s: %s", url, exc)
+                cu = canonicalize_product_url(url)
+                urls.append(cu)
+                self._url_meta[cu] = meta
+
+        return unique_preserve(urls)
+
+    def _dedupe_products(self, products: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        best: dict[str, dict[str, Any]] = {}
+        for p in products:
+            handle = (p.get("handle") or p.get("source_url") or "").strip()
+            if not handle:
+                continue
+            prev = best.get(handle)
+            if prev is None or float(p.get("confidence_score") or 0) >= float(
+                prev.get("confidence_score") or 0
+            ):
+                best[handle] = p
+        return list(best.values())
+
+    def _build_production_summary(
+        self,
+        *,
+        seeds: list[dict[str, str]],
+        discovered: list[str],
+        products: list[dict[str, Any]],
+        report: dict[str, Any],
+        coverage_rows: list[dict[str, Any]] | None = None,
+        preimport: dict[str, Any] | None = None,
+        image_issues: list[dict[str, Any]] | None = None,
+        sku_warnings: list[str] | None = None,
+    ) -> dict[str, Any]:
+        bands = Counter(
+            confidence_band(float(p.get("confidence_score") or 0)) for p in products
+        )
+        by_domain: dict[str, Counter] = defaultdict(Counter)
+        for url, reason in self._failed_reasons:
+            by_domain[domain_from_url(url)][reason[:120]] += 1
+        for p in report.get("failed") or []:
+            by_domain[domain_from_url(str(p.get("source_url") or ""))][
+                "validation_failed"
+            ] += 1
+
+        top_errors = {
+            domain: [{"reason": r, "count": c} for r, c in counter.most_common(5)]
+            for domain, counter in by_domain.items()
+            if counter
+        }
+
+        coverage_rows = coverage_rows or []
+        preimport = preimport or {"summary": {}}
+        return {
+            "total_input_urls": len(seeds),
+            "total_discovered_product_urls": len(discovered),
+            "total_extracted_products": len(products),
+            "green": bands.get("green", 0),
+            "yellow": bands.get("yellow", 0),
+            "red": bands.get("red", 0),
+            "failed_urls": len(self._failed_reasons),
+            "validation_failed": len(report.get("failed") or []),
+            "validation_errors": report.get("summary", {}).get("errors", 0),
+            "validation_warnings": report.get("summary", {}).get("warnings", 0),
+            "preimport_errors": (preimport.get("summary") or {}).get("errors", 0),
+            "preimport_warnings": (preimport.get("summary") or {}).get("warnings", 0),
+            "image_issues": len(image_issues or []),
+            "sku_warnings": len(sku_warnings or []),
+            "coverage": coverage_rows,
+            "pilot": self.pilot,
+            "top_error_reasons_by_domain": top_errors,
+            "output_dir": str(self.output_dir),
+            "products_discovered": self._crawl_stats.get("discovered", 0),
+            "products_processed": self._crawl_stats.get("processed", 0),
+            "products_skipped": self._crawl_stats.get("skipped", 0),
+            "products_failed_crawl": self._crawl_stats.get("failed", 0),
+        }
+
+    def _print_summary(self, summary: dict[str, Any]) -> None:
+        lines = [
+            "=== Production Extraction Summary ===",
+            f"Total input URLs: {summary.get('total_input_urls')}",
+            f"Total discovered product URLs: {summary.get('total_discovered_product_urls')}",
+            f"Total extracted products: {summary.get('total_extracted_products')}",
+            f"Green (0.90+): {summary.get('green')}",
+            f"Yellow (0.70–0.89): {summary.get('yellow')}",
+            f"Red (<0.70): {summary.get('red')}",
+            f"Failed URLs: {summary.get('failed_urls')}",
+            f"Pre-import errors: {summary.get('preimport_errors')}",
+            f"Image issues: {summary.get('image_issues')}",
+        ]
+        if summary.get("pilot"):
+            lines.append("Mode: PILOT")
+        cov = summary.get("coverage") or []
+        if cov:
+            lines.append("Coverage by domain:")
+            for row in cov[:15]:
+                lines.append(
+                    f"  {row.get('domain')}: expected={row.get('expected_count')} "
+                    f"extracted={row.get('extracted_count')} "
+                    f"coverage={row.get('coverage_percent')}% "
+                    f"status={row.get('coverage_status')}"
+                )
+        top = summary.get("top_error_reasons_by_domain") or {}
+        if top:
+            lines.append("Top error reasons by domain:")
+            for domain, items in list(top.items())[:10]:
+                lines.append(f"  {domain}:")
+                for item in items:
+                    lines.append(f"    - {item['reason']} ({item['count']})")
+        text = "\n".join(lines)
+        print(text, flush=True)
+        for line in lines:
+            self.logger.info(line)

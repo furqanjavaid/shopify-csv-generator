@@ -130,7 +130,7 @@ class MappingScreen(ctk.CTkFrame):
         title_wrap.pack(side="left", fill="x", expand=True)
         ctk.CTkLabel(
             title_wrap, text="Column Mapping",
-            font=T.font_tuple(T.H1), text_color=T.TEXT_PRIMARY, anchor="w",
+            font=T.font_tuple(T.H1), text_color=T.HEADING, anchor="w",
         ).pack(fill="x")
         ctk.CTkLabel(
             title_wrap,

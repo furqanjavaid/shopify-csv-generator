@@ -1,0 +1,3 @@
+url,type,department,source_name,vendor,product_type,tags,currency,expected_count,priority
+https://example.com/collections/all,category,Apparel,Example Store,Example Brand,T-Shirts,"imported, competitor",GBP,50,high
+https://example.com/products/classic-tee,product,Apparel,Example Store,Example Brand,T-Shirts,imported,GBP,1,high

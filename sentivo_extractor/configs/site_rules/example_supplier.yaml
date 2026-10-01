@@ -1,0 +1,36 @@
+# Example site-specific rules — copy and adapt per supplier/competitor.
+hosts:
+  - example-supplier.com
+  - www.example-supplier.com
+
+selectors:
+  title:
+    - h1.product-title
+    - h1
+  price:
+    - ".product-price .amount"
+    - '[itemprop="price"]'
+    - ".price"
+  compare_at_price:
+    - ".was-price"
+    - del
+  description:
+    - "#description"
+    - ".product-description"
+  sku:
+    - ".sku"
+  vendor:
+    - ".brand"
+  images:
+    - ".gallery img"
+    - ".product-image img"
+  options:
+    - "select[name^='attribute']"
+
+rules:
+  strip_price_from_options: true
+  default_vendor: "Example Supplier"
+  default_product_type: ""
+  tags:
+    - imported
+    - competitor

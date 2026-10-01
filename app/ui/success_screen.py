@@ -49,7 +49,7 @@ class SuccessScreen(ctk.CTkFrame):
             center,
             text="CSV Ready to Import!",
             font=T.font_tuple(T.H1),
-            text_color=T.TEXT_PRIMARY,
+            text_color=T.HEADING,
         ).pack(pady=(0, 8))
 
         if self.output_filename:

@@ -1,0 +1,6 @@
+# Default polite crawl settings (overridable via CLI)
+delay_sec: 1.0
+timeout_sec: 25
+retries: 3
+respect_robots: true
+user_agent: "Mozilla/5.0 (compatible; SentivoExtractor/1.0)"
