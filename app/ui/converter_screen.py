@@ -119,14 +119,8 @@ class ConverterScreen(ctk.CTkFrame):
             mid,
             variable=self.format_var,
             values=["PNG", "WEBP", "JPG"],
-            font=T.font_tuple(T.LABEL),
-            fg_color="#FFFFFF",
-            button_color=T.ACCENT,
-            button_hover_color=T.ACCENT_HOVER,
-            text_color=T.TEXT_PRIMARY,
-            dropdown_fg_color="#FFFFFF",
-            dropdown_text_color=T.TEXT_PRIMARY,
             width=160,
+            **T.option_menu_style(),
         )
         self.format_btn.grid(row=1, column=0, sticky="ew", pady=(4, 12))
         self.format_btn.set("PNG")

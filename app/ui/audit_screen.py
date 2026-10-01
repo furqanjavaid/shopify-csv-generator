@@ -160,14 +160,8 @@ class AuditScreen(ctk.CTkFrame):
         self.category_filter = ctk.CTkOptionMenu(
             fh,
             values=["All Categories"],
-            font=T.font_tuple(T.LABEL),
-            fg_color="#FFFFFF",
-            button_color=T.ACCENT,
-            button_hover_color=T.ACCENT_HOVER,
-            text_color=T.TEXT_PRIMARY,
-            dropdown_fg_color="#FFFFFF",
-            dropdown_text_color=T.TEXT_PRIMARY,
             width=140,
+            **T.option_menu_style(),
         )
         self.category_filter.grid(row=0, column=1, rowspan=2, sticky="e")
 

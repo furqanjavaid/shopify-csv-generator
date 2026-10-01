@@ -28,11 +28,12 @@ def save_config(data: dict) -> None:
 
 
 def get_theme() -> str:
-    theme = load_config().get("theme", "light")
-    return "light" if str(theme).lower() == "light" else "dark"
+    """Always light while mockups are light-only."""
+    return "light"
 
 
 def set_theme(value: str) -> None:
     cfg = load_config()
-    cfg["theme"] = "light" if str(value).lower() == "light" else "dark"
+    cfg["theme"] = "light"
+    del value
     save_config(cfg)

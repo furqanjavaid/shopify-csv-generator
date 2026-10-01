@@ -1,4 +1,4 @@
-"""Settings screen — appearance and output preferences."""
+"""Settings screen — output preferences (light theme only)."""
 
 from __future__ import annotations
 
@@ -7,11 +7,11 @@ import customtkinter as ctk
 from app.ui import theme as T
 from app.ui.sidebar import attach_sidebar
 from app.ui.theme import current_colors
-from app.utils.config import get_theme, set_theme
+from app.utils.updater import get_current_version
 
 
 class SettingsScreen(ctk.CTkFrame):
-    """App settings including light/dark theme toggle."""
+    """App settings — appearance is locked to light to match mockups."""
 
     def __init__(self, parent, app, **kwargs):
         c = current_colors()
@@ -20,10 +20,9 @@ class SettingsScreen(ctk.CTkFrame):
         body = attach_sidebar(self, app, "settings")
         T.page_title(body, "Settings", "App preferences and defaults")
 
-        # Appearance / theme
+        # Appearance (light only — dark toggle removed)
         theme_card = T.card_frame(body)
         theme_card.pack(fill="x", pady=(0, T.GRID_GAP))
-
         inner = ctk.CTkFrame(theme_card, fg_color="transparent")
         inner.pack(fill="x", padx=T.CARD_PADDING, pady=T.CARD_PADDING)
 
@@ -31,24 +30,16 @@ class SettingsScreen(ctk.CTkFrame):
             inner,
             text="Appearance",
             font=T.font(14, "bold"),
-            text_color=c["TEXT_PRIMARY"],
-        ).pack(side="left")
-
-        current = get_theme()
-        toggle = ctk.CTkSegmentedButton(
+            text_color=c["HEADING"],
+            anchor="w",
+        ).pack(fill="x")
+        ctk.CTkLabel(
             inner,
-            values=["Dark", "Light"],
-            command=self._on_theme_change,
-            font=T.font(13),
-            fg_color=c["BG_SURFACE_B"],
-            selected_color=c["ACCENT"],
-            selected_hover_color=c["ACCENT_HOVER"],
-            unselected_color=c["BG_SURFACE_B"],
-            unselected_hover_color=c["BORDER"],
-            text_color=c["TEXT_PRIMARY"],
-        )
-        toggle.set("Dark" if current == "dark" else "Light")
-        toggle.pack(side="right")
+            text="Light theme (mockup). Dark mode is temporarily disabled.",
+            font=T.font_tuple(T.BODY),
+            text_color=c["TEXT_MUTED"],
+            anchor="w",
+        ).pack(fill="x", pady=(4, 0))
 
         # Output info
         out_card = T.card_frame(body)
@@ -60,7 +51,7 @@ class SettingsScreen(ctk.CTkFrame):
             out_inner,
             text="Output",
             font=T.font_tuple(T.H3),
-            text_color=c["TEXT_PRIMARY"],
+            text_color=c["HEADING"],
             anchor="w",
         ).pack(fill="x")
         ctk.CTkLabel(
@@ -71,15 +62,21 @@ class SettingsScreen(ctk.CTkFrame):
             anchor="w",
         ).pack(fill="x", pady=(4, 0))
 
-    def _on_theme_change(self, val: str) -> None:
-        theme_val = "dark" if val == "Dark" else "light"
-        set_theme(theme_val)
-        T.apply_theme(theme_val)
-        ctk.set_appearance_mode(theme_val)
-        # Rebuild this screen + window chrome so palette applies immediately
-        try:
-            self.app.configure(fg_color=T.get("BG_PRIMARY"))
-            self.app.container.configure(fg_color=T.get("BG_PRIMARY"))
-        except Exception:
-            pass
-        self.app.show_screen(SettingsScreen)
+        ver_card = T.card_frame(body)
+        ver_card.pack(fill="x", pady=(0, T.GRID_GAP))
+        ver_inner = ctk.CTkFrame(ver_card, fg_color="transparent")
+        ver_inner.pack(fill="x", padx=T.CARD_PADDING, pady=T.CARD_PADDING)
+        ctk.CTkLabel(
+            ver_inner,
+            text="Version",
+            font=T.font_tuple(T.H3),
+            text_color=c["HEADING"],
+            anchor="w",
+        ).pack(fill="x")
+        ctk.CTkLabel(
+            ver_inner,
+            text=f"v{get_current_version()}  ·  from version.json",
+            font=T.font_tuple(T.BODY),
+            text_color=c["TEXT_SECONDARY"],
+            anchor="w",
+        ).pack(fill="x", pady=(4, 0))

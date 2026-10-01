@@ -137,16 +137,9 @@ class ScraperScreen(ctk.CTkFrame):
             mode_row,
             variable=self.mode_var,
             values=[MODE_UNIVERSAL_FULL, MODE_UNIVERSAL, MODE_LEGACY],
-            font=T.font_tuple(T.LABEL),
-            fg_color="#FFFFFF",
-            button_color=T.ACCENT,
-            button_hover_color=T.ACCENT_HOVER,
-            text_color=T.TEXT_PRIMARY,
-            dropdown_fg_color="#FFFFFF",
-            dropdown_hover_color=T.BG_PRIMARY,
-            dropdown_text_color=T.TEXT_PRIMARY,
             width=280,
             command=self._on_mode_changed,
+            **T.option_menu_style(),
         )
         self.mode_menu.grid(row=1, column=0, sticky="ew", pady=(4, 0))
         self.mode_hint = ctk.CTkLabel(
@@ -215,13 +208,8 @@ class ScraperScreen(ctk.CTkFrame):
         self.url_text = ctk.CTkTextbox(
             cfg,
             height=100,
-            font=T.font_tuple(T.BODY),
-            fg_color="#FFFFFF",
-            text_color=T.TEXT_PRIMARY,
-            border_color=T.BORDER,
-            border_width=1,
-            corner_radius=T.BORDER_RADIUS,
             wrap="none",
+            **T.textbox_style(),
         )
         self.url_text.grid(row=4, column=0, columnspan=2, sticky="ew")
         self.url_text.insert("1.0", "https://your-store.com/collections/all\n")
@@ -252,16 +240,9 @@ class ScraperScreen(ctk.CTkFrame):
         self.category_menu = ctk.CTkOptionMenu(
             self.category_row,
             values=["Select a category…"],
-            font=T.font_tuple(T.LABEL),
-            fg_color="#FFFFFF",
-            button_color=T.ACCENT,
-            button_hover_color=T.ACCENT_HOVER,
-            text_color=T.TEXT_PRIMARY,
-            dropdown_fg_color="#FFFFFF",
-            dropdown_hover_color=T.BG_PRIMARY,
-            dropdown_text_color=T.TEXT_PRIMARY,
             width=420,
             command=self._on_category_selected,
+            **T.option_menu_style(),
         )
         self.category_menu.grid(row=1, column=0, sticky="ew")
         self.category_menu.set("Select a category…")
@@ -366,14 +347,14 @@ class ScraperScreen(ctk.CTkFrame):
         self.log_box = ctk.CTkTextbox(
             log_card,
             height=LOG_MIN_HEIGHT,
-            fg_color="#FFFFFF",
             text_color=LOG_COLOR_INFO,
             font=ctk.CTkFont(family=T.FONT_MONO, size=11),
-            border_width=1,
-            border_color=T.BORDER,
-            corner_radius=T.BORDER_RADIUS,
             state="disabled",
             wrap="word",
+            fg_color=T.get("INPUT_BG"),
+            border_width=1,
+            border_color=T.get("BORDER"),
+            corner_radius=T.BORDER_RADIUS,
         )
         self.log_box.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 14))
         self._configure_log_tags()
