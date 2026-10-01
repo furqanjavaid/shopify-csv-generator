@@ -122,7 +122,7 @@ class Card(ctk.CTkFrame):
 
 
 class StatCard(ctk.CTkFrame):
-    """Circle icon + big number + small label."""
+    """Horizontal: circle icon left, big number + small label right."""
 
     def __init__(
         self,
@@ -132,6 +132,7 @@ class StatCard(ctk.CTkFrame):
         value: str = "0",
         icon: str | None = None,
         icon_color: str = "navy",
+        circle_bg: str | None = None,
         **kwargs,
     ):
         c = current_colors()
@@ -145,33 +146,39 @@ class StatCard(ctk.CTkFrame):
         super().__init__(master, **opts)
         inner = ctk.CTkFrame(self, fg_color="transparent")
         inner.grid(row=0, column=0, sticky="ew", padx=14, pady=14)
-        inner.grid_columnconfigure(0, weight=1)
+        inner.grid_columnconfigure(1, weight=1)
 
+        col = 0
         if icon:
             circle = ctk.CTkFrame(
-                inner, width=36, height=36, corner_radius=18, fg_color=c["CIRCLE_ICON_BG"]
+                inner,
+                width=40,
+                height=40,
+                corner_radius=20,
+                fg_color=circle_bg or c["CIRCLE_ICON_BG"],
             )
-            circle.grid(row=0, column=0, sticky="w", pady=(0, 8))
+            circle.grid(row=0, column=0, rowspan=2, sticky="w", padx=(0, 12))
             circle.grid_propagate(False)
             img = load_icon(icon, size=18, color=icon_color)
             ctk.CTkLabel(circle, text="", image=img).place(relx=0.5, rely=0.5, anchor="center")
             self._icon = img
+            col = 1
 
         self.value_label = ctk.CTkLabel(
             inner,
             text=str(value),
-            font=T.font(28, "bold"),
+            font=T.font(22, "bold"),
             text_color=c["HEADING"],
             anchor="w",
         )
-        self.value_label.grid(row=1, column=0, sticky="w")
+        self.value_label.grid(row=0, column=col, sticky="sw")
         ctk.CTkLabel(
             inner,
             text=label,
             font=T.font_tuple(T.CAPTION),
             text_color=c["TEXT_MUTED"],
             anchor="w",
-        ).grid(row=2, column=0, sticky="w", pady=(2, 0))
+        ).grid(row=1, column=col, sticky="nw", pady=(2, 0))
 
     def set_value(self, value: str | int) -> None:
         self.value_label.configure(text=str(value))
@@ -405,11 +412,10 @@ class Combobox(ctk.CTkFrame):
         self._var = ctk.StringVar(value=values[0] if values else "")
         self._chevron = load_icon("chevron-down", size=14, color="muted")
 
+        # Value left, chevron pinned to the right edge of the bordered field.
         self._btn = ctk.CTkButton(
             self,
             textvariable=self._var,
-            image=self._chevron,
-            compound="right",
             anchor="w",
             fg_color="transparent",
             hover_color=c["BG_PRIMARY"],
@@ -419,7 +425,19 @@ class Combobox(ctk.CTkFrame):
             height=T.INPUT_HEIGHT - 4,
             command=self._open_menu,
         )
-        self._btn.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
+        self._btn.grid(row=0, column=0, sticky="nsew", padx=(6, 0), pady=2)
+        self._chevron_btn = ctk.CTkButton(
+            self,
+            text="",
+            image=self._chevron,
+            width=28,
+            fg_color="transparent",
+            hover_color=c["BG_PRIMARY"],
+            corner_radius=T.BORDER_RADIUS - 2,
+            height=T.INPUT_HEIGHT - 4,
+            command=self._open_menu,
+        )
+        self._chevron_btn.grid(row=0, column=1, sticky="e", padx=(0, 4), pady=2)
         self._menu: ctk.CTkToplevel | None = None
 
     def get(self) -> str:

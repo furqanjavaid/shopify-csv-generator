@@ -101,8 +101,15 @@ class Sidebar(ctk.CTkFrame):
         for i, (page_id, label, icon_name) in enumerate(NAV_ITEMS):
             self._nav_item(nav, i, page_id, label, icon_name)
 
-        foot = ctk.CTkFrame(self, fg_color="transparent")
-        foot.grid(row=2, column=0, sticky="ew", padx=16, pady=16)
+        foot_wrap = ctk.CTkFrame(self, fg_color="transparent")
+        foot_wrap.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 16))
+        foot_wrap.grid_columnconfigure(0, weight=1)
+        # Thin divider above footer (mockup)
+        ctk.CTkFrame(foot_wrap, height=1, fg_color=c["SIDEBAR_MUTED"]).grid(
+            row=0, column=0, sticky="ew", pady=(0, 12)
+        )
+        foot = ctk.CTkFrame(foot_wrap, fg_color="transparent")
+        foot.grid(row=1, column=0, sticky="ew")
         foot.grid_columnconfigure(0, weight=1)
         version = get_current_version()
         ctk.CTkLabel(
@@ -126,7 +133,6 @@ class Sidebar(ctk.CTkFrame):
             text_color=c["GOLD"],
             anchor="w",
         ).grid(row=2, column=0, sticky="w")
-
     def _nav_item(self, parent, row: int, page_id: str, label: str, icon_name: str) -> None:
         c = current_colors()
         active = page_id == self.active_page
