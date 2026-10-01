@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://www.directplastics.example/</loc>
+    <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>https://www.directplastics.example/acetal-rod</loc>
+    <priority>0.5</priority>
+  </url>
+  <url>
+    <loc>https://www.directplastics.example/acrylic-sheet</loc>
+    <priority>0.5</priority>
+  </url>
+  <url>
+    <loc>https://www.directplastics.example/covid-19</loc>
+    <priority>0.2</priority>
+  </url>
+  <url>
+    <loc>https://www.directplastics.example/acetal-black-rod-6mm-dia-x-500mm</loc>
+    <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>https://www.directplastics.example/acetal-natural-rod-5mm-dia-x-500mm</loc>
+    <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>https://www.directplastics.example/catalog/product/view/id/363</loc>
+    <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>https://www.directplastics.example/cart</loc>
+    <priority>1.0</priority>
+  </url>
+</urlset>

@@ -363,19 +363,134 @@ def extract_locs(xml_text: str) -> list[str]:
     return [m.strip() for m in re.findall(r"<loc>\s*([^<]+)\s*</loc>", xml_text or "", flags=re.I)]
 
 
-def discover_from_sitemap(xml_text: str, max_links: int = 2000) -> list[str]:
-    """Parse a urlset sitemap for product-like URLs."""
+def extract_sitemap_url_entries(xml_text: str) -> list[dict[str, Any]]:
+    """
+    Parse <url> entries from a urlset, including optional <priority>.
+    Magento XML sitemaps commonly use priority 1.0=product, 0.5=category, 0.2=CMS.
+    """
+    entries: list[dict[str, Any]] = []
+    for block in re.findall(r"<url>(.*?)</url>", xml_text or "", flags=re.I | re.S):
+        loc_m = re.search(r"<loc>\s*([^<]+)\s*</loc>", block, flags=re.I)
+        if not loc_m:
+            continue
+        loc = loc_m.group(1).strip()
+        if not loc:
+            continue
+        pr_m = re.search(r"<priority>\s*([^<]+)\s*</priority>", block, flags=re.I)
+        priority: float | None = None
+        if pr_m:
+            try:
+                priority = float(pr_m.group(1).strip())
+            except ValueError:
+                priority = None
+        entries.append({"loc": loc, "priority": priority})
+    if entries:
+        return entries
+    # Fallback for urlsets without discrete <url> wrappers
+    return [{"loc": loc, "priority": None} for loc in extract_locs(xml_text)]
+
+
+def _magento_priority_product_candidate(path: str, priority: float | None) -> bool:
+    """
+    Magento XML sitemaps commonly tag products with priority ≈ 1.0.
+    Used only as an explicit fallback after path-hint discovery finds nothing.
+    """
+    low = (path or "").lower()
+    if not low or low == "/":
+        return False
+    if any(s in low for s in SKIP_PATH_FRAGMENTS):
+        return False
+    if _is_product_path(low) or "/products/" in low:
+        return False  # already handled by primary path rules
+    if priority is None:
+        return False
+    return float(priority) >= 0.9
+
+
+def discover_from_sitemap(
+    xml_text: str,
+    max_links: int = 2000,
+    *,
+    platform: str | None = None,
+) -> list[str]:
+    """Parse a urlset sitemap for product-like URLs (path-hint primary rules only)."""
+    del platform  # platform-specific Magento priority is a separate fallback
     out: list[str] = []
     seen: set[str] = set()
-    for loc in extract_locs(xml_text):
-        url = canonicalize_product_url(loc)
-        low = url.lower()
+    for entry in extract_sitemap_url_entries(xml_text):
+        url = canonicalize_product_url(entry.get("loc") or "")
         if not url:
             continue
-        if _is_product_path(urlparse(url).path) or "/products/" in low:
-            if url not in seen:
-                seen.add(url)
-                out.append(url)
+        path = urlparse(url).path
+        low = url.lower()
+        if not (_is_product_path(path) or "/products/" in low):
+            continue
+        if url not in seen:
+            seen.add(url)
+            out.append(url)
+        if len(out) >= max_links:
+            break
+    return out
+
+
+def discover_from_sitemap_priority_fallback(
+    xml_text: str,
+    max_links: int = 2000,
+    *,
+    logger: logging.Logger | None = None,
+) -> list[str]:
+    """
+    Magento fallback: accept SEO locs with sitemap priority >= 0.9 when path hints
+    found no products. Logs sitemap_priority_product_detection.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for entry in extract_sitemap_url_entries(xml_text):
+        url = canonicalize_product_url(entry.get("loc") or "")
+        if not url:
+            continue
+        path = urlparse(url).path
+        if not _magento_priority_product_candidate(path, entry.get("priority")):
+            continue
+        if url not in seen:
+            seen.add(url)
+            out.append(url)
+        if len(out) >= max_links:
+            break
+    if out:
+        msg = (
+            f"sitemap_priority_product_detection: accepted {len(out)} "
+            "Magento SEO URL(s) via priority>=0.9 fallback"
+        )
+        if logger:
+            logger.info(msg)
+    return out
+
+
+def discover_magento_category_urls_from_sitemap(
+    xml_text: str,
+    max_links: int = 200,
+) -> list[str]:
+    """Magento category locs (priority ~0.5) for optional category-HTML expansion."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for entry in extract_sitemap_url_entries(xml_text):
+        url = canonicalize_product_url(entry.get("loc") or "")
+        if not url:
+            continue
+        path = urlparse(url).path
+        if not path or path == "/":
+            continue
+        if any(s in path.lower() for s in SKIP_PATH_FRAGMENTS):
+            continue
+        priority = entry.get("priority")
+        # Categories typically 0.4–0.6; never treat high-priority product rows as categories.
+        if priority is None or not (0.35 <= float(priority) < 0.9):
+            continue
+        if url in seen:
+            continue
+        seen.add(url)
+        out.append(url)
         if len(out) >= max_links:
             break
     return out
@@ -485,6 +600,7 @@ def expand_sitemap_index(
     *,
     logger: logging.Logger | None = None,
     allow_shopify_product_sitemaps: bool = False,
+    platform: str | None = None,
 ) -> list[str]:
     """Follow sitemap index / child sitemaps listed in XML only."""
     collected: list[str] = []
@@ -497,7 +613,9 @@ def expand_sitemap_index(
             if loc.lower().endswith(".xml") or "sitemap" in loc.lower()
         ][:max_child_sitemaps]
         if not children:
-            return discover_from_sitemap(xml_text, max_links=max_links)
+            return discover_from_sitemap(
+                xml_text, max_links=max_links, platform=platform
+            )
 
     # Children appearing in the index itself are allowlisted (explicitly listed).
     child_allow = {_sitemap_cache_key(c) for c in children}
@@ -528,11 +646,19 @@ def expand_sitemap_index(
                 )
                 if not nested_xml:
                     continue
-                collected.extend(discover_from_sitemap(nested_xml, max_links=max_links))
+                collected.extend(
+                    discover_from_sitemap(
+                        nested_xml, max_links=max_links, platform=platform
+                    )
+                )
                 if len(collected) >= max_links:
                     return unique_preserve(collected)[:max_links]
         else:
-            collected.extend(discover_from_sitemap(child_xml, max_links=max_links))
+            collected.extend(
+                discover_from_sitemap(
+                    child_xml, max_links=max_links, platform=platform
+                )
+            )
         if len(collected) >= max_links:
             break
     return unique_preserve(collected)[:max_links]
@@ -711,6 +837,8 @@ def discover_domain_products(
         notes.extend(sm_notes)
         seed_allow = {_sitemap_cache_key(u) for u in sitemap_urls}
         shopify_sitemaps_unavailable = False
+        sitemap_product_before = len(product_urls)
+        fetched_sitemap_bodies: list[str] = []
 
         for sm_url in sitemap_urls:
             if len(product_urls) >= max_products:
@@ -730,21 +858,93 @@ def discover_domain_products(
                     _mark_remaining_shopify_product_sitemaps_unavailable(origin, logger=log)
                     notes.append("Shopify product sitemap unavailable.")
                 continue
+            fetched_sitemap_bodies.append(xml)
             if is_sitemap_index(xml) or (
                 "<urlset" not in xml.lower()
                 and any(loc.lower().endswith(".xml") for loc in extract_locs(xml)[:8])
             ):
-                product_urls.extend(
-                    expand_sitemap_index(
-                        xml,
-                        get_text,
-                        max_links=max_products - len(product_urls),
-                        logger=log,
-                        allow_shopify_product_sitemaps=allow_shopify,
-                    )
+                found = expand_sitemap_index(
+                    xml,
+                    get_text,
+                    max_links=max_products - len(product_urls),
+                    logger=log,
+                    allow_shopify_product_sitemaps=allow_shopify,
+                    platform=resolved_platform,
                 )
             else:
-                product_urls.extend(discover_from_sitemap(xml, max_links=max_products))
+                found = discover_from_sitemap(
+                    xml,
+                    max_links=max_products - len(product_urls),
+                    platform=resolved_platform,
+                )
+            product_urls.extend(found)
+            log.info(
+                "Sitemap product URLs found: %s from %s (platform=%s)",
+                len(found),
+                sm_url,
+                resolved_platform,
+            )
+            notes.append(f"sitemap_products:{sm_url}:{len(found)}")
+
+            # Magento: path-hint miss → priority>=0.9 SEO fallback (explicit, logged).
+            if (
+                resolved_platform == "Magento"
+                and not found
+                and len(product_urls) < max_products
+                and not is_sitemap_index(xml)
+            ):
+                prio_found = discover_from_sitemap_priority_fallback(
+                    xml,
+                    max_links=max_products - len(product_urls),
+                    logger=log,
+                )
+                if prio_found:
+                    product_urls.extend(prio_found)
+                    notes.append(
+                        f"sitemap_priority_product_detection:{sm_url}:{len(prio_found)}"
+                    )
+
+        # Magento last resort: expand category locs via HTML when sitemap still empty.
+        if (
+            resolved_platform == "Magento"
+            and len(product_urls) == sitemap_product_before
+            and fetched_sitemap_bodies
+        ):
+            cat_urls: list[str] = []
+            for xml in fetched_sitemap_bodies:
+                cat_urls.extend(
+                    discover_magento_category_urls_from_sitemap(xml, max_links=50)
+                )
+            cat_urls = unique_preserve(cat_urls)[:50]
+            notes.append(f"magento_sitemap_categories:{len(cat_urls)}")
+            log.info(
+                "Magento sitemap yielded 0 product URLs — expanding %s category URL(s)",
+                len(cat_urls),
+            )
+            for cat_url in cat_urls:
+                if len(product_urls) >= max_products:
+                    break
+                try:
+                    cat_html = get_text(cat_url)
+                    cat_found = discover_magento_from_category_html(
+                        cat_html, cat_url, max_links=max_products - len(product_urls)
+                    )
+                    cat_found.extend(
+                        discover_from_html(
+                            cat_html,
+                            cat_url,
+                            max_links=max_products - len(product_urls),
+                        )
+                    )
+                    cat_found = unique_preserve(cat_found)
+                    product_urls.extend(cat_found)
+                    log.info(
+                        "Category page product URLs found: %s on %s",
+                        len(cat_found),
+                        cat_url,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    notes.append(f"magento_category_expand_failed:{cat_url}:{exc}")
 
     product_urls = unique_preserve(product_urls)[:max_products]
     return {

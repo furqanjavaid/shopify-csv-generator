@@ -112,6 +112,74 @@ def test_skip_shopify_sitemap_probe_for_custom_platform():
     assert any("Skipping Shopify sitemap probe (platform=Custom)" in n for n in notes)
 
 
+def test_magento_sitemap_discovers_seo_product_urls():
+    """Magento SEO product locs use priority 1.0 and lack /products/ path hints."""
+    from sentivo_extractor.core.product_discovery import (
+        clear_sitemap_failure_cache,
+        discover_domain_products,
+        discover_from_sitemap,
+        discover_from_sitemap_priority_fallback,
+        discover_magento_category_urls_from_sitemap,
+    )
+
+    clear_sitemap_failure_cache()
+    xml = (FIXTURES / "magento_sitemap.xml").read_text(encoding="utf-8")
+
+    # Primary rule: path hints only (priority is NOT applied here).
+    primary = discover_from_sitemap(xml, max_links=50, platform="Magento")
+    assert primary == [
+        "https://www.directplastics.example/catalog/product/view/id/363"
+    ]
+    assert discover_from_sitemap(xml, max_links=50, platform="Custom") == primary
+
+    # Explicit priority fallback (logged path used by discover_domain_products).
+    prio = discover_from_sitemap_priority_fallback(xml, max_links=50)
+    assert "https://www.directplastics.example/acetal-black-rod-6mm-dia-x-500mm" in prio
+    assert "https://www.directplastics.example/acetal-natural-rod-5mm-dia-x-500mm" in prio
+    assert "https://www.directplastics.example/" not in prio
+    assert "https://www.directplastics.example/acetal-rod" not in prio
+    assert "https://www.directplastics.example/covid-19" not in prio
+    assert all("/cart" not in u for u in prio)
+
+    cats = discover_magento_category_urls_from_sitemap(xml)
+    assert "https://www.directplastics.example/acetal-rod" in cats
+    assert "https://www.directplastics.example/acrylic-sheet" in cats
+    assert all("dia-x" not in u for u in cats)
+
+    # Sitemap with only Magento SEO rows (no path hints) → priority fallback fires.
+    seo_only_xml = """<?xml version="1.0"?>
+    <urlset>
+      <url><loc>https://www.directplastics.example/</loc><priority>1.0</priority></url>
+      <url><loc>https://www.directplastics.example/acetal-rod</loc><priority>0.5</priority></url>
+      <url><loc>https://www.directplastics.example/acetal-black-rod-6mm-dia-x-500mm</loc><priority>1.0</priority></url>
+      <url><loc>https://www.directplastics.example/acetal-natural-rod-5mm-dia-x-500mm</loc><priority>1.0</priority></url>
+    </urlset>
+    """
+    fetched: list[str] = []
+
+    def get_text(url: str) -> str:
+        fetched.append(url)
+        if url.rstrip("/").endswith("directplastics.example"):
+            return "<html><body><h1>Home</h1></body></html>"
+        if url.endswith("robots.txt"):
+            return "User-agent: *\nDisallow: /catalog/\n"
+        if url.endswith("sitemap.xml"):
+            return seo_only_xml
+        raise AssertionError(f"unexpected network-like fetch in unit test: {url}")
+
+    disc = discover_domain_products(
+        "https://www.directplastics.example/",
+        get_text,
+        max_products=50,
+        follow_sitemaps=True,
+        platform="Magento",
+    )
+    assert len(disc["product_urls"]) >= 2
+    assert any("acetal-black-rod" in u for u in disc["product_urls"])
+    assert any("sitemap_priority_product_detection:" in n for n in disc["notes"])
+    assert all("directplastics.example" in u for u in fetched)
+
+
 def test_sitemap_failure_cache_skips_repeat():
     from sentivo_extractor.core.product_discovery import (
         _fetch_sitemap_text,

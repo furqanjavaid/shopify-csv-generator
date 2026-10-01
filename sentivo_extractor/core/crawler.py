@@ -861,16 +861,18 @@ class UniversalCrawler:
                 )
                 found = disc["product_urls"]
                 if not found:
-                    found = [canonicalize_product_url(url)]
+                    reason = f"discovery_empty: {url}"
+                    self.logger.error(reason)
+                    self._failed_reasons.append((url, reason))
+                    continue
                 for pu in found:
                     self._url_meta[pu] = meta
                 urls.extend(found)
                 per_domain_count[domain] += len(found)
             except Exception as exc:
                 self.logger.warning("Discovery failed for %s: %s", url, exc)
-                cu = canonicalize_product_url(url)
-                urls.append(cu)
-                self._url_meta[cu] = meta
+                reason = f"discovery_failed: {exc}"
+                self._failed_reasons.append((url, reason))
 
         return unique_preserve(urls)
 

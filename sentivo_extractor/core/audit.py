@@ -143,10 +143,9 @@ class DomainAuditor:
                 )
                 products = disc["product_urls"]
                 disc_notes = disc.get("notes") or []
-                if not products and html:
-                    # fallback: treat as product
-                    products = [url]
-                    disc_notes.append("fallback_seed_as_product")
+                if not products:
+                    disc_notes.append(f"discovery_empty:{url}")
+                    self.logger.error("discovery_empty: %s", url)
 
             for pu in products:
                 discovery_rows.append(
