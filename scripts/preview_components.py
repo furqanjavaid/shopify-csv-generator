@@ -72,18 +72,23 @@ def main() -> None:
     stats.grid(row=1, column=0, sticky="ew", pady=(0, 16))
     for i in range(4):
         stats.grid_columnconfigure(i, weight=1, uniform="s")
-    StatCard(stats, label="Products", value="1,248", icon="file").grid(
+    StatCard(stats, label="Files uploaded", value="5", icon="file").grid(
         row=0, column=0, sticky="ew", padx=(0, 8)
     )
-    StatCard(stats, label="Coverage", value="94%", icon="bar-chart", icon_color="gold").grid(
-        row=0, column=1, sticky="ew", padx=8
-    )
-    StatCard(stats, label="Images", value="3,102", icon="image").grid(
-        row=0, column=2, sticky="ew", padx=8
-    )
-    StatCard(stats, label="Warnings", value="12", icon="alert-triangle", icon_color="burgundy").grid(
-        row=0, column=3, sticky="ew", padx=(8, 0)
-    )
+    StatCard(
+        stats, label="Valid files", value="4", icon="check", icon_color="navy", circle_bg="#E8F8EF"
+    ).grid(row=0, column=1, sticky="ew", padx=8)
+    StatCard(
+        stats,
+        label="Issues found",
+        value="1",
+        icon="alert-triangle",
+        icon_color="burgundy",
+        circle_bg="#FEF6E7",
+    ).grid(row=0, column=2, sticky="ew", padx=8)
+    StatCard(
+        stats, label="Total rows", value="24,682", icon="bar-chart", icon_color="gold", circle_bg="#F5EDD8"
+    ).grid(row=0, column=3, sticky="ew", padx=(8, 0))
 
     # Card with circle icon header
     card = Card(

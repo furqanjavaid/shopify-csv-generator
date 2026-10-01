@@ -230,11 +230,20 @@ class PrimaryButton(ctk.CTkButton):
             "hover_color": c["DISABLED_BG"],
         }
 
+    def configure(self, **kwargs):  # noqa: A003
+        state = kwargs.pop("state", None)
+        if state is not None and not kwargs:
+            self.set_enabled(str(state) != "disabled")
+            return None
+        if state is not None:
+            kwargs["state"] = state
+        return super().configure(**kwargs)
+
     def set_enabled(self, enabled: bool) -> None:
         if enabled:
-            self.configure(state="normal", **self._normal)
+            super().configure(state="normal", **self._normal)
         else:
-            self.configure(state="disabled", **self._disabled)
+            super().configure(state="disabled", **self._disabled)
 
 
 class DangerButton(ctk.CTkButton):
@@ -280,11 +289,20 @@ class DangerButton(ctk.CTkButton):
             "hover_color": c["DISABLED_BG"],
         }
 
+    def configure(self, **kwargs):  # noqa: A003
+        state = kwargs.pop("state", None)
+        if state is not None and not kwargs:
+            self.set_enabled(str(state) != "disabled")
+            return None
+        if state is not None:
+            kwargs["state"] = state
+        return super().configure(**kwargs)
+
     def set_enabled(self, enabled: bool) -> None:
         if enabled:
-            self.configure(state="normal", **self._normal)
+            super().configure(state="normal", **self._normal)
         else:
-            self.configure(state="disabled", **self._disabled)
+            super().configure(state="disabled", **self._disabled)
 
 
 class OutlineButton(ctk.CTkButton):
@@ -334,11 +352,20 @@ class OutlineButton(ctk.CTkButton):
             "hover_color": c["DISABLED_BG"],
         }
 
+    def configure(self, **kwargs):  # noqa: A003
+        state = kwargs.pop("state", None)
+        if state is not None and not kwargs:
+            self.set_enabled(str(state) != "disabled")
+            return None
+        if state is not None:
+            kwargs["state"] = state
+        return super().configure(**kwargs)
+
     def set_enabled(self, enabled: bool) -> None:
         if enabled:
-            self.configure(state="normal", **self._normal)
+            super().configure(state="normal", **self._normal)
         else:
-            self.configure(state="disabled", **self._disabled)
+            super().configure(state="disabled", **self._disabled)
 
 
 # ── LabeledInput ────────────────────────────────────────
@@ -392,6 +419,7 @@ class Combobox(ctk.CTkFrame):
         *,
         command: Callable | None = None,
         width: int = 220,
+        variable: ctk.StringVar | None = None,
         **kwargs,
     ):
         c = current_colors()
@@ -409,7 +437,10 @@ class Combobox(ctk.CTkFrame):
         self.grid_columnconfigure(0, weight=1)
         self._values = list(values)
         self._command = command
-        self._var = ctk.StringVar(value=values[0] if values else "")
+        initial = values[0] if values else ""
+        self._var = variable if variable is not None else ctk.StringVar(value=initial)
+        if variable is not None and not variable.get() and values:
+            variable.set(values[0])
         self._chevron = load_icon("chevron-down", size=14, color="muted")
 
         # Value left, chevron pinned to the right edge of the bordered field.
@@ -439,6 +470,18 @@ class Combobox(ctk.CTkFrame):
         )
         self._chevron_btn.grid(row=0, column=1, sticky="e", padx=(0, 4), pady=2)
         self._menu: ctk.CTkToplevel | None = None
+
+    def configure(self, **kwargs):  # noqa: A003
+        values = kwargs.pop("values", None)
+        if values is not None:
+            self.configure_values(list(values))
+        state = kwargs.pop("state", None)
+        if state is not None:
+            st = "disabled" if str(state) == "disabled" else "normal"
+            self._btn.configure(state=st)
+            self._chevron_btn.configure(state=st)
+        if kwargs:
+            super().configure(**kwargs)
 
     def get(self) -> str:
         return self._var.get()

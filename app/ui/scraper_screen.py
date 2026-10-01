@@ -23,6 +23,17 @@ import customtkinter as ctk
 
 from app.core.collection_crawler import CollectionCrawlError, crawl
 from app.ui import theme as T
+from app.ui.components import (
+    Card,
+    Combobox,
+    DangerButton,
+    GoldProgressBar,
+    LogBox,
+    OutlineButton,
+    PageHeader,
+    PrimaryButton,
+    StatusBar,
+)
 from app.ui.sidebar import attach_sidebar
 from app.utils.helpers import is_valid_url, output_filename_from_url
 from app.utils.job_status import TOOL_URL_SCRAPER
@@ -77,69 +88,52 @@ class ScraperScreen(ctk.CTkFrame):
         self._running = False
         self._elapsed_after = None
 
-        # Persistent bottom status bar (mockup)
-        self.bottom_bar = ctk.CTkFrame(
-            self, fg_color="#E8E5E0", height=40, corner_radius=0, border_width=1, border_color=T.BORDER
-        )
-        self.bottom_bar.pack(side="bottom", fill="x")
-        self.bottom_bar.pack_propagate(False)
-        self.bottom_bar.grid_columnconfigure(0, weight=1)
-
-        self.count_badge = ctk.CTkLabel(
-            self.bottom_bar, text="Ready", font=T.font(12), text_color=T.TEXT_SECONDARY, anchor="w"
-        )
-        self.count_badge.grid(row=0, column=0, sticky="w", padx=16, pady=8)
-        self.status_right = ctk.CTkLabel(
-            self.bottom_bar, text="", font=T.font(12), text_color=T.TEXT_MUTED, anchor="e"
-        )
-        self.status_right.grid(row=0, column=1, sticky="e", padx=16, pady=8)
-        # Placeholders reassigned when content cards are built
+        # Bottom status bar
+        self.status_bar = StatusBar(self)
+        self.status_bar.pack(side="bottom", fill="x")
+        self.count_badge = self.status_bar.left
+        self.status_right = self.status_bar.right
         self.next_btn = None
         self.clear_btn = None
 
-        body = attach_sidebar(self, app, "scraper")
+        shell = attach_sidebar(self, app, "scraper")
+        shell.grid_rowconfigure(0, weight=1)
+        shell.grid_columnconfigure(0, weight=1)
+
+        body = T.thin_scrollable_frame(shell)
+        body.grid(row=0, column=0, sticky="nsew")
+        body.grid_columnconfigure(0, weight=1)
         body.grid_rowconfigure(2, weight=1)
 
-        # Header
-        header = ctk.CTkFrame(body, fg_color="transparent")
-        header.grid(row=0, column=0, sticky="ew", pady=(0, 14))
-        ctk.CTkLabel(
-            header, text="URL Scraper", font=T.font_tuple(T.H1), text_color=T.HEADING, anchor="w"
-        ).grid(row=0, column=0, sticky="w")
-        ctk.CTkLabel(
-            header,
-            text="Scrape products and metadata from ecommerce stores using seed URLs.",
-            font=T.font_tuple(T.BODY),
-            text_color=T.TEXT_SECONDARY,
-            anchor="w",
-            wraplength=720,
-        ).grid(row=1, column=0, sticky="w", pady=(4, 0))
+        PageHeader(
+            body,
+            "URL Scraper",
+            "Scrape products and metadata from ecommerce stores using seed URLs.",
+        ).grid(row=0, column=0, sticky="ew", pady=(0, 14))
 
         # ── Scraper Configuration card ────────────────────
-        config = T.card_frame(body)
+        config = Card(
+            body,
+            title="Scraper Configuration",
+            subtitle="Choose mode, output folder, and seed URLs",
+            icon="link",
+        )
         config.grid(row=1, column=0, sticky="ew", pady=(0, 14))
-        config.grid_columnconfigure(0, weight=1)
-        cfg = ctk.CTkFrame(config, fg_color="transparent")
-        cfg.grid(row=0, column=0, sticky="ew", padx=18, pady=16)
+        cfg = config.body
         cfg.grid_columnconfigure((0, 1), weight=1)
-
-        ctk.CTkLabel(
-            cfg, text="Scraper Configuration", font=T.font(16, "bold"), text_color=T.HEADING, anchor="w"
-        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 12))
 
         # Mode
         mode_row = ctk.CTkFrame(cfg, fg_color="transparent")
-        mode_row.grid(row=1, column=0, sticky="ew", padx=(0, 8), pady=(0, 10))
+        mode_row.grid(row=0, column=0, sticky="ew", padx=(0, 8), pady=(0, 10))
         mode_row.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(mode_row, text="Mode", font=T.font(12, "bold"), text_color=T.TEXT_MUTED, anchor="w").grid(row=0, column=0, sticky="w")
         self.mode_var = ctk.StringVar(value=MODE_UNIVERSAL_FULL)
-        self.mode_menu = ctk.CTkOptionMenu(
+        self.mode_menu = Combobox(
             mode_row,
+            [MODE_UNIVERSAL_FULL, MODE_UNIVERSAL, MODE_LEGACY],
             variable=self.mode_var,
-            values=[MODE_UNIVERSAL_FULL, MODE_UNIVERSAL, MODE_LEGACY],
-            width=280,
             command=self._on_mode_changed,
-            **T.option_menu_style(),
+            width=280,
         )
         self.mode_menu.grid(row=1, column=0, sticky="ew", pady=(4, 0))
         self.mode_hint = ctk.CTkLabel(
@@ -149,13 +143,13 @@ class ScraperScreen(ctk.CTkFrame):
 
         # Output folder
         out_row = ctk.CTkFrame(cfg, fg_color="transparent")
-        out_row.grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=(0, 10))
+        out_row.grid(row=0, column=1, sticky="ew", padx=(8, 0), pady=(0, 10))
         out_row.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(out_row, text="Output Folder", font=T.font(12, "bold"), text_color=T.TEXT_MUTED, anchor="w").grid(row=0, column=0, columnspan=2, sticky="w")
         self.output_entry = T.styled_entry(out_row, placeholder="Select output folder…")
         self.output_entry.grid(row=1, column=0, sticky="ew", padx=(0, 8), pady=(4, 0))
         self.output_entry.insert(0, self._output_folder)
-        self.browse_btn = T.primary_button(out_row, "Browse", self._browse_output_folder, width=90, height=36)
+        self.browse_btn = OutlineButton(out_row, "Browse", self._browse_output_folder, icon="folder", width=110)
         self.browse_btn.grid(row=1, column=1, pady=(4, 0))
 
         # Universal opts host (max + vendor + pilot)
@@ -237,12 +231,11 @@ class ScraperScreen(ctk.CTkFrame):
             anchor="w",
         )
         self.category_hint.grid(row=0, column=0, sticky="ew", pady=(0, 4))
-        self.category_menu = ctk.CTkOptionMenu(
+        self.category_menu = Combobox(
             self.category_row,
-            values=["Select a category…"],
-            width=420,
+            ["Select a category…"],
             command=self._on_category_selected,
-            **T.option_menu_style(),
+            width=420,
         )
         self.category_menu.grid(row=1, column=0, sticky="ew")
         self.category_menu.set("Select a category…")
@@ -282,21 +275,11 @@ class ScraperScreen(ctk.CTkFrame):
         btn_row = ctk.CTkFrame(cfg, fg_color="transparent")
         btn_row.grid(row=9, column=0, columnspan=2, sticky="ew", pady=(12, 8))
         btn_row.grid_columnconfigure((0, 1), weight=1)
-        self.scrape_btn = T.primary_button(btn_row, "Run Scraper", self._start_scrape)
+        self.scrape_btn = PrimaryButton(btn_row, "Run Scraper", self._start_scrape, icon="play", width=200)
         self.scrape_btn.grid(row=0, column=0, sticky="ew", padx=(0, 8))
-        self.stop_btn = ctk.CTkButton(
-            btn_row,
-            text="Stop",
-            command=self._stop_scrape,
-            state="disabled",
-            fg_color="#CC3333",
-            hover_color="#A82828",
-            text_color="#F0EDE8",
-            corner_radius=T.BORDER_RADIUS,
-            font=T.font_tuple(T.BTN_TEXT),
-            height=T.BTN_HEIGHT,
-        )
+        self.stop_btn = DangerButton(btn_row, "Stop", self._stop_scrape, icon="square", width=140)
         self.stop_btn.grid(row=0, column=1, sticky="ew", padx=(8, 0))
+        self.stop_btn.set_enabled(False)
 
         # Progress
         self.progress_section = ctk.CTkFrame(cfg, fg_color="transparent")
@@ -307,14 +290,8 @@ class ScraperScreen(ctk.CTkFrame):
         )
         self.loading_label.grid(row=0, column=0, sticky="ew", pady=(0, 4))
         self.loading_label.grid_remove()
-        self.progress = ctk.CTkProgressBar(
-            self.progress_section,
-            height=12,
-            mode="indeterminate",
-            progress_color=PROGRESS_AMBER,
-            fg_color=T.BORDER,
-            corner_radius=6,
-        )
+        self.progress = GoldProgressBar(self.progress_section, height=12)
+        self.progress.configure(mode="indeterminate")
         self.progress.grid(row=1, column=0, sticky="ew")
         self.progress.grid_remove()
 
@@ -334,37 +311,22 @@ class ScraperScreen(ctk.CTkFrame):
         bottom.grid_columnconfigure(1, weight=3)
         bottom.grid_rowconfigure(0, weight=1)
 
-        log_card = T.card_frame(bottom)
+        log_card = Card(bottom, title="Log Area", subtitle="Live extraction output", icon="clock")
         log_card.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-        log_card.grid_columnconfigure(0, weight=1)
-        log_card.grid_rowconfigure(1, weight=1)
-        log_head = ctk.CTkFrame(log_card, fg_color="transparent")
-        log_head.grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 6))
+        log_card.body.grid_columnconfigure(0, weight=1)
+        log_card.body.grid_rowconfigure(1, weight=1)
+        log_head = ctk.CTkFrame(log_card.body, fg_color="transparent")
+        log_head.grid(row=0, column=0, sticky="ew", pady=(0, 6))
         log_head.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(log_head, text="Log Area", font=T.font(14, "bold"), text_color=T.HEADING, anchor="w").grid(row=0, column=0, sticky="w")
-        self.clear_btn = T.secondary_button(log_head, "Clear Log", self._clear_results, width=100, height=28)
-        self.clear_btn.grid(row=0, column=1, sticky="e")
-        self.log_box = ctk.CTkTextbox(
-            log_card,
-            height=LOG_MIN_HEIGHT,
-            text_color=LOG_COLOR_INFO,
-            font=ctk.CTkFont(family=T.FONT_MONO, size=11),
-            state="disabled",
-            wrap="word",
-            fg_color=T.get("INPUT_BG"),
-            border_width=1,
-            border_color=T.get("BORDER"),
-            corner_radius=T.BORDER_RADIUS,
-        )
-        self.log_box.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 14))
-        self._configure_log_tags()
+        self.clear_btn = OutlineButton(log_head, "Clear Log", self._clear_results, icon="trash", width=120, height=28)
+        self.clear_btn.grid(row=0, column=0, sticky="e")
+        self.log_view = LogBox(log_card.body, height=LOG_MIN_HEIGHT)
+        self.log_view.grid(row=1, column=0, sticky="nsew")
+        self.log_box = self.log_view.textbox
 
-        results = T.card_frame(bottom)
+        results = Card(bottom, title="Results & Status", subtitle="Run summary", icon="bar-chart")
         results.grid(row=0, column=1, sticky="nsew")
-        results.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(
-            results, text="Results & Status", font=T.font(14, "bold"), text_color=T.HEADING, anchor="w"
-        ).grid(row=0, column=0, sticky="w", padx=16, pady=(14, 10))
+        results.body.grid_columnconfigure(0, weight=1)
         self.result_labels = {}
         for i, (key, title) in enumerate(
             (
@@ -375,15 +337,15 @@ class ScraperScreen(ctk.CTkFrame):
                 ("status", "Status"),
             )
         ):
-            row = ctk.CTkFrame(results, fg_color="transparent")
-            row.grid(row=i + 1, column=0, sticky="ew", padx=16, pady=3)
+            row = ctk.CTkFrame(results.body, fg_color="transparent")
+            row.grid(row=i, column=0, sticky="ew", pady=3)
             row.grid_columnconfigure(1, weight=1)
             ctk.CTkLabel(row, text=title, font=T.font(12), text_color=T.TEXT_MUTED, anchor="w").grid(row=0, column=0, sticky="w")
             lab = ctk.CTkLabel(row, text="—", font=T.font(12, "bold"), text_color=T.TEXT_PRIMARY, anchor="e")
             lab.grid(row=0, column=1, sticky="e")
             self.result_labels[key] = lab
-        self.next_btn = T.primary_button(results, "Generate Final CSV", self._go_mapping)
-        self.next_btn.grid(row=7, column=0, sticky="ew", padx=16, pady=(16, 16))
+        self.next_btn = PrimaryButton(results.body, "Generate Final CSV", self._go_mapping, icon="arrow-right", width=200)
+        self.next_btn.grid(row=6, column=0, sticky="ew", pady=(16, 0))
 
         # Hidden preview frame for legacy compatibility
         self.preview_frame = ctk.CTkScrollableFrame(body, fg_color=T.BG_SURFACE_B, height=1)
@@ -507,30 +469,49 @@ class ScraperScreen(ctk.CTkFrame):
     # ── Actions bar ───────────────────────────────────────
 
     def _disable_actions(self) -> None:
-        self.next_btn.configure(
-            state="disabled", fg_color=T.BG_SURFACE_B, text_color=T.TEXT_MUTED
-        )
-        self.clear_btn.configure(state="disabled")
+        if hasattr(self.next_btn, "set_enabled"):
+            self.next_btn.set_enabled(False)
+        else:
+            self.next_btn.configure(state="disabled")
+        if hasattr(self.clear_btn, "set_enabled"):
+            self.clear_btn.set_enabled(False)
+        else:
+            self.clear_btn.configure(state="disabled")
 
     def _enable_actions(self) -> None:
         if self._is_universal_mode():
-            self.next_btn.configure(
-                state="disabled", fg_color=T.BG_SURFACE_B, text_color=T.TEXT_MUTED
-            )
-            self.clear_btn.configure(state="normal")
+            if hasattr(self.next_btn, "set_enabled"):
+                self.next_btn.set_enabled(False)
+            else:
+                self.next_btn.configure(state="disabled")
+            if hasattr(self.clear_btn, "set_enabled"):
+                self.clear_btn.set_enabled(True)
+            else:
+                self.clear_btn.configure(state="normal")
             return
-        self.next_btn.configure(
-            state="normal", fg_color=T.ACCENT, text_color=T.BG_PRIMARY
-        )
-        self.clear_btn.configure(state="normal")
+        if hasattr(self.next_btn, "set_enabled"):
+            self.next_btn.set_enabled(True)
+        else:
+            self.next_btn.configure(state="normal", fg_color=T.ACCENT, text_color=T.BG_PRIMARY)
+        if hasattr(self.clear_btn, "set_enabled"):
+            self.clear_btn.set_enabled(True)
+        else:
+            self.clear_btn.configure(state="normal")
 
     def _configure_log_tags(self) -> None:
-        """Color tags for INFO / WARNING / ERROR log lines."""
+        """Ensure LogBox / textbox tags match theme level colors."""
+        view = getattr(self, "log_view", None)
+        if view is not None and hasattr(view, "_configure_tags"):
+            view._configure_tags()
+            return
+        c = T.current_colors()
         try:
             tb = self.log_box._textbox  # noqa: SLF001
-            tb.tag_configure("info", foreground=LOG_COLOR_INFO)
-            tb.tag_configure("warn", foreground=LOG_COLOR_WARN)
-            tb.tag_configure("error", foreground=LOG_COLOR_ERROR)
+            tb.tag_configure("ts", foreground=c["TEXT_MUTED"])
+            tb.tag_configure("info", foreground=c["SUCCESS"])
+            tb.tag_configure("warn", foreground=c["WARNING"])
+            tb.tag_configure("error", foreground=c["ERROR"])
+            tb.tag_configure("msg", foreground=c["INPUT_TEXT"])
         except Exception:
             pass
 
@@ -623,6 +604,13 @@ class ScraperScreen(ctk.CTkFrame):
                 return
         except Exception:
             return
+        view = getattr(self, "log_view", None)
+        if view is not None and hasattr(view, "append"):
+            try:
+                view.append(message.rstrip(), self._log_level_tag(message))
+                return
+            except Exception:
+                pass
         line = f"› {message.rstrip()}\n"
         tag = self._log_level_tag(message)
         try:
@@ -729,22 +717,14 @@ class ScraperScreen(ctk.CTkFrame):
         """Run/Stop button visuals + input lock (does not touch job store)."""
         self._running = running
         self._set_inputs_locked(running)
-        if running:
-            self.scrape_btn.configure(state="disabled")
-            self.stop_btn.configure(
-                state="normal",
-                fg_color=T.ERROR,
-                hover_color=T.ACCENT_HOVER,
-                text_color=T.BG_PRIMARY,
-            )
+        if hasattr(self.scrape_btn, "set_enabled"):
+            self.scrape_btn.set_enabled(not running)
         else:
-            self.scrape_btn.configure(state="normal")
-            self.stop_btn.configure(
-                state="disabled",
-                fg_color=T.BG_SURFACE_B,
-                hover_color=T.BG_SURFACE_A,
-                text_color=T.TEXT_MUTED,
-            )
+            self.scrape_btn.configure(state="disabled" if running else "normal")
+        if hasattr(self.stop_btn, "set_enabled"):
+            self.stop_btn.set_enabled(running)
+        else:
+            self.stop_btn.configure(state="normal" if running else "disabled")
 
     def _set_running(self, running: bool) -> None:
         """Toggle Run/Stop button states and lock/unlock inputs."""
