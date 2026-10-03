@@ -362,6 +362,91 @@ def test_logo_and_icon_assets_excluded_from_gallery_count():
     assert all("logo" not in u and "badge" not in u and "icon" not in u for u in urls)
 
 
+def test_related_product_cards_do_not_inflate_gallery_count():
+    """PDP related/recommendation carousels must not be counted as gallery images."""
+    from app.core.store_auditor import analyze_product_gallery_images
+
+    related_imgs = "\n".join(
+        f'<div class="product__media"><img src="https://cdn.shopify.com/s/files/1/1/products/related-{i}.jpg?width=200" /></div>'
+        for i in range(40)
+    )
+    html = f"""
+    <html><body>
+      <product-info id="MainProduct">
+        <media-gallery class="product__media-list">
+          <img src="https://cdn.shopify.com/s/files/1/1/files/sheet-a.jpg?width=100"
+               srcset="https://cdn.shopify.com/s/files/1/1/files/sheet-a.jpg?width=400 400w,
+                       https://cdn.shopify.com/s/files/1/1/products/sheet-a_800x.jpg 800w" />
+          <img data-src="https://cdn.shopify.com/s/files/1/1/products/sheet-b.jpg?width=400" />
+          <picture>
+            <source srcset="https://shop.myshopify.com/cdn/shop/files/sheet-c.webp?width=600" />
+            <img src="https://cdn.shopify.com/s/files/1/1/files/sheet-c.jpg" />
+          </picture>
+        </media-gallery>
+      </product-info>
+      <section class="product-recommendations" data-section-type="related-products">
+        {related_imgs}
+      </section>
+      <div class="related-products">
+        <div class="product__media"><img src="https://cdn.shopify.com/s/files/1/1/products/upsell-x.jpg" /></div>
+      </div>
+      <script type="application/json" id="ProductJson-main">
+      {{
+        "id": 1,
+        "handle": "bamboo-linen-sheet-set",
+        "images": [
+          "https://cdn.shopify.com/s/files/1/1/files/sheet-a.jpg?v=1",
+          "https://cdn.shopify.com/s/files/1/1/products/sheet-b.jpg?v=1",
+          "https://cdn.shopify.com/s/files/1/1/files/sheet-c.jpg?v=1",
+          "https://cdn.shopify.com/s/files/1/1/products/sheet-d.jpg?v=1"
+        ],
+        "media": [
+          {{"media_type":"image","src":"https://cdn.shopify.com/s/files/1/1/files/sheet-a.jpg"}},
+          {{"media_type":"image","preview_image":{{"src":"https://cdn.shopify.com/s/files/1/1/products/sheet-b.jpg"}}}}
+        ]
+      }}
+      </script>
+      <script type="application/json" id="ProductJson-related">
+      {{
+        "id": 2,
+        "handle": "other-duvet-cover",
+        "images": [
+          "https://cdn.shopify.com/s/files/1/1/products/related-json-1.jpg",
+          "https://cdn.shopify.com/s/files/1/1/products/related-json-2.jpg"
+        ]
+      }}
+      </script>
+    </body></html>
+    """
+    result = analyze_product_gallery_images(
+        html, product_url="https://shop.example/products/bamboo-linen-sheet-set"
+    )
+    assert result["count"] == 4
+    assert "related-json-1" not in " ".join(result["keys"])
+    assert "upsell-x" not in " ".join(result["keys"])
+    assert result["by_source"]
+    # Sources should identify product JSON and/or gallery DOM contributions
+    assert any(
+        k in result["by_source"]
+        for k in ("shopify_product_json", "gallery_dom", "srcset", "lazy", "picture")
+    )
+
+
+def test_files_and_products_path_forms_dedupe_same_stem():
+    from app.core.store_auditor import canonical_product_image_key
+
+    a = canonical_product_image_key(
+        "https://cdn.shopify.com/s/files/1/1/files/bamboo-hero.jpg?width=200&format=webp"
+    )
+    b = canonical_product_image_key(
+        "https://shop.myshopify.com/cdn/shop/products/bamboo-hero_800x.jpg"
+    )
+    c = canonical_product_image_key(
+        "//cdn.shopify.com/s/files/1/1/products/bamboo-hero.webp?v=9"
+    )
+    assert a == b == c == "shopify:bamboo-hero"
+
+
 def test_passing_checks_use_canonical_email_and_nav_counts():
     from app.core.audit_report import format_passing_message
     from app.core.store_auditor import _finding
@@ -403,5 +488,7 @@ if __name__ == "__main__":
     test_same_image_src_lazy_and_jsonld_counts_once()
     test_distinct_product_filenames_remain_separate()
     test_logo_and_icon_assets_excluded_from_gallery_count()
+    test_related_product_cards_do_not_inflate_gallery_count()
+    test_files_and_products_path_forms_dedupe_same_stem()
     test_passing_checks_use_canonical_email_and_nav_counts()
     print("OK")

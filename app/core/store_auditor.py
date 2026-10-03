@@ -180,6 +180,15 @@ _JUNK_IMAGE_RE = re.compile(
     re.I,
 )
 
+# Sections that must never contribute to the audited product's gallery count
+_EXCLUDE_SECTION_RE = re.compile(
+    r"related|recommend|upsell|cross-?sell|complementary|recently|"
+    r"you-?may|you-?might|similar|also-like|also_like|cart-drawer|"
+    r"predictive|suggestions|featured-collection|product-recommendations|"
+    r"shopify-section-related|shopify-section-featured",
+    re.I,
+)
+
 # Shopify legacy named sizes + numeric resize tokens in the filename stem
 _SHOPIFY_SIZE_SUFFIX_RE = re.compile(
     r"_(?:"
@@ -197,6 +206,30 @@ _SHOPIFY_PATH_RE = re.compile(
     re.I,
 )
 
+_SHOPIFY_INTERCHANGEABLE_EXT = frozenset(
+    {".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".pjpg"}
+)
+
+_GALLERY_ATTRS = (
+    "src",
+    "data-src",
+    "data-original",
+    "data-lazy-src",
+    "data-zoom",
+    "data-image",
+    "data-srcset",
+    "srcset",
+    "data-bgset",
+)
+
+
+def product_handle_from_url(product_url: str | None) -> str | None:
+    if not product_url:
+        return None
+    path = urlparse(html_unescape_url(product_url)).path or ""
+    m = re.search(r"/products/([^/?#]+)", path, re.I)
+    return m.group(1).strip().lower() if m else None
+
 
 def normalize_product_image_url(url: str) -> str | None:
     """Return a canonical key for a logical product image asset (aliases kept)."""
@@ -208,8 +241,9 @@ def canonical_product_image_key(url: str) -> str | None:
     Canonicalise an image URL so responsive/lazy/transform variants collapse.
 
     Shopify encodes transforms in query params (?width=&crop=&format=) and in
-    legacy filename suffixes (_300x, _grande, _100x100@2x). Different hosts
-    serving the same /cdn/shop/... or /s/files/... asset map to one key.
+    legacy filename suffixes (_300x, _grande). Host and /files/ vs /products/
+    path forms of the same filename stem map to one key. Interchangeable
+    extensions (jpg/webp/…) collapse for Shopify CDN assets.
     """
     if not url:
         return None
@@ -217,44 +251,39 @@ def canonical_product_image_key(url: str) -> str | None:
     if not u or u.startswith("data:") or u.startswith("#"):
         return None
 
-    parsed = urlparse(u if "://" in u or u.startswith("//") else f"https://placeholder.local{u if u.startswith('/') else '/' + u}")
+    parsed = urlparse(
+        u
+        if "://" in u or u.startswith("//")
+        else f"https://placeholder.local{u if u.startswith('/') else '/' + u}"
+    )
     path = parsed.path or ""
     if not path or path.endswith("/"):
         return None
 
-    # Basename without transform suffixes; keep stem identity across extensions
-    # only when Shopify format negotiation changed extension via query (path stem).
     directory, filename = path.rsplit("/", 1)
     stem, ext = os.path.splitext(filename)
     stem = _SHOPIFY_SIZE_SUFFIX_RE.sub("", stem)
-    # Repeated size tokens (rare): foo_200x_200x
     stem = _SHOPIFY_SIZE_SUFFIX_RE.sub("", stem)
     if not stem:
         return None
-    filename = stem + ext.lower()
+    ext_l = ext.lower()
 
     shopify_m = _SHOPIFY_PATH_RE.search(path)
     if shopify_m:
-        # Identity = bucket + canonical filename (host/query-agnostic)
-        bucket = shopify_m.group(1).lower()
         rel = shopify_m.group(2)
-        if "/" in rel:
-            rel_dir, rel_file = rel.rsplit("/", 1)
-        else:
-            rel_dir, rel_file = "", rel
-        rel_stem, rel_ext = os.path.splitext(rel_file or filename)
+        rel_file = rel.rsplit("/", 1)[-1]
+        rel_stem, rel_ext = os.path.splitext(rel_file)
         rel_stem = _SHOPIFY_SIZE_SUFFIX_RE.sub("", rel_stem)
         rel_stem = _SHOPIFY_SIZE_SUFFIX_RE.sub("", rel_stem)
-        mid = f"{rel_dir}/" if rel_dir else ""
-        key_path = f"{bucket}/{mid}{rel_stem}{rel_ext.lower()}".lower()
-        return f"shopify:{key_path}"
+        # Stem-only identity: merges host, /files|/products, and jpg/webp variants
+        if rel_ext.lower() in _SHOPIFY_INTERCHANGEABLE_EXT or not rel_ext:
+            return f"shopify:{rel_stem.lower()}"
+        return f"shopify:{rel_stem.lower()}{rel_ext.lower()}"
 
-    # Non-Shopify: path without transform query; keep host+path for safety
     host = (parsed.netloc or "").lower().lstrip(".")
     if host.startswith("www."):
         host = host[4:]
-    key = f"{host}{directory}/{filename}".lower()
-    return key
+    return f"{host}{directory}/{stem}{ext_l}".lower()
 
 
 def html_unescape_url(url: str) -> str:
@@ -286,16 +315,33 @@ def _is_productish_image_url(url: str) -> bool:
         )
     ):
         return True
-    # Non-Shopify product-ish paths / extensions
     if re.search(r"/(?:product|media|gallery|catalog|uploads?|images?)/", raw):
         return bool(re.search(r"\.(?:jpe?g|png|webp|gif|avif)(?:$|\?)", raw))
     return bool(re.search(r"\.(?:jpe?g|png|webp|gif|avif)(?:$|\?)", raw))
 
 
-def _add_canonical_image(raw: str | None, seen: set[str], found: list[str]) -> None:
+def _element_in_excluded_section(el) -> bool:
+    """True when el sits under related/upsell/recommendation markup."""
+    cur = el
+    while cur is not None and getattr(cur, "name", None) is not None:
+        classes = " ".join(cur.get("class") or [])
+        el_id = cur.get("id") or ""
+        blob = f"{classes} {el_id} {cur.name}"
+        if _EXCLUDE_SECTION_RE.search(blob):
+            return True
+        cur = getattr(cur, "parent", None)
+    return False
+
+
+def _add_canonical_image(
+    raw: str | None,
+    seen: set[str],
+    found: list[str],
+    by_source: dict[str, list[str]],
+    source: str,
+) -> None:
     if not raw:
         return
-    # srcset: "url 1x, url2 2x" / "url 200w, url2 400w"
     parts = [p.strip().split()[0] for p in str(raw).split(",") if p.strip()]
     for part in parts or [str(raw)]:
         if not _is_productish_image_url(part):
@@ -305,178 +351,294 @@ def _add_canonical_image(raw: str | None, seen: set[str], found: list[str]) -> N
             continue
         seen.add(key)
         found.append(key)
+        by_source.setdefault(source, []).append(key)
 
 
-def extract_product_gallery_image_urls(html: str) -> list[str]:
+def _iter_shopify_product_objects(data: Any, handle: str | None) -> list[dict]:
+    """Yield product dicts; when handle is set, only the matching product."""
+    out: list[dict] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            node_handle = str(node.get("handle") or "").lower()
+            looks_product = any(
+                k in node for k in ("images", "media", "featured_image", "featured_media")
+            ) and any(k in node for k in ("handle", "variants", "title", "id"))
+            if looks_product:
+                if handle:
+                    if node_handle == handle:
+                        out.append(node)
+                else:
+                    out.append(node)
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(data)
+    if handle:
+        return [p for p in out if str(p.get("handle") or "").lower() == handle]
+    return out
+
+
+def _urls_from_shopify_product(product: dict) -> list[str]:
+    urls: list[str] = []
+    images = product.get("images") or []
+    if isinstance(images, list):
+        for img in images:
+            if isinstance(img, str):
+                urls.append(img)
+            elif isinstance(img, dict):
+                urls.append(str(img.get("src") or img.get("url") or ""))
+    featured = product.get("featured_image")
+    if isinstance(featured, str):
+        urls.append(featured)
+    elif isinstance(featured, dict):
+        urls.append(str(featured.get("src") or featured.get("url") or ""))
+    media = product.get("media") or []
+    if isinstance(media, list):
+        for item in media:
+            if not isinstance(item, dict):
+                continue
+            media_type = (item.get("media_type") or "image").lower()
+            preview = item.get("preview_image") or {}
+            preview_src = ""
+            if isinstance(preview, dict):
+                preview_src = str(preview.get("src") or "")
+            if media_type != "image":
+                if preview_src:
+                    urls.append(preview_src)
+                continue
+            src = item.get("src") or ""
+            if src:
+                urls.append(str(src))
+            if preview_src:
+                urls.append(preview_src)
+    return [u for u in urls if u]
+
+
+def analyze_product_gallery_images(
+    html: str,
+    product_url: str | None = None,
+) -> dict[str, Any]:
     """
-    Parse product/gallery image URLs from HTML (src, srcset, lazy attrs, picture/source).
-    Returns deduplicated canonical keys. Safe to unit-test without Playwright.
+    Collect unique logical gallery keys for the audited product only.
+
+    Returns {count, keys, by_source} where by_source groups first-seen keys by
+    origin (shopify_product_json, json_ld, gallery_dom, srcset, lazy, picture,
+    background, …).
     """
+    empty = {"count": 0, "keys": [], "by_source": {}}
     if not html:
-        return []
+        return empty
+
     soup = BeautifulSoup(html, "lxml")
+    handle = product_handle_from_url(product_url)
     found: list[str] = []
     seen: set[str] = set()
+    by_source: dict[str, list[str]] = {}
 
-    # Prefer gallery/product media containers when present
-    containers: list = []
-    containers.extend(
-        soup.find_all(
-            class_=re.compile(
-                r"product__media|product-media|product__photo|product-gallery|"
-                r"product-images|product__image|media-gallery|"
-                r"product__thumb|product-thumb",
-                re.I,
-            )
-        )
-    )
-    containers.extend(soup.find_all(id=re.compile(r"ProductMedia|product-photos|MediaGallery", re.I)))
-    containers.extend(soup.find_all(attrs={"data-media-id": True}))
-    containers.extend(soup.find_all(attrs={"data-product-media": True}))
-    containers.extend(soup.find_all("media-gallery"))
-
-    roots = containers if containers else [
-        soup.find("product-info")
-        or soup.find(id=re.compile(r"ProductInfo|MainProduct", re.I))
-        or soup.find(class_=re.compile(r"product-single|product__info|^product$", re.I))
-        or soup.find("main")
-        or soup
-    ]
-
-    attr_names = (
-        "src",
-        "data-src",
-        "data-original",
-        "data-lazy-src",
-        "data-zoom",
-        "data-image",
-        "data-srcset",
-        "srcset",
-        "data-bgset",
-    )
-    for root in roots:
-        if root is None:
-            continue
-        for el in root.find_all(["img", "source"]):
-            for attr in attr_names:
-                _add_canonical_image(el.get(attr), seen, found)
-        for el in root.find_all(style=re.compile(r"background-image", re.I)):
-            style = el.get("style") or ""
-            for m in re.finditer(r"url\(['\"]?([^'\")]+)['\"]?\)", style, re.I):
-                _add_canonical_image(m.group(1), seen, found)
-
-    # Product JSON-LD / product media JSON only — not every CDN URL in page scripts
+    # 1) Shopify Product JSON for this handle — canonical gallery source
     for script in soup.find_all("script"):
         text = script.string or script.get_text() or ""
-        if not text:
+        if not text or len(text) < 20:
             continue
         stype = (script.get("type") or "").lower()
         sid = (script.get("id") or "").lower()
-        is_product_json = (
-            stype in ("application/ld+json", "application/json")
+        sclass = " ".join(script.get("class") or []).lower()
+        if not (
+            stype == "application/json"
             or "productjson" in sid
             or "product-json" in sid
-            or "productmedia" in sid
+            or "product-json" in sclass
+            or (stype == "application/json" and "product" in sid)
+        ):
+            # Also accept application/json without id when handle appears in text
+            if not (stype == "application/json" and handle and handle in text.lower()):
+                if "productjson" not in sid and "ProductJson" not in (script.get("id") or ""):
+                    continue
+        try:
+            data = json.loads(text)
+        except Exception:
+            continue
+        for product in _iter_shopify_product_objects(data, handle):
+            for u in _urls_from_shopify_product(product):
+                _add_canonical_image(u, seen, found, by_source, "shopify_product_json")
+
+    # 2) JSON-LD Product (optionally URL/handle scoped)
+    for script in soup.find_all("script", attrs={"type": re.compile(r"ld\+json", re.I)}):
+        text = script.string or script.get_text() or ""
+        if not text:
+            continue
+        try:
+            data = json.loads(text)
+        except Exception:
+            continue
+        nodes = data if isinstance(data, list) else [data]
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            types = node.get("@type") or node.get("type") or ""
+            type_l = " ".join(types) if isinstance(types, list) else str(types)
+            if "product" not in type_l.lower():
+                continue
+            if handle:
+                node_url = str(node.get("url") or node.get("@id") or "")
+                if node_url and handle not in node_url.lower():
+                    continue
+            images = node.get("image") or node.get("images") or []
+            if isinstance(images, str):
+                images = [images]
+            if isinstance(images, dict):
+                images = [images.get("url") or images.get("@id") or ""]
+            for img in images:
+                if isinstance(img, dict):
+                    img = img.get("url") or img.get("@id") or ""
+                _add_canonical_image(str(img), seen, found, by_source, "json_ld")
+
+    # 3) DOM gallery — only primary product media, never related/upsell blocks
+    candidate_roots: list = []
+    for sel_kwargs in (
+        {"name": "media-gallery"},
+        {"class_": re.compile(r"product__media-list|product-media-list|media-gallery__list", re.I)},
+        {"class_": re.compile(r"product__media|product-gallery|product-images", re.I)},
+        {"id": re.compile(r"^(?:ProductMedia|product-photos|MediaGallery)", re.I)},
+    ):
+        candidate_roots.extend(soup.find_all(**sel_kwargs))
+
+    # Fallback: first product-info / main-product media region (still exclude related)
+    if not candidate_roots:
+        host = (
+            soup.find("product-info")
+            or soup.find(id=re.compile(r"ProductInfo|MainProduct|MainContent", re.I))
+            or soup.find(class_=re.compile(r"product-single|product__info", re.I))
         )
-        if not is_product_json:
+        if host is not None:
+            candidate_roots.append(host)
+
+    roots = [r for r in candidate_roots if r is not None and not _element_in_excluded_section(r)]
+    # De-dupe nested roots: keep outermost only
+    filtered_roots = []
+    for root in roots:
+        if any(root is other or (hasattr(root, "parents") and other in root.parents) for other in filtered_roots):
             continue
-        # Prefer structured Product image arrays when present
-        if "ld+json" in stype:
-            try:
-                data = json.loads(text)
-            except Exception:
-                data = None
-            nodes = data if isinstance(data, list) else [data] if isinstance(data, dict) else []
-            for node in nodes:
-                if not isinstance(node, dict):
-                    continue
-                types = node.get("@type") or node.get("type") or ""
-                type_l = " ".join(types) if isinstance(types, list) else str(types)
-                if "product" not in type_l.lower():
-                    continue
-                images = node.get("image") or node.get("images") or []
-                if isinstance(images, str):
-                    images = [images]
-                if isinstance(images, dict):
-                    images = [images.get("url") or images.get("@id") or ""]
-                for img in images:
-                    if isinstance(img, dict):
-                        img = img.get("url") or img.get("@id") or ""
-                    _add_canonical_image(str(img), seen, found)
+        # drop root if it is inside an already-selected root
+        if any(hasattr(root, "parents") and sel in root.parents for sel in filtered_roots):
             continue
-        for m in re.finditer(
-            r"https?://[^\"'\\s]+(?:cdn\.shopify\.com|/cdn/shop/|shopify\.com/s/files)[^\"'\\s]*",
-            text,
-            re.I,
-        ):
-            _add_canonical_image(m.group(0), seen, found)
-        for m in re.finditer(
-            r"https?:\\+/\\+/[^\"'\\s]+(?:cdn\.shopify\.com|/cdn/shop/)[^\"'\\s]*",
-            text,
-            re.I,
-        ):
-            _add_canonical_image(m.group(0), seen, found)
+        filtered_roots.append(root)
 
-    return found
+    for root in filtered_roots:
+        for el in root.find_all(["img", "source"]):
+            if _element_in_excluded_section(el):
+                continue
+            for attr in _GALLERY_ATTRS:
+                val = el.get(attr)
+                if not val:
+                    continue
+                if attr in ("srcset", "data-srcset", "data-bgset"):
+                    source = "srcset"
+                elif attr in ("data-src", "data-lazy-src", "data-original"):
+                    source = "lazy"
+                elif el.name == "source":
+                    source = "picture"
+                else:
+                    source = "gallery_dom"
+                _add_canonical_image(val, seen, found, by_source, source)
+        for el in root.find_all(style=re.compile(r"background-image", re.I)):
+            if _element_in_excluded_section(el):
+                continue
+            style = el.get("style") or ""
+            for m in re.finditer(r"url\(['\"]?([^'\")]+)['\"]?\)", style, re.I):
+                _add_canonical_image(m.group(1), seen, found, by_source, "background")
+
+    return {"count": len(found), "keys": found, "by_source": by_source}
 
 
-def count_product_gallery_images(page) -> int:
+def extract_product_gallery_image_urls(
+    html: str,
+    product_url: str | None = None,
+) -> list[str]:
+    """Parse deduplicated canonical gallery keys for the audited product."""
+    return analyze_product_gallery_images(html, product_url=product_url)["keys"]
+
+
+def count_product_gallery_images(page, product_url: str | None = None) -> int:
     """
-    Count unique logical product/gallery images on the current Playwright page.
-    Combines scoped HTML parsing with live DOM attrs inside product media roots.
+    Count unique logical images in the audited product's own gallery.
+
+    Prefers handle-scoped Shopify product JSON + scoped gallery DOM. Never uses
+    bare <main> / related-product carousels as the gallery root.
     """
-    urls: set[str] = set()
+    handle = product_handle_from_url(product_url)
+    analysis: dict[str, Any] = {"count": 0, "keys": [], "by_source": {}}
     try:
         html = page.content()
-        urls.update(extract_product_gallery_image_urls(html))
+        analysis = analyze_product_gallery_images(html, product_url=product_url)
     except Exception:
         pass
 
-    # Live DOM limited to product-media roots (avoid related/collection srcsets)
+    urls: set[str] = set(analysis.get("keys") or [])
+    by_source: dict[str, list[str]] = {
+        k: list(v) for k, v in (analysis.get("by_source") or {}).items()
+    }
+
+    # Live DOM: only primary media-gallery roots, excluding related sections
     try:
         live = page.evaluate(
             """() => {
                 const out = [];
                 const junk = /logo|icon|sprite|payment|badge|flag|avatar|emoji|spacer|1x1|pixel|blank|placeholder|favicon/i;
-                const add = (u) => {
+                const excludeRe = /related|recommend|upsell|cross-?sell|complementary|recently|you-?may|similar|also-like|product-recommendations|featured-collection|cart-drawer/i;
+                const add = (u, source) => {
                     if (!u || u.startsWith('data:') || junk.test(u)) return;
-                    out.push(u);
+                    out.push({url: u, source});
+                };
+                const inExcluded = (el) => {
+                    let cur = el;
+                    while (cur && cur !== document.body) {
+                        const cls = (cur.className && cur.className.toString) ? cur.className.toString() : '';
+                        const id = cur.id || '';
+                        if (excludeRe.test(cls + ' ' + id)) return true;
+                        cur = cur.parentElement;
+                    }
+                    return false;
                 };
                 const rootSel = [
-                    '[class*="product__media"]',
-                    '[class*="product-media"]',
-                    '[class*="product__photo"]',
-                    '[class*="product-gallery"]',
-                    '[class*="product-images"]',
-                    '[class*="media-gallery"]',
-                    '[id*="ProductMedia"]',
-                    '[id*="product-photos"]',
-                    '[data-media-id]',
-                    '[data-product-media]',
                     'media-gallery',
-                    'product-info',
-                    '[id*="ProductInfo"]',
-                    '[class*="product-single"]',
-                    'main .product',
-                    'main'
+                    '[class*="product__media-list"]',
+                    '[class*="product-media-list"]',
+                    '[class*="media-gallery"]',
+                    '[class*="product__media"]',
+                    '[class*="product-gallery"]',
+                    '[id^="ProductMedia"]',
+                    '[id^="MediaGallery"]',
+                    'product-info [class*="media"]',
+                    '[id*="ProductInfo"] [class*="media"]'
                 ].join(',');
-                const roots = Array.from(document.querySelectorAll(rootSel));
-                const scopes = roots.length ? roots : [document];
+                let roots = Array.from(document.querySelectorAll(rootSel))
+                    .filter(r => !inExcluded(r));
+                // If still empty, do NOT fall back to <main> — return no live URLs
                 const seenNodes = new Set();
-                for (const root of scopes) {
-                    const nodes = root.querySelectorAll(
-                        'img, source, [data-src], [data-image], [data-zoom], [data-srcset]'
-                    );
+                for (const root of roots) {
+                    const nodes = root.querySelectorAll('img, source');
                     for (const el of nodes) {
-                        if (seenNodes.has(el)) continue;
+                        if (seenNodes.has(el) || inExcluded(el)) continue;
                         seenNodes.add(el);
-                        add(el.currentSrc || '');
+                        const tag = (el.tagName || '').toLowerCase();
+                        add(el.currentSrc || '', tag === 'source' ? 'picture' : 'gallery_dom');
                         for (const a of ['src','data-src','data-original','data-lazy-src','data-zoom','data-image']) {
-                            add(el.getAttribute(a) || '');
+                            const v = el.getAttribute(a) || '';
+                            let source = 'gallery_dom';
+                            if (a.startsWith('data-') && a !== 'data-zoom' && a !== 'data-image') source = 'lazy';
+                            if (tag === 'source') source = 'picture';
+                            add(v, source);
                         }
                         for (const a of ['srcset','data-srcset','data-bgset']) {
                             const v = el.getAttribute(a) || '';
-                            for (const part of v.split(',')) add((part.trim().split(/\\s+/)[0]) || '');
+                            for (const part of v.split(',')) {
+                                add((part.trim().split(/\\s+/)[0]) || '', 'srcset');
+                            }
                         }
                     }
                 }
@@ -484,15 +646,29 @@ def count_product_gallery_images(page) -> int:
             }"""
         )
         if isinstance(live, list):
-            for u in live:
-                if not _is_productish_image_url(str(u)):
+            for item in live:
+                if isinstance(item, dict):
+                    u, source = item.get("url"), item.get("source") or "gallery_dom"
+                else:
+                    u, source = item, "gallery_dom"
+                if not u or not _is_productish_image_url(str(u)):
                     continue
                 key = canonical_product_image_key(str(u))
-                if key:
-                    urls.add(key)
+                if not key or key in urls:
+                    continue
+                urls.add(key)
+                by_source.setdefault(f"live_{source}", []).append(key)
     except Exception:
         pass
 
+    parts = [f"{src}={len(keys)}" for src, keys in sorted(by_source.items())]
+    count_product_gallery_images.last_analysis = {  # type: ignore[attr-defined]
+        "count": len(urls),
+        "keys": sorted(urls),
+        "by_source": by_source,
+        "handle": handle,
+        "source_summary": ", ".join(parts) if parts else "none",
+    }
     return len(urls)
 
 
@@ -1011,8 +1187,22 @@ def run_playwright_audit(
                 findings["atc_above_fold"] = False
                 findings["atc_y_position"] = 9999
 
-            # Robust gallery count: src/srcset/lazy/picture + JSON media, deduped
-            findings["product_image_count"] = count_product_gallery_images(page)
+            # Unique images from this product's gallery only (handle-scoped)
+            findings["product_image_count"] = count_product_gallery_images(
+                page, product_url=product_url
+            )
+            analysis = getattr(count_product_gallery_images, "last_analysis", None) or {}
+            if analysis:
+                _emit(
+                    progress,
+                    "      Gallery image sources: "
+                    f"{analysis.get('source_summary', 'none')} "
+                    f"(unique={analysis.get('count', 0)}, handle={analysis.get('handle')})",
+                )
+                findings["product_image_keys_sample"] = (analysis.get("keys") or [])[:20]
+                findings["product_image_sources"] = {
+                    k: len(v) for k, v in (analysis.get("by_source") or {}).items()
+                }
 
             price = page.query_selector(
                 "[class*='price']:not([class*='compare']):not([class*='compare-at'])"
