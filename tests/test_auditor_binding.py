@@ -156,7 +156,7 @@ def test_review_fail_not_in_passing_and_price_message_not_claim_reviews():
 
 
 def test_mobile_above_fold_fail_and_tap_pass_are_distinct():
-    from app.core.audit_report import format_passing_message
+    from app.core.audit_report import enrich_finding, format_passing_message
     from app.core.store_auditor import build_report_findings
 
     raw = {
@@ -186,6 +186,12 @@ def test_mobile_above_fold_fail_and_tap_pass_are_distinct():
     passes = [f for f in findings if f.get("passed") is True and f.get("status") == "pass"]
     assert all(f.get("check_id") != 61 for f in passes)
 
+    enriched_fold = enrich_finding(by_id[61], raw)
+    assert "Below the Fold" in enriched_fold.get("issue", "")
+    fix = (enriched_fold.get("fix") or "").lower()
+    assert "sticky" in fix or "above the fold" in fix or "position" in fix
+    assert "44" not in fix  # must not recommend tap-target size when fold failed
+
 
 def test_build_report_findings_reviews_follow_raw_flag_only():
     from app.core.store_auditor import build_report_findings
@@ -208,6 +214,93 @@ def test_build_report_findings_reviews_follow_raw_flag_only():
     assert "No reviews" in reviews["issue"]
 
 
+def test_product_gallery_images_not_zero_for_shopify_lazy_gallery():
+    """Lazy-loaded Shopify galleries must not yield product_image_count=0."""
+    from app.core.store_auditor import (
+        build_report_findings,
+        extract_product_gallery_image_urls,
+        normalize_product_image_url,
+    )
+
+    html = """
+    <html><body>
+      <div class="product__media-list">
+        <img data-src="https://cdn.shopify.com/s/files/1/0001/products/hero_100x.jpg"
+             srcset="https://cdn.shopify.com/s/files/1/0001/products/hero_200x.jpg 200w,
+                     https://cdn.shopify.com/s/files/1/0001/products/hero_800x.jpg 800w"
+             alt="Hero" />
+        <picture>
+          <source srcset="https://cdn.shopify.com/s/files/1/0001/products/side.webp" />
+          <img data-lazy-src="https://cdn.shopify.com/s/files/1/0001/products/side_400x.webp" />
+        </picture>
+        <div class="product__media" data-media-id="3"
+             style="background-image:url('https://cdn.shopify.com/s/files/1/0001/products/detail.jpg')"></div>
+        <img src="/assets/logo.png" class="header__logo" />
+      </div>
+      <script type="application/ld+json">
+      {"@type":"Product","image":[
+        "https://cdn.shopify.com/s/files/1/0001/products/hero.jpg",
+        "https://cdn.shopify.com/s/files/1/0001/products/lifestyle.jpg"
+      ]}
+      </script>
+    </body></html>
+    """
+    urls = extract_product_gallery_image_urls(html)
+    assert len(urls) >= 3
+    assert normalize_product_image_url(
+        "https://cdn.shopify.com/s/files/1/0001/products/hero_800x.jpg"
+    ) == normalize_product_image_url(
+        "https://cdn.shopify.com/s/files/1/0001/products/hero.jpg"
+    )
+    assert not any("logo" in u for u in urls)
+
+    raw = {
+        "product_url": "https://shop.example/products/a",
+        "product_image_count": len(urls),
+        "atc_above_fold": True,
+        "product_has_reviews": True,
+        "price_visible": True,
+        "mobile_atc_above_fold": True,
+        "mobile_atc_tap_target_ok": True,
+        "cart_has_checkout_btn": True,
+        "homepage_load_time": 1.0,
+        "screenshots": {},
+    }
+    findings = build_report_findings(raw, "https://shop.example")
+    img = next(f for f in findings if f["check_id"] == 12)
+    assert img["passed"] is True
+    assert "0 image" not in img["issue"]
+
+
+def test_passing_checks_use_canonical_email_and_nav_counts():
+    from app.core.audit_report import format_passing_message
+    from app.core.store_auditor import _finding
+
+    raw = {
+        "email_capture_count": 3,
+        "has_email_capture": True,
+        "nav_links_count": 4,
+        "trust_badge_count": 0,
+        "trust_text_match": None,
+        "homepage_load_time": 0.9,
+        "meta_title": "Demo",
+    }
+    email = _finding(
+        8, "Email Capture", "MEDIUM", "marketing", True,
+        "Email capture present", "ok", "impact", "fix",
+    )
+    nav = _finding(
+        201, "Desktop Nav Depth", "MEDIUM", "marketing", True,
+        "Expanded navigation", "ok", "impact", "fix",
+    )
+    email_msg = format_passing_message(email, raw)
+    nav_msg = format_passing_message(nav, raw)
+    assert "3" in email_msg
+    assert "0 capture" not in email_msg.lower()
+    assert "4" in nav_msg
+    assert "0 visible" not in nav_msg.lower()
+
+
 if __name__ == "__main__":
     test_issue_field_preferred_over_literal_issue()
     test_recommendation_title_not_generic()
@@ -215,4 +308,6 @@ if __name__ == "__main__":
     test_review_fail_not_in_passing_and_price_message_not_claim_reviews()
     test_mobile_above_fold_fail_and_tap_pass_are_distinct()
     test_build_report_findings_reviews_follow_raw_flag_only()
+    test_product_gallery_images_not_zero_for_shopify_lazy_gallery()
+    test_passing_checks_use_canonical_email_and_nav_counts()
     print("OK")

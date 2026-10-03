@@ -174,6 +174,192 @@ def _normalize_price(text: str) -> str:
     return matches[-1]
 
 
+_JUNK_IMAGE_RE = re.compile(
+    r"logo|icon|sprite|payment|badge|flag|avatar|emoji|spacer|1x1|pixel|"
+    r"blank|placeholder|favicon|spinner|loading|cart\.svg|close\.svg",
+    re.I,
+)
+
+
+def normalize_product_image_url(url: str) -> str | None:
+    """Normalize CDN/image URLs so size variants collapse to one identity."""
+    if not url:
+        return None
+    u = url.strip().strip("\"'")
+    if not u or u.startswith("data:") or u.startswith("#"):
+        return None
+    u = u.replace("\\u002F", "/").replace("\\/", "/")
+    # Drop query/hash (Shopify width/height params)
+    u = u.split("?", 1)[0].split("#", 1)[0]
+    # Shopify sized filenames: image_200x.jpg / image_200x200@2x.webp
+    u = re.sub(r"_\d+x\d*(?:@\d+x)?(?=\.[a-zA-Z]+$)", "", u)
+    u = re.sub(r"_\d+x(?=\.[a-zA-Z]+$)", "", u)
+    return u.lower()
+
+
+def _is_productish_image_url(url: str) -> bool:
+    if not url or _JUNK_IMAGE_RE.search(url):
+        return False
+    # Prefer Shopify CDN / product media paths; still allow generic product galleries
+    if any(
+        token in url
+        for token in (
+            "cdn.shopify.com",
+            "/cdn/shop/",
+            "/products/",
+            "/files/",
+            "shopify.com/s/files",
+            "product",
+            "media",
+        )
+    ):
+        return True
+    # Non-Shopify stores: accept common image extensions under content paths
+    return bool(re.search(r"\.(?:jpe?g|png|webp|gif|avif)(?:$|\?)", url, re.I))
+
+
+def extract_product_gallery_image_urls(html: str) -> list[str]:
+    """
+    Parse product/gallery image URLs from HTML (src, srcset, lazy attrs, picture/source).
+    Deduplicates size variants. Safe to unit-test without Playwright.
+    """
+    if not html:
+        return []
+    soup = BeautifulSoup(html, "lxml")
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def _add(raw: str | None) -> None:
+        if not raw:
+            return
+        # srcset: "url 1x, url2 2x"
+        parts = [p.strip().split()[0] for p in raw.split(",") if p.strip()]
+        for part in parts or [raw]:
+            norm = normalize_product_image_url(part)
+            if not norm or not _is_productish_image_url(norm):
+                continue
+            if norm in seen:
+                continue
+            seen.add(norm)
+            found.append(norm)
+
+    # Prefer gallery/product media containers when present
+    containers: list = []
+    containers.extend(
+        soup.find_all(
+            class_=re.compile(
+                r"product__media|product-media|product__photo|product-gallery|"
+                r"product-images|product__image|media-gallery|thumbnail",
+                re.I,
+            )
+        )
+    )
+    containers.extend(soup.find_all(id=re.compile(r"ProductMedia|product-photos|MediaGallery", re.I)))
+    containers.extend(soup.find_all(attrs={"data-media-id": True}))
+    containers.extend(soup.find_all(attrs={"data-product-media": True}))
+    containers.extend(soup.find_all("media-gallery"))
+
+    roots = containers if containers else [
+        soup.find("product-info")
+        or soup.find(id=re.compile(r"ProductInfo|MainProduct", re.I))
+        or soup.find(class_=re.compile(r"product-single|product__info|^product$", re.I))
+        or soup.find("main")
+        or soup
+    ]
+
+    attr_names = (
+        "src",
+        "data-src",
+        "data-original",
+        "data-lazy-src",
+        "data-zoom",
+        "data-image",
+        "data-srcset",
+        "srcset",
+        "data-bgset",
+    )
+    for root in roots:
+        if root is None:
+            continue
+        for el in root.find_all(["img", "source"]):
+            for attr in attr_names:
+                _add(el.get(attr))
+        for el in root.find_all(style=re.compile(r"background-image", re.I)):
+            style = el.get("style") or ""
+            for m in re.finditer(r"url\(['\"]?([^'\")]+)['\"]?\)", style, re.I):
+                _add(m.group(1))
+
+    # Shopify / JSON-LD product images embedded in scripts
+    for script in soup.find_all("script"):
+        text = script.string or script.get_text() or ""
+        if not text or ("image" not in text.lower() and "media" not in text.lower()):
+            continue
+        for m in re.finditer(
+            r"https?://[^\"'\\s]+(?:cdn\.shopify\.com|/cdn/shop/|shopify\.com/s/files)[^\"'\\s]*",
+            text,
+            re.I,
+        ):
+            _add(m.group(0))
+        # JSON-escaped URLs
+        for m in re.finditer(
+            r"https?:\\+/\\+/[^\"'\\s]+(?:cdn\.shopify\.com|/cdn/shop/)[^\"'\\s]*",
+            text,
+            re.I,
+        ):
+            _add(m.group(0))
+
+    return found
+
+
+def count_product_gallery_images(page) -> int:
+    """
+    Count unique product/gallery images on the current Playwright page.
+    Combines static HTML parsing with live DOM attrs (currentSrc / lazy).
+    """
+    urls: set[str] = set()
+    try:
+        html = page.content()
+        urls.update(extract_product_gallery_image_urls(html))
+    except Exception:
+        pass
+
+    # Live DOM: catches hydrated srcset/currentSrc not obvious in static HTML
+    try:
+        live = page.evaluate(
+            """() => {
+                const out = [];
+                const junk = /logo|icon|sprite|payment|badge|flag|avatar|emoji|spacer|1x1|pixel|blank|placeholder|favicon/i;
+                const add = (u) => {
+                    if (!u || u.startsWith('data:') || junk.test(u)) return;
+                    out.push(u);
+                };
+                const nodes = document.querySelectorAll(
+                    'img, source, [data-src], [data-image], [data-zoom], [data-srcset]'
+                );
+                for (const el of nodes) {
+                    add(el.currentSrc || '');
+                    for (const a of ['src','data-src','data-original','data-lazy-src','data-zoom','data-image']) {
+                        add(el.getAttribute(a) || '');
+                    }
+                    for (const a of ['srcset','data-srcset','data-bgset']) {
+                        const v = el.getAttribute(a) || '';
+                        for (const part of v.split(',')) add((part.trim().split(/\\s+/)[0]) || '');
+                    }
+                }
+                return out;
+            }"""
+        )
+        if isinstance(live, list):
+            for u in live:
+                norm = normalize_product_image_url(str(u))
+                if norm and _is_productish_image_url(norm):
+                    urls.add(norm)
+    except Exception:
+        pass
+
+    return len(urls)
+
+
 def _safe_goto(page, target: str, timeout: int = 15000) -> bool:
     try:
         page.goto(target, wait_until="domcontentloaded", timeout=timeout)
@@ -689,25 +875,8 @@ def run_playwright_audit(
                 findings["atc_above_fold"] = False
                 findings["atc_y_position"] = 9999
 
-            all_images = page.query_selector_all(
-                "img[src*='cdn.shopify'], img[src*='shopify.com']"
-            )
-            product_images = [
-                img
-                for img in all_images
-                if img.is_visible()
-                and (img.bounding_box() or {}).get("width", 0) > 100
-            ]
-
-            seen: set[str] = set()
-            unique_images = []
-            for img in product_images:
-                src = img.get_attribute("src") or ""
-                if src and src not in seen:
-                    seen.add(src)
-                    unique_images.append(img)
-
-            findings["product_image_count"] = len(unique_images)
+            # Robust gallery count: src/srcset/lazy/picture + JSON media, deduped
+            findings["product_image_count"] = count_product_gallery_images(page)
 
             price = page.query_selector(
                 "[class*='price']:not([class*='compare']):not([class*='compare-at'])"
@@ -1125,10 +1294,11 @@ def build_report_findings(raw: dict, base_url: str) -> list[dict]:
         61, "Mobile ATC Above Fold", "HIGH", "mobile",
         bool(raw.get("mobile_atc_above_fold")),
         "Mobile ATC above fold" if raw.get("mobile_atc_above_fold")
-        else "Mobile ATC below fold or missing",
+        else "Mobile Add to Cart Below the Fold",
         f"mobile_atc_above_fold={raw.get('mobile_atc_above_fold')}",
         "Mobile shoppers expect buy CTA without scrolling",
-        "Keep ATC sticky or above the fold on mobile product pages",
+        "Keep ATC above the fold on mobile or use a sticky mobile ATC — "
+        "this is a positioning issue, not a tap-target size fix",
         [product_url],
         mobile_shot,
     ))

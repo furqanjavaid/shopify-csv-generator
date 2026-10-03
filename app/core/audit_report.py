@@ -132,9 +132,18 @@ def format_passing_message(finding: dict, raw: dict | None = None) -> str:
         return f"✓ {name}: {(finding.get('evidence') or '')[:80]}"
 
     tpl = PASSING_MESSAGES[key]
+    # Canonical counters — never reuse trust_badge_count for email/nav templates
+    if key == "email_capture":
+        count = raw.get("email_capture_count", 0)
+    elif key == "nav_depth":
+        count = raw.get("nav_links_count", raw.get("nav_link_count", 0))
+    elif key == "trust_badges":
+        count = raw.get("trust_badge_count", 0)
+    else:
+        count = raw.get("trust_badge_count", raw.get("email_capture_count", 0))
     try:
         msg = tpl.format(
-            count=raw.get("trust_badge_count", raw.get("email_capture_count", 0)),
+            count=count,
             match=raw.get("trust_text_match") or "detected signals",
             price=raw.get("price_text") or "price",
             time=raw.get("homepage_load_time", "—"),

@@ -120,13 +120,32 @@ ISSUE_TEMPLATES = {
 
     # ─── MOBILE ──────────────────────────────────────────────
 
+    # Legacy key kept for compatibility — tap-target size only
     "mobile_atc_issue": {
-        "title": "Add to Cart Button is Difficult to Use on Mobile",
+        "title": "Mobile Add to Cart Tap Target Too Small",
         "severity": "HIGH",
         "category": "Mobile Experience",
-        "why": """More than half of ecommerce traffic now arrives on mobile devices, and for many stores the majority of purchases are completed on a phone. A button that is too small to tap confidently, positioned awkwardly, or hidden behind mobile-specific layout issues will silently kill a significant portion of your mobile conversions. Mobile buyers are less patient than desktop buyers — if the purchase action feels difficult, they leave.""",
-        "fix": """Ensure your Add to Cart button on mobile meets a minimum tap target size of 44 x 44 pixels — this is the Apple Human Interface Guidelines standard and the threshold below which tap accuracy drops significantly. The button should be full-width or near-full-width on mobile, positioned above any secondary content, and not obscured by sticky headers, cookie banners, or chat widgets. Test on a real device, not just browser developer tools.""",
+        "why": """More than half of ecommerce traffic now arrives on mobile devices. A button that is too small to tap confidently will silently kill a significant portion of mobile conversions. Mobile buyers are less patient than desktop buyers — if the purchase action feels difficult, they leave.""",
+        "fix": """Ensure your Add to Cart button on mobile meets a minimum tap target size of 44 x 44 pixels — this is the Apple Human Interface Guidelines standard and the threshold below which tap accuracy drops significantly. The button should be full-width or near-full-width on mobile and not obscured by sticky headers, cookie banners, or chat widgets. Test on a real device, not just browser developer tools.""",
         "impact": "Recovers conversions lost to friction on the majority of your traffic",
+    },
+
+    "mobile_atc_tap_issue": {
+        "title": "Mobile Add to Cart Tap Target Too Small",
+        "severity": "HIGH",
+        "category": "Mobile Experience",
+        "why": """More than half of ecommerce traffic now arrives on mobile devices. A button that is too small to tap confidently will silently kill a significant portion of mobile conversions. Mobile buyers are less patient than desktop buyers — if the purchase action feels difficult, they leave.""",
+        "fix": """Ensure your Add to Cart button on mobile meets a minimum tap target size of 44 x 44 pixels — this is the Apple Human Interface Guidelines standard and the threshold below which tap accuracy drops significantly. The button should be full-width or near-full-width on mobile and not obscured by sticky headers, cookie banners, or chat widgets. Test on a real device, not just browser developer tools.""",
+        "impact": "Recovers conversions lost to friction on the majority of your traffic",
+    },
+
+    "mobile_atc_fold_issue": {
+        "title": "Mobile Add to Cart Below the Fold",
+        "severity": "HIGH",
+        "category": "Mobile Experience",
+        "why": """On mobile product pages, shoppers expect the primary purchase action to be visible without scrolling. When Add to Cart sits below the fold, a large share of visitors never see it — even if the button itself is large enough to tap. This is a positioning problem, not a tap-target size problem.""",
+        "fix": """Keep the Add to Cart control above the fold on mobile product pages, or add a sticky mobile ATC bar that remains visible while scrolling. Move the purchase block (price, variants, ATC) higher in the mobile layout and avoid burying it under long media galleries or description blocks. This is a visibility/positioning fix — not a tap-target sizing change.""",
+        "impact": "Recovers mobile conversions lost when the buy CTA is never seen",
     },
 
     # ─── SPEED & TECHNICAL ───────────────────────────────────
@@ -245,7 +264,8 @@ FINDING_TO_TEMPLATE = {
     "trust_badge_count": "trust_badges_buried",
     "shipping_policy_missing": "no_shipping_policy",
     "price_mismatch_count": "price_mismatch",
-    "mobile_atc_tap_target_ok": "mobile_atc_issue",
+    "mobile_atc_tap_target_ok": "mobile_atc_tap_issue",
+    "mobile_atc_above_fold": "mobile_atc_fold_issue",
     "homepage_load_time": "slow_page_speed",
     "has_carousel": "carousel_risk",
     "nav_hamburger_only": "hamburger_only_desktop",
@@ -260,8 +280,8 @@ CHECK_ID_TO_TEMPLATE = {
     5: "cart_flow_broken",
     51: "no_cart_trust",
     52: "no_cart_upsell",
-    6: "mobile_atc_issue",
-    61: "mobile_atc_issue",
+    6: "mobile_atc_tap_issue",
+    61: "mobile_atc_fold_issue",
     7: "slow_page_speed",
     8: "no_email_capture",
     9: "no_urgency",
