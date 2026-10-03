@@ -441,6 +441,10 @@ class Combobox(ctk.CTkFrame):
         **kwargs,
     ):
         c = current_colors()
+        # Never allow callers to inject ERROR/red borders via kwargs
+        kwargs.pop("border_color", None)
+        kwargs.pop("border_width", None)
+        kwargs.pop("fg_color", None)
         super().__init__(
             master,
             fg_color=c["INPUT_BG"],
@@ -459,23 +463,23 @@ class Combobox(ctk.CTkFrame):
         self._var = variable if variable is not None else ctk.StringVar(value=initial)
         if variable is not None and not variable.get() and values:
             variable.set(values[0])
-        self._chevron = load_icon("chevron-down", size=14, color="muted")
+        self._chevron = load_icon("chevron-down", size=14, color="navy")
 
         # Text expands left; chevron sits in its own column at the right edge.
-        # (CTk forbids width/height in .place() — size the widgets in the constructor.)
         self._btn = ctk.CTkButton(
             self,
             textvariable=self._var,
             anchor="w",
             fg_color="transparent",
-            hover_color=c["BG_PRIMARY"],
-            text_color=c["INPUT_TEXT"],
+            hover_color=c["ACCENT_DIM"],
+            text_color=c["HEADING"],
             font=T.font_tuple(T.LABEL),
             corner_radius=T.BORDER_RADIUS - 2,
             height=T.INPUT_HEIGHT - 4,
+            border_width=0,
             command=self._open_menu,
         )
-        self._btn.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=2)
+        self._btn.grid(row=0, column=0, sticky="nsew", padx=(10, 0), pady=2)
         self._chevron_btn = ctk.CTkLabel(
             self,
             text="",
@@ -484,7 +488,7 @@ class Combobox(ctk.CTkFrame):
             width=28,
             height=T.INPUT_HEIGHT - 4,
         )
-        self._chevron_btn.grid(row=0, column=1, sticky="e", padx=(0, 6), pady=2)
+        self._chevron_btn.grid(row=0, column=1, sticky="e", padx=(0, 8), pady=2)
         self._chevron_btn.bind("<Button-1>", lambda _e: self._open_menu())
         self._menu: ctk.CTkToplevel | None = None
 
@@ -537,21 +541,22 @@ class Combobox(ctk.CTkFrame):
             border_color=c["BORDER"],
             corner_radius=T.BORDER_RADIUS,
         )
-        wrap.pack(fill="both", expand=True)
+        wrap.pack(fill="both", expand=True, padx=0, pady=0)
         for val in self._values:
             b = ctk.CTkButton(
                 wrap,
                 text=val,
                 anchor="w",
                 fg_color="transparent",
-                hover_color=c["BG_PRIMARY"],
-                text_color=c["INPUT_TEXT"],
+                hover_color=c["ACCENT_DIM"],
+                text_color=c["HEADING"],
                 font=T.font_tuple(T.LABEL),
-                height=32,
-                corner_radius=4,
+                height=34,
+                corner_radius=6,
+                border_width=0,
                 command=lambda v=val: self._pick(v),
             )
-            b.pack(fill="x", padx=4, pady=2)
+            b.pack(fill="x", padx=6, pady=3)
         self.update_idletasks()
         x = self.winfo_rootx()
         y = self.winfo_rooty() + self.winfo_height()

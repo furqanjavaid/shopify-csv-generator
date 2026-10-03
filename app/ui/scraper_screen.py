@@ -116,10 +116,14 @@ class ScraperScreen(ctk.CTkFrame):
             subtitle="Configure your scraping settings and provide seed URLs to start.",
             icon="link",
             expand_body=False,
+            border_width=1,
+            border_color=T.BORDER,
+            fg_color=T.BG_SURFACE_A,
         )
         config.grid(row=1, column=0, sticky="ew", pady=(0, 8))
         cfg = config.body
-        cfg.grid_columnconfigure((0, 1), weight=1)
+        cfg.configure(fg_color="transparent")
+        cfg.grid_columnconfigure((0, 1), weight=1, uniform="scraper_cfg")
 
         # Left column: Mode + Max Products
         left_col = ctk.CTkFrame(cfg, fg_color="transparent")
@@ -130,15 +134,13 @@ class ScraperScreen(ctk.CTkFrame):
             left_col, text="Mode", font=T.font(12, "bold"), text_color=T.TEXT_MUTED, anchor="w"
         ).grid(row=0, column=0, sticky="w")
         self.mode_var = ctk.StringVar(value=MODE_UNIVERSAL_FULL)
-        # Native CTkComboBox — custom Combobox Toplevel menus fail inside scroll frames
-        self.mode_menu = ctk.CTkComboBox(
+        # Themed Combobox (white field + navy text + soft burgundy hover) — matches mockup
+        self.mode_menu = Combobox(
             left_col,
-            values=[MODE_UNIVERSAL_FULL, MODE_UNIVERSAL, MODE_LEGACY],
+            [MODE_UNIVERSAL_FULL, MODE_UNIVERSAL, MODE_LEGACY],
             variable=self.mode_var,
             command=self._on_mode_changed,
             width=280,
-            state="readonly",
-            **T.combo_box_style(),
         )
         self.mode_menu.grid(row=1, column=0, sticky="ew", pady=(4, 0))
         self.mode_hint = ctk.CTkLabel(
@@ -168,18 +170,26 @@ class ScraperScreen(ctk.CTkFrame):
 
         ctk.CTkLabel(
             right_col, text="Output Folder", font=T.font(12, "bold"), text_color=T.TEXT_MUTED, anchor="w"
-        ).grid(row=0, column=0, columnspan=2, sticky="w")
-        self.output_entry = T.styled_entry(right_col, placeholder="Select output folder…")
-        self.output_entry.grid(row=1, column=0, sticky="ew", padx=(0, 8), pady=(4, 0))
+        ).grid(row=0, column=0, sticky="w")
+        # Entry + Browse on one aligned row
+        out_row = ctk.CTkFrame(right_col, fg_color="transparent")
+        out_row.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        out_row.grid_columnconfigure(0, weight=1)
+        self.output_entry = T.styled_entry(out_row, placeholder="Select output folder…")
+        self.output_entry.grid(row=0, column=0, sticky="ew", padx=(0, 8))
         self.output_entry.insert(0, self._output_folder)
-        right_col.grid_columnconfigure(0, weight=1)
         self.browse_btn = OutlineButton(
-            right_col, "Browse", self._browse_output_folder, icon="folder", width=110
+            out_row,
+            "Browse",
+            self._browse_output_folder,
+            icon="folder",
+            width=110,
+            height=T.INPUT_HEIGHT,
         )
-        self.browse_btn.grid(row=1, column=1, pady=(4, 0))
+        self.browse_btn.grid(row=0, column=1, sticky="e")
 
         self._vendor_host = ctk.CTkFrame(right_col, fg_color="transparent")
-        self._vendor_host.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        self._vendor_host.grid(row=2, column=0, sticky="ew", pady=(12, 0))
         self._vendor_host.grid_columnconfigure(0, weight=1)
         self.var_custom_vendor = ctk.BooleanVar(value=False)
         self.vendor_checkbox = ctk.CTkCheckBox(
@@ -984,12 +994,8 @@ class ScraperScreen(ctk.CTkFrame):
             self.url_text.configure(state=state)
         except Exception:
             pass
-        # Mode combo stays readonly when unlocked (select-only, not free-type)
-        try:
-            self.mode_menu.configure(state="disabled" if locked else "readonly")
-        except Exception:
-            pass
         for widget in (
+            self.mode_menu,
             self.output_entry,
             self.browse_btn,
             self.max_products_entry,

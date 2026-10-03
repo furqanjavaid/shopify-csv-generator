@@ -206,11 +206,11 @@ def option_menu_style() -> dict:
     c = current_colors()
     return {
         "fg_color": c["INPUT_BG"],
-        "button_color": c["INPUT_BG"],
-        "button_hover_color": c["BG_PRIMARY"],
-        "text_color": c["INPUT_TEXT"],
+        "button_color": c["HEADING"],
+        "button_hover_color": c["ACCENT"],
+        "text_color": c["HEADING"],
         "dropdown_fg_color": c["INPUT_BG"],
-        "dropdown_hover_color": c["BG_PRIMARY"],
+        "dropdown_hover_color": c["ACCENT_DIM"],
         "dropdown_text_color": c["INPUT_TEXT"],
         "corner_radius": BORDER_RADIUS,
         "font": font_tuple(LABEL),
@@ -218,17 +218,20 @@ def option_menu_style() -> dict:
 
 
 def combo_box_style() -> dict:
-    """CTkComboBox style — neutral border, no burgundy arrow square."""
+    """
+    CTkComboBox style matching brand inputs:
+    white field, light border, navy text, soft burgundy list hover.
+    """
     c = current_colors()
     return {
         "fg_color": c["INPUT_BG"],
         "border_color": c["BORDER"],
         "border_width": 1,
-        "button_color": c["INPUT_BG"],
-        "button_hover_color": c["BG_PRIMARY"],
-        "text_color": c["INPUT_TEXT"],
+        "button_color": c["HEADING"],
+        "button_hover_color": c["ACCENT"],
+        "text_color": c["HEADING"],
         "dropdown_fg_color": c["INPUT_BG"],
-        "dropdown_hover_color": c["BG_PRIMARY"],
+        "dropdown_hover_color": c["ACCENT_DIM"],
         "dropdown_text_color": c["INPUT_TEXT"],
         "corner_radius": BORDER_RADIUS,
         "font": font_tuple(LABEL),
