@@ -180,48 +180,137 @@ _JUNK_IMAGE_RE = re.compile(
     re.I,
 )
 
+# Shopify legacy named sizes + numeric resize tokens in the filename stem
+_SHOPIFY_SIZE_SUFFIX_RE = re.compile(
+    r"_(?:"
+    r"\d+x\d*"
+    r"|pico|icon|thumb|small|compact|medium|large|grande|original|master"
+    r"|cropped"
+    r")(?:@\d+x)?$",
+    re.I,
+)
+
+_SHOPIFY_PATH_RE = re.compile(
+    r"(?:/cdn/shop/|/s/files/\d+/\d+(?:/\d+)?/)"
+    r"(files|products|articles|collections|content)/"
+    r"(.+)$",
+    re.I,
+)
+
 
 def normalize_product_image_url(url: str) -> str | None:
-    """Normalize CDN/image URLs so size variants collapse to one identity."""
+    """Return a canonical key for a logical product image asset (aliases kept)."""
+    return canonical_product_image_key(url)
+
+
+def canonical_product_image_key(url: str) -> str | None:
+    """
+    Canonicalise an image URL so responsive/lazy/transform variants collapse.
+
+    Shopify encodes transforms in query params (?width=&crop=&format=) and in
+    legacy filename suffixes (_300x, _grande, _100x100@2x). Different hosts
+    serving the same /cdn/shop/... or /s/files/... asset map to one key.
+    """
     if not url:
         return None
-    u = url.strip().strip("\"'")
+    u = html_unescape_url(url)
     if not u or u.startswith("data:") or u.startswith("#"):
         return None
-    u = u.replace("\\u002F", "/").replace("\\/", "/")
-    # Drop query/hash (Shopify width/height params)
-    u = u.split("?", 1)[0].split("#", 1)[0]
-    # Shopify sized filenames: image_200x.jpg / image_200x200@2x.webp
-    u = re.sub(r"_\d+x\d*(?:@\d+x)?(?=\.[a-zA-Z]+$)", "", u)
-    u = re.sub(r"_\d+x(?=\.[a-zA-Z]+$)", "", u)
-    return u.lower()
+
+    parsed = urlparse(u if "://" in u or u.startswith("//") else f"https://placeholder.local{u if u.startswith('/') else '/' + u}")
+    path = parsed.path or ""
+    if not path or path.endswith("/"):
+        return None
+
+    # Basename without transform suffixes; keep stem identity across extensions
+    # only when Shopify format negotiation changed extension via query (path stem).
+    directory, filename = path.rsplit("/", 1)
+    stem, ext = os.path.splitext(filename)
+    stem = _SHOPIFY_SIZE_SUFFIX_RE.sub("", stem)
+    # Repeated size tokens (rare): foo_200x_200x
+    stem = _SHOPIFY_SIZE_SUFFIX_RE.sub("", stem)
+    if not stem:
+        return None
+    filename = stem + ext.lower()
+
+    shopify_m = _SHOPIFY_PATH_RE.search(path)
+    if shopify_m:
+        # Identity = bucket + canonical filename (host/query-agnostic)
+        bucket = shopify_m.group(1).lower()
+        rel = shopify_m.group(2)
+        if "/" in rel:
+            rel_dir, rel_file = rel.rsplit("/", 1)
+        else:
+            rel_dir, rel_file = "", rel
+        rel_stem, rel_ext = os.path.splitext(rel_file or filename)
+        rel_stem = _SHOPIFY_SIZE_SUFFIX_RE.sub("", rel_stem)
+        rel_stem = _SHOPIFY_SIZE_SUFFIX_RE.sub("", rel_stem)
+        mid = f"{rel_dir}/" if rel_dir else ""
+        key_path = f"{bucket}/{mid}{rel_stem}{rel_ext.lower()}".lower()
+        return f"shopify:{key_path}"
+
+    # Non-Shopify: path without transform query; keep host+path for safety
+    host = (parsed.netloc or "").lower().lstrip(".")
+    if host.startswith("www."):
+        host = host[4:]
+    key = f"{host}{directory}/{filename}".lower()
+    return key
+
+
+def html_unescape_url(url: str) -> str:
+    u = (url or "").strip().strip("\"'")
+    u = (
+        u.replace("\\u002F", "/")
+        .replace("\\/", "/")
+        .replace("&amp;", "&")
+        .replace("&#x2F;", "/")
+        .replace("&#47;", "/")
+    )
+    if u.startswith("//"):
+        u = "https:" + u
+    return u
 
 
 def _is_productish_image_url(url: str) -> bool:
+    """Filter obvious non-product UI assets. Operates on raw or canonical forms."""
     if not url or _JUNK_IMAGE_RE.search(url):
         return False
-    # Prefer Shopify CDN / product media paths; still allow generic product galleries
+    raw = html_unescape_url(url).lower()
     if any(
-        token in url
+        token in raw
         for token in (
             "cdn.shopify.com",
             "/cdn/shop/",
-            "/products/",
-            "/files/",
+            "/s/files/",
             "shopify.com/s/files",
-            "product",
-            "media",
         )
     ):
         return True
-    # Non-Shopify stores: accept common image extensions under content paths
-    return bool(re.search(r"\.(?:jpe?g|png|webp|gif|avif)(?:$|\?)", url, re.I))
+    # Non-Shopify product-ish paths / extensions
+    if re.search(r"/(?:product|media|gallery|catalog|uploads?|images?)/", raw):
+        return bool(re.search(r"\.(?:jpe?g|png|webp|gif|avif)(?:$|\?)", raw))
+    return bool(re.search(r"\.(?:jpe?g|png|webp|gif|avif)(?:$|\?)", raw))
+
+
+def _add_canonical_image(raw: str | None, seen: set[str], found: list[str]) -> None:
+    if not raw:
+        return
+    # srcset: "url 1x, url2 2x" / "url 200w, url2 400w"
+    parts = [p.strip().split()[0] for p in str(raw).split(",") if p.strip()]
+    for part in parts or [str(raw)]:
+        if not _is_productish_image_url(part):
+            continue
+        key = canonical_product_image_key(part)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        found.append(key)
 
 
 def extract_product_gallery_image_urls(html: str) -> list[str]:
     """
     Parse product/gallery image URLs from HTML (src, srcset, lazy attrs, picture/source).
-    Deduplicates size variants. Safe to unit-test without Playwright.
+    Returns deduplicated canonical keys. Safe to unit-test without Playwright.
     """
     if not html:
         return []
@@ -229,27 +318,14 @@ def extract_product_gallery_image_urls(html: str) -> list[str]:
     found: list[str] = []
     seen: set[str] = set()
 
-    def _add(raw: str | None) -> None:
-        if not raw:
-            return
-        # srcset: "url 1x, url2 2x"
-        parts = [p.strip().split()[0] for p in raw.split(",") if p.strip()]
-        for part in parts or [raw]:
-            norm = normalize_product_image_url(part)
-            if not norm or not _is_productish_image_url(norm):
-                continue
-            if norm in seen:
-                continue
-            seen.add(norm)
-            found.append(norm)
-
     # Prefer gallery/product media containers when present
     containers: list = []
     containers.extend(
         soup.find_all(
             class_=re.compile(
                 r"product__media|product-media|product__photo|product-gallery|"
-                r"product-images|product__image|media-gallery|thumbnail",
+                r"product-images|product__image|media-gallery|"
+                r"product__thumb|product-thumb",
                 re.I,
             )
         )
@@ -283,38 +359,71 @@ def extract_product_gallery_image_urls(html: str) -> list[str]:
             continue
         for el in root.find_all(["img", "source"]):
             for attr in attr_names:
-                _add(el.get(attr))
+                _add_canonical_image(el.get(attr), seen, found)
         for el in root.find_all(style=re.compile(r"background-image", re.I)):
             style = el.get("style") or ""
             for m in re.finditer(r"url\(['\"]?([^'\")]+)['\"]?\)", style, re.I):
-                _add(m.group(1))
+                _add_canonical_image(m.group(1), seen, found)
 
-    # Shopify / JSON-LD product images embedded in scripts
+    # Product JSON-LD / product media JSON only — not every CDN URL in page scripts
     for script in soup.find_all("script"):
         text = script.string or script.get_text() or ""
-        if not text or ("image" not in text.lower() and "media" not in text.lower()):
+        if not text:
+            continue
+        stype = (script.get("type") or "").lower()
+        sid = (script.get("id") or "").lower()
+        is_product_json = (
+            stype in ("application/ld+json", "application/json")
+            or "productjson" in sid
+            or "product-json" in sid
+            or "productmedia" in sid
+        )
+        if not is_product_json:
+            continue
+        # Prefer structured Product image arrays when present
+        if "ld+json" in stype:
+            try:
+                data = json.loads(text)
+            except Exception:
+                data = None
+            nodes = data if isinstance(data, list) else [data] if isinstance(data, dict) else []
+            for node in nodes:
+                if not isinstance(node, dict):
+                    continue
+                types = node.get("@type") or node.get("type") or ""
+                type_l = " ".join(types) if isinstance(types, list) else str(types)
+                if "product" not in type_l.lower():
+                    continue
+                images = node.get("image") or node.get("images") or []
+                if isinstance(images, str):
+                    images = [images]
+                if isinstance(images, dict):
+                    images = [images.get("url") or images.get("@id") or ""]
+                for img in images:
+                    if isinstance(img, dict):
+                        img = img.get("url") or img.get("@id") or ""
+                    _add_canonical_image(str(img), seen, found)
             continue
         for m in re.finditer(
             r"https?://[^\"'\\s]+(?:cdn\.shopify\.com|/cdn/shop/|shopify\.com/s/files)[^\"'\\s]*",
             text,
             re.I,
         ):
-            _add(m.group(0))
-        # JSON-escaped URLs
+            _add_canonical_image(m.group(0), seen, found)
         for m in re.finditer(
             r"https?:\\+/\\+/[^\"'\\s]+(?:cdn\.shopify\.com|/cdn/shop/)[^\"'\\s]*",
             text,
             re.I,
         ):
-            _add(m.group(0))
+            _add_canonical_image(m.group(0), seen, found)
 
     return found
 
 
 def count_product_gallery_images(page) -> int:
     """
-    Count unique product/gallery images on the current Playwright page.
-    Combines static HTML parsing with live DOM attrs (currentSrc / lazy).
+    Count unique logical product/gallery images on the current Playwright page.
+    Combines scoped HTML parsing with live DOM attrs inside product media roots.
     """
     urls: set[str] = set()
     try:
@@ -323,7 +432,7 @@ def count_product_gallery_images(page) -> int:
     except Exception:
         pass
 
-    # Live DOM: catches hydrated srcset/currentSrc not obvious in static HTML
+    # Live DOM limited to product-media roots (avoid related/collection srcsets)
     try:
         live = page.evaluate(
             """() => {
@@ -333,17 +442,42 @@ def count_product_gallery_images(page) -> int:
                     if (!u || u.startsWith('data:') || junk.test(u)) return;
                     out.push(u);
                 };
-                const nodes = document.querySelectorAll(
-                    'img, source, [data-src], [data-image], [data-zoom], [data-srcset]'
-                );
-                for (const el of nodes) {
-                    add(el.currentSrc || '');
-                    for (const a of ['src','data-src','data-original','data-lazy-src','data-zoom','data-image']) {
-                        add(el.getAttribute(a) || '');
-                    }
-                    for (const a of ['srcset','data-srcset','data-bgset']) {
-                        const v = el.getAttribute(a) || '';
-                        for (const part of v.split(',')) add((part.trim().split(/\\s+/)[0]) || '');
+                const rootSel = [
+                    '[class*="product__media"]',
+                    '[class*="product-media"]',
+                    '[class*="product__photo"]',
+                    '[class*="product-gallery"]',
+                    '[class*="product-images"]',
+                    '[class*="media-gallery"]',
+                    '[id*="ProductMedia"]',
+                    '[id*="product-photos"]',
+                    '[data-media-id]',
+                    '[data-product-media]',
+                    'media-gallery',
+                    'product-info',
+                    '[id*="ProductInfo"]',
+                    '[class*="product-single"]',
+                    'main .product',
+                    'main'
+                ].join(',');
+                const roots = Array.from(document.querySelectorAll(rootSel));
+                const scopes = roots.length ? roots : [document];
+                const seenNodes = new Set();
+                for (const root of scopes) {
+                    const nodes = root.querySelectorAll(
+                        'img, source, [data-src], [data-image], [data-zoom], [data-srcset]'
+                    );
+                    for (const el of nodes) {
+                        if (seenNodes.has(el)) continue;
+                        seenNodes.add(el);
+                        add(el.currentSrc || '');
+                        for (const a of ['src','data-src','data-original','data-lazy-src','data-zoom','data-image']) {
+                            add(el.getAttribute(a) || '');
+                        }
+                        for (const a of ['srcset','data-srcset','data-bgset']) {
+                            const v = el.getAttribute(a) || '';
+                            for (const part of v.split(',')) add((part.trim().split(/\\s+/)[0]) || '');
+                        }
                     }
                 }
                 return out;
@@ -351,9 +485,11 @@ def count_product_gallery_images(page) -> int:
         )
         if isinstance(live, list):
             for u in live:
-                norm = normalize_product_image_url(str(u))
-                if norm and _is_productish_image_url(norm):
-                    urls.add(norm)
+                if not _is_productish_image_url(str(u)):
+                    continue
+                key = canonical_product_image_key(str(u))
+                if key:
+                    urls.add(key)
     except Exception:
         pass
 

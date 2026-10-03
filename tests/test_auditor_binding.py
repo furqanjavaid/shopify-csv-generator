@@ -218,6 +218,7 @@ def test_product_gallery_images_not_zero_for_shopify_lazy_gallery():
     """Lazy-loaded Shopify galleries must not yield product_image_count=0."""
     from app.core.store_auditor import (
         build_report_findings,
+        canonical_product_image_key,
         extract_product_gallery_image_urls,
         normalize_product_image_url,
     )
@@ -252,6 +253,16 @@ def test_product_gallery_images_not_zero_for_shopify_lazy_gallery():
     ) == normalize_product_image_url(
         "https://cdn.shopify.com/s/files/1/0001/products/hero.jpg"
     )
+    assert canonical_product_image_key(
+        "https://shop.example/cdn/shop/files/hero.jpg?width=800"
+    ) == canonical_product_image_key(
+        "https://cdn.shopify.com/s/files/1/0001/files/hero_200x.jpg"
+    )
+    assert canonical_product_image_key(
+        "https://cdn.shopify.com/s/files/1/0001/products/hero.jpg?width=400"
+    ) == canonical_product_image_key(
+        "https://shop.myshopify.com/cdn/shop/products/hero_800x.jpg"
+    )
     assert not any("logo" in u for u in urls)
 
     raw = {
@@ -270,6 +281,85 @@ def test_product_gallery_images_not_zero_for_shopify_lazy_gallery():
     img = next(f for f in findings if f["check_id"] == 12)
     assert img["passed"] is True
     assert "0 image" not in img["issue"]
+
+
+def test_shopify_srcset_width_variants_count_as_one_each():
+    """5 logical images × many width variants → count == 5."""
+    from app.core.store_auditor import extract_product_gallery_image_urls
+
+    blocks = []
+    for name in ("alpha", "bravo", "charlie", "delta", "echo"):
+        blocks.append(
+            f"""
+            <img
+              src="https://cdn.shopify.com/s/files/1/9/products/{name}.jpg?v=1&amp;width=100"
+              srcset="
+                https://cdn.shopify.com/s/files/1/9/products/{name}.jpg?width=200 200w,
+                https://cdn.shopify.com/s/files/1/9/products/{name}.jpg?width=400&height=400&crop=center 400w,
+                https://cdn.shopify.com/s/files/1/9/products/{name}_800x.jpg 800w,
+                //cdn.shopify.com/s/files/1/9/products/{name}_grande.jpg 1200w
+              "
+              data-src="https://shop.myshopify.com/cdn/shop/products/{name}.jpg?width=1600&format=webp"
+            />
+            """
+        )
+    html = f'<div class="product__media-list">{"".join(blocks)}</div>'
+    urls = extract_product_gallery_image_urls(html)
+    assert len(urls) == 5
+
+
+def test_same_image_src_lazy_and_jsonld_counts_once():
+    from app.core.store_auditor import extract_product_gallery_image_urls
+
+    html = """
+    <div class="product-gallery">
+      <img src="https://cdn.shopify.com/s/files/1/1/products/solo_200x.jpg"
+           data-src="https://cdn.shopify.com/s/files/1/1/products/solo.jpg?width=800"
+           data-lazy-src="//cdn.shopify.com/s/files/1/1/products/solo_grande.jpg" />
+    </div>
+    <script type="application/ld+json">
+    {"@type":"Product","image":"https://cdn.shopify.com/s/files/1/1/products/solo.jpg?v=99"}
+    </script>
+    """
+    assert len(extract_product_gallery_image_urls(html)) == 1
+
+
+def test_distinct_product_filenames_remain_separate():
+    from app.core.store_auditor import (
+        canonical_product_image_key,
+        extract_product_gallery_image_urls,
+    )
+
+    html = """
+    <div class="product__media">
+      <img src="https://cdn.shopify.com/s/files/1/1/products/front.jpg?width=400" />
+      <img src="https://cdn.shopify.com/s/files/1/1/products/back.jpg?width=400" />
+      <img src="https://cdn.shopify.com/s/files/1/1/products/detail.jpg?width=400" />
+    </div>
+    """
+    urls = extract_product_gallery_image_urls(html)
+    assert len(urls) == 3
+    assert canonical_product_image_key(
+        "https://cdn.shopify.com/s/files/1/1/products/front.jpg"
+    ) != canonical_product_image_key(
+        "https://cdn.shopify.com/s/files/1/1/products/back.jpg"
+    )
+
+
+def test_logo_and_icon_assets_excluded_from_gallery_count():
+    from app.core.store_auditor import extract_product_gallery_image_urls
+
+    html = """
+    <div class="product__media-list">
+      <img src="https://cdn.shopify.com/s/files/1/1/products/item.jpg?width=600" />
+      <img src="https://cdn.shopify.com/s/files/1/1/files/logo.png" class="header-logo" />
+      <img src="/assets/icon-cart.svg" />
+      <img src="https://cdn.shopify.com/s/files/1/1/files/payment-badge.png" />
+    </div>
+    """
+    urls = extract_product_gallery_image_urls(html)
+    assert len(urls) == 1
+    assert all("logo" not in u and "badge" not in u and "icon" not in u for u in urls)
 
 
 def test_passing_checks_use_canonical_email_and_nav_counts():
@@ -309,5 +399,9 @@ if __name__ == "__main__":
     test_mobile_above_fold_fail_and_tap_pass_are_distinct()
     test_build_report_findings_reviews_follow_raw_flag_only()
     test_product_gallery_images_not_zero_for_shopify_lazy_gallery()
+    test_shopify_srcset_width_variants_count_as_one_each()
+    test_same_image_src_lazy_and_jsonld_counts_once()
+    test_distinct_product_filenames_remain_separate()
+    test_logo_and_icon_assets_excluded_from_gallery_count()
     test_passing_checks_use_canonical_email_and_nav_counts()
     print("OK")
