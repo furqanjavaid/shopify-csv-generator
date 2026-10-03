@@ -16,21 +16,23 @@ from app.ui.theme import current_colors
 
 
 class PageHeader(ctk.CTkFrame):
-    """Title + subtitle; never clipped (wraplength + padding)."""
+    """Title + subtitle; never clipped (fixed title height + wraplength)."""
 
     def __init__(self, master, title: str, subtitle: str = "", **kwargs):
         c = current_colors()
         super().__init__(master, fg_color="transparent", **kwargs)
         self.grid_columnconfigure(0, weight=1)
+        # Explicit height so CTkScrollableFrame never clips H1 down to ".."
         self.title_label = ctk.CTkLabel(
             self,
             text=title,
-            font=T.font_tuple(T.H1),
+            font=T.font(28, "bold"),
             text_color=c["HEADING"],
             anchor="w",
             justify="left",
+            height=40,
         )
-        self.title_label.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        self.title_label.grid(row=0, column=0, sticky="nw", pady=(0, 4))
         self.subtitle_label = None
         if subtitle:
             self.subtitle_label = ctk.CTkLabel(
@@ -42,7 +44,7 @@ class PageHeader(ctk.CTkFrame):
                 justify="left",
                 wraplength=720,
             )
-            self.subtitle_label.grid(row=1, column=0, sticky="ew")
+            self.subtitle_label.grid(row=1, column=0, sticky="nw")
 
 
 # ── Card with circle-icon header ────────────────────────

@@ -47,7 +47,7 @@ class AuditScreen(ctk.CTkFrame):
             body,
             "Store Auditor",
             "Audit eCommerce stores for issues and opportunities to improve performance, SEO, content and more.",
-        ).grid(row=0, column=0, sticky="ew", pady=(0, 14))
+        ).grid(row=0, column=0, sticky="nw", pady=(0, 14))
 
         # URL card
         url_card = T.card_frame(body)
@@ -107,11 +107,12 @@ class AuditScreen(ctk.CTkFrame):
         # Hidden CRO label used by success handler
         self._cro_score_label = self.score_value
 
-        # Findings + Recommendations — side by side, top-aligned
+        # Findings + Recommendations — side by side, same top alignment (7 / 3)
         bottom = ctk.CTkFrame(body, fg_color="transparent")
         bottom.grid(row=3, column=0, sticky="ew")
         bottom.grid_columnconfigure(0, weight=7)
         bottom.grid_columnconfigure(1, weight=3)
+        bottom.grid_rowconfigure(0, weight=1, minsize=280)
 
         findings_card = T.card_frame(bottom)
         findings_card.grid(row=0, column=0, sticky="nsew", padx=(0, 10))

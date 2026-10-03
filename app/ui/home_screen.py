@@ -5,7 +5,6 @@ from __future__ import annotations
 import customtkinter as ctk
 
 from app.ui import theme as T
-from app.ui.components import PageHeader
 from app.ui.icons import load_icon
 from app.ui.sidebar import attach_sidebar
 from app.utils.task_history import load_history
@@ -23,11 +22,27 @@ class HomeScreen(ctk.CTkFrame):
         body = attach_sidebar(self, app, "home")
         body.grid_columnconfigure(0, weight=1)
 
-        PageHeader(
-            body,
-            "Home",
-            "Welcome to Sentivo Tools. Your all-in-one toolkit for eCommerce data and automation.",
-        ).grid(row=0, column=0, sticky="ew", pady=(0, 16))
+        # Explicit page header (H1 + subtitle) above Job Status — sticky NW so it never clips
+        header = ctk.CTkFrame(body, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="nw", pady=(0, 16))
+        header.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            header,
+            text="Home",
+            font=T.font(28, "bold"),
+            text_color=T.HEADING,
+            anchor="w",
+            height=40,
+        ).grid(row=0, column=0, sticky="nw")
+        ctk.CTkLabel(
+            header,
+            text="Welcome to Sentivo Tools. Your all-in-one toolkit for eCommerce data and automation.",
+            font=T.font_tuple(T.BODY),
+            text_color=T.TEXT_SECONDARY,
+            anchor="w",
+            justify="left",
+            wraplength=720,
+        ).grid(row=1, column=0, sticky="nw", pady=(4, 0))
 
         # Job Status card
         self.job_card = T.card_frame(body)
