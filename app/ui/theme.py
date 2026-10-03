@@ -217,6 +217,25 @@ def option_menu_style() -> dict:
     }
 
 
+def combo_box_style() -> dict:
+    """CTkComboBox style — neutral border, no burgundy arrow square."""
+    c = current_colors()
+    return {
+        "fg_color": c["INPUT_BG"],
+        "border_color": c["BORDER"],
+        "border_width": 1,
+        "button_color": c["INPUT_BG"],
+        "button_hover_color": c["BG_PRIMARY"],
+        "text_color": c["INPUT_TEXT"],
+        "dropdown_fg_color": c["INPUT_BG"],
+        "dropdown_hover_color": c["BG_PRIMARY"],
+        "dropdown_text_color": c["INPUT_TEXT"],
+        "corner_radius": BORDER_RADIUS,
+        "font": font_tuple(LABEL),
+        "height": INPUT_HEIGHT,
+    }
+
+
 def textbox_style() -> dict:
     c = current_colors()
     return {

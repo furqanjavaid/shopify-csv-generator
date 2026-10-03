@@ -511,18 +511,24 @@ class Combobox(ctk.CTkFrame):
             self._var.set(values[0])
 
     def _open_menu(self) -> None:
+        try:
+            if str(self._btn.cget("state")) == "disabled":
+                return
+        except Exception:
+            pass
         if self._menu is not None:
-            try:
-                self._menu.destroy()
-            except Exception:
-                pass
-            self._menu = None
+            self._close_menu()
+            return
+        if not self._values:
             return
         c = current_colors()
         menu = ctk.CTkToplevel(self)
         menu.withdraw()
         menu.overrideredirect(True)
-        menu.attributes("-topmost", True)
+        try:
+            menu.attributes("-topmost", True)
+        except Exception:
+            pass
         self._menu = menu
         wrap = ctk.CTkFrame(
             menu,
@@ -549,11 +555,41 @@ class Combobox(ctk.CTkFrame):
         self.update_idletasks()
         x = self.winfo_rootx()
         y = self.winfo_rooty() + self.winfo_height()
-        w = max(self.winfo_width(), 160)
-        menu.geometry(f"{w}x{min(280, 8 + 36 * max(1, len(self._values)))}+{x}+{y}")
+        w = max(int(self.winfo_width() or 0), 160)
+        h = min(280, 8 + 36 * max(1, len(self._values)))
+        menu.geometry(f"{w}x{h}+{x}+{y}")
         menu.deiconify()
-        menu.bind("<FocusOut>", lambda _e: self._close_menu())
-        menu.focus_force()
+        # Arm dismiss after the opening click finishes — immediate FocusOut
+        # (common inside CTkScrollableFrame) was closing the menu instantly.
+        menu.after(200, lambda m=menu: self._arm_menu_dismiss(m))
+
+    def _arm_menu_dismiss(self, menu: ctk.CTkToplevel) -> None:
+        if self._menu is not menu:
+            return
+        try:
+            menu.bind("<FocusOut>", self._on_menu_focus_out, add="+")
+            menu.bind("<Escape>", lambda _e: self._close_menu(), add="+")
+            menu.focus_set()
+        except Exception:
+            pass
+
+    def _on_menu_focus_out(self, _event=None) -> None:
+        # Defer so clicking an item still registers before teardown
+        self.after(80, self._close_if_unfocused)
+
+    def _close_if_unfocused(self) -> None:
+        if self._menu is None:
+            return
+        try:
+            focused = self._menu.focus_get()
+            widget = focused
+            while widget is not None:
+                if widget == self._menu:
+                    return
+                widget = getattr(widget, "master", None)
+        except Exception:
+            pass
+        self._close_menu()
 
     def _pick(self, value: str) -> None:
         self._var.set(value)

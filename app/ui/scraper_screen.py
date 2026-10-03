@@ -130,12 +130,15 @@ class ScraperScreen(ctk.CTkFrame):
             left_col, text="Mode", font=T.font(12, "bold"), text_color=T.TEXT_MUTED, anchor="w"
         ).grid(row=0, column=0, sticky="w")
         self.mode_var = ctk.StringVar(value=MODE_UNIVERSAL_FULL)
-        self.mode_menu = Combobox(
+        # Native CTkComboBox — custom Combobox Toplevel menus fail inside scroll frames
+        self.mode_menu = ctk.CTkComboBox(
             left_col,
-            [MODE_UNIVERSAL_FULL, MODE_UNIVERSAL, MODE_LEGACY],
+            values=[MODE_UNIVERSAL_FULL, MODE_UNIVERSAL, MODE_LEGACY],
             variable=self.mode_var,
             command=self._on_mode_changed,
             width=280,
+            state="readonly",
+            **T.combo_box_style(),
         )
         self.mode_menu.grid(row=1, column=0, sticky="ew", pady=(4, 0))
         self.mode_hint = ctk.CTkLabel(
@@ -981,11 +984,15 @@ class ScraperScreen(ctk.CTkFrame):
             self.url_text.configure(state=state)
         except Exception:
             pass
+        # Mode combo stays readonly when unlocked (select-only, not free-type)
+        try:
+            self.mode_menu.configure(state="disabled" if locked else "readonly")
+        except Exception:
+            pass
         for widget in (
             self.output_entry,
             self.browse_btn,
             self.max_products_entry,
-            self.mode_menu,
             self.url_entry,
             self.vendor_checkbox,
             self.vendor_entry,
