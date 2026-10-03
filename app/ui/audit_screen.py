@@ -12,6 +12,7 @@ from pathlib import Path
 import customtkinter as ctk
 
 from app.ui import theme as T
+from app.ui.components import PageHeader
 from app.ui.sidebar import attach_sidebar
 from app.utils.helpers import is_valid_url
 from app.utils.job_status import TOOL_STORE_AUDITOR
@@ -39,42 +40,19 @@ class AuditScreen(ctk.CTkFrame):
         self.mod_email = ctk.BooleanVar(value=True)
         self.mod_seo = ctk.BooleanVar(value=False)
 
-        # Bottom action bar
-        self.bottom_bar = ctk.CTkFrame(
-            self, fg_color="#E8E5E0", height=56, corner_radius=0, border_width=1, border_color=T.BORDER
-        )
-        self.bottom_bar.pack(side="bottom", fill="x")
-        self.bottom_bar.pack_propagate(False)
-        self.bottom_bar.grid_columnconfigure(0, weight=1)
+        shell = attach_sidebar(self, app, "audit")
+        shell.grid_rowconfigure(0, weight=1)
+        shell.grid_columnconfigure(0, weight=1)
 
-        self.open_folder_btn = ctk.CTkButton(
-            self.bottom_bar, text="Open Folder", command=self._open_folder, width=120, **T.secondary_btn()
-        )
-        self.open_btn = ctk.CTkButton(
-            self.bottom_bar, text="Open Word Report", command=self._open_report, width=160, **T.primary_btn()
-        )
-        self.open_folder_btn.grid(row=0, column=1, sticky="e", padx=(8, 8), pady=10)
-        self.open_btn.grid(row=0, column=2, sticky="e", padx=(0, 16), pady=10)
-        self.open_btn.configure(state="disabled", fg_color=T.BG_SURFACE_B, text_color=T.TEXT_MUTED)
-        self.open_folder_btn.configure(state="disabled")
+        body = T.thin_scrollable_frame(shell)
+        body.grid(row=0, column=0, sticky="nsew")
+        body.grid_columnconfigure(0, weight=1)
 
-        body = attach_sidebar(self, app, "audit")
-        body.grid_rowconfigure(4, weight=1)
-
-        # Header
-        header = ctk.CTkFrame(body, fg_color="transparent")
-        header.grid(row=0, column=0, sticky="ew", pady=(0, 14))
-        ctk.CTkLabel(
-            header, text="Store Auditor", font=T.font_tuple(T.H1), text_color=T.HEADING, anchor="w"
-        ).grid(row=0, column=0, sticky="w")
-        ctk.CTkLabel(
-            header,
-            text="Audit eCommerce stores for issues and opportunities to improve performance, SEO, content and more.",
-            font=T.font_tuple(T.BODY),
-            text_color=T.TEXT_SECONDARY,
-            anchor="w",
-            wraplength=720,
-        ).grid(row=1, column=0, sticky="w", pady=(4, 0))
+        PageHeader(
+            body,
+            "Store Auditor",
+            "Audit eCommerce stores for issues and opportunities to improve performance, SEO, content and more.",
+        ).grid(row=0, column=0, sticky="ew", pady=(0, 14))
 
         # URL card
         url_card = T.card_frame(body)
@@ -134,13 +112,12 @@ class AuditScreen(ctk.CTkFrame):
         # Hidden CRO label used by success handler
         self._cro_score_label = self.score_value
 
-        # Bottom: Findings + Recommendations
+        # Findings + Recommendations — side by side, top-aligned
         bottom = ctk.CTkFrame(body, fg_color="transparent")
-        bottom.grid(row=3, column=0, sticky="nsew")
+        bottom.grid(row=3, column=0, sticky="ew")
         bottom.grid_columnconfigure(0, weight=7)
         bottom.grid_columnconfigure(1, weight=3)
         bottom.grid_rowconfigure(0, weight=1)
-        body.grid_rowconfigure(3, weight=1)
 
         findings_card = T.card_frame(bottom)
         findings_card.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
@@ -154,8 +131,11 @@ class AuditScreen(ctk.CTkFrame):
             row=0, column=0, sticky="w"
         )
         ctk.CTkLabel(
-            fh, text="Issues and opportunities discovered during the audit.", font=T.font_tuple(T.CAPTION),
-            text_color=T.TEXT_MUTED, anchor="w",
+            fh,
+            text="Issues and opportunities discovered during the audit.",
+            font=T.font_tuple(T.CAPTION),
+            text_color=T.TEXT_MUTED,
+            anchor="w",
         ).grid(row=1, column=0, sticky="w", pady=(2, 0))
         self.category_filter = ctk.CTkOptionMenu(
             fh,
@@ -175,7 +155,7 @@ class AuditScreen(ctk.CTkFrame):
             ).grid(row=0, column=col, sticky="ew" if col == 2 else "w", padx=6, pady=6)
 
         self.findings_list = ctk.CTkScrollableFrame(
-            findings_card, fg_color="transparent", height=180
+            findings_card, fg_color="transparent", height=220
         )
         self.findings_list.grid(row=2, column=0, sticky="nsew", padx=8, pady=(4, 12))
         self.findings_list.grid_columnconfigure(0, weight=1)
@@ -188,24 +168,25 @@ class AuditScreen(ctk.CTkFrame):
         )
         self._findings_placeholder.grid(row=0, column=0, sticky="w", padx=8, pady=8)
 
-        # Recommendations
+        # Recommendations (own header rows — not overlapping on row 0)
         rec_card = T.card_frame(bottom)
         rec_card.grid(row=0, column=1, sticky="nsew")
         rec_card.grid_columnconfigure(0, weight=1)
-        rec_card.grid_rowconfigure(1, weight=1)
+        rec_card.grid_rowconfigure(2, weight=1)
         ctk.CTkLabel(
             rec_card, text="Top Recommendations", font=T.font(14, "bold"), text_color=T.HEADING, anchor="w"
-        ).grid(row=0, column=0, sticky="w", padx=16, pady=(14, 4))
+        ).grid(row=0, column=0, sticky="nw", padx=16, pady=(14, 2))
         ctk.CTkLabel(
             rec_card,
             text="Prioritised actions to improve the store.",
             font=T.font_tuple(T.CAPTION),
             text_color=T.TEXT_MUTED,
             anchor="w",
-        ).grid(row=0, column=0, sticky="w", padx=16, pady=(36, 0))
+            wraplength=220,
+        ).grid(row=1, column=0, sticky="nw", padx=16, pady=(0, 4))
 
-        self.recs_list = ctk.CTkScrollableFrame(rec_card, fg_color="transparent")
-        self.recs_list.grid(row=1, column=0, sticky="nsew", padx=10, pady=(8, 12))
+        self.recs_list = ctk.CTkScrollableFrame(rec_card, fg_color="transparent", height=220)
+        self.recs_list.grid(row=2, column=0, sticky="nsew", padx=10, pady=(4, 12))
         self.recs_list.grid_columnconfigure(0, weight=1)
         self._recs_placeholder = ctk.CTkLabel(
             self.recs_list,
@@ -216,6 +197,21 @@ class AuditScreen(ctk.CTkFrame):
             wraplength=200,
         )
         self._recs_placeholder.grid(row=0, column=0, sticky="w", padx=6, pady=6)
+
+        # Action buttons inside scroll content (right-aligned), not a floating bottom bar
+        actions = ctk.CTkFrame(body, fg_color="transparent")
+        actions.grid(row=4, column=0, sticky="ew", pady=(14, 8))
+        actions.grid_columnconfigure(0, weight=1)
+        self.open_folder_btn = ctk.CTkButton(
+            actions, text="Open Folder", command=self._open_folder, width=120, **T.secondary_btn()
+        )
+        self.open_btn = ctk.CTkButton(
+            actions, text="Open Word Report", command=self._open_report, width=160, **T.primary_btn()
+        )
+        self.open_folder_btn.grid(row=0, column=1, sticky="e", padx=(0, 8))
+        self.open_btn.grid(row=0, column=2, sticky="e")
+        self.open_btn.configure(state="disabled", fg_color=T.BG_SURFACE_B, text_color=T.TEXT_MUTED)
+        self.open_folder_btn.configure(state="disabled")
 
         # Hidden log for progress messages
         self.log_box = ctk.CTkTextbox(body, height=1, fg_color=T.BG_PRIMARY, text_color=T.TEXT_MUTED)

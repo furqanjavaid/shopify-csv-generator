@@ -104,10 +104,12 @@ class Sidebar(ctk.CTkFrame):
         foot_wrap = ctk.CTkFrame(self, fg_color="transparent")
         foot_wrap.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 16))
         foot_wrap.grid_columnconfigure(0, weight=1)
-        # Thin divider above footer (mockup)
-        ctk.CTkFrame(foot_wrap, height=1, fg_color=c["SIDEBAR_MUTED"]).grid(
-            row=0, column=0, sticky="ew", pady=(0, 12)
+        # Thin divider above footer (mockup) — fixed height so CTk does not collapse it
+        divider = ctk.CTkFrame(
+            foot_wrap, height=2, fg_color="#8A94B8", corner_radius=0, border_width=0
         )
+        divider.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        divider.grid_propagate(False)
         foot = ctk.CTkFrame(foot_wrap, fg_color="transparent")
         foot.grid(row=1, column=0, sticky="ew")
         foot.grid_columnconfigure(0, weight=1)
@@ -219,5 +221,5 @@ def attach_sidebar(parent, app, active_page: str) -> ctk.CTkFrame:
     inner = ctk.CTkFrame(content, fg_color="transparent")
     inner.grid(row=0, column=0, sticky="nsew", padx=T.PAGE_PADDING, pady=T.PAGE_PADDING)
     inner.grid_columnconfigure(0, weight=1)
-    inner.grid_rowconfigure(0, weight=1)
+    # Do not weight row 0 — screens place the page header there and it must not clip.
     return inner

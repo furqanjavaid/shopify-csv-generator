@@ -5,6 +5,7 @@ from __future__ import annotations
 import customtkinter as ctk
 
 from app.ui import theme as T
+from app.ui.components import PageHeader
 from app.ui.icons import load_icon
 from app.ui.sidebar import attach_sidebar
 from app.utils.task_history import load_history
@@ -20,26 +21,17 @@ class HomeScreen(ctk.CTkFrame):
         self._icons: list[ctk.CTkImage] = []
 
         body = attach_sidebar(self, app, "home")
+        # attach_sidebar weights row 0 — reset so the page header is not crushed/clipped
+        body.grid_rowconfigure(0, weight=0)
+        body.grid_rowconfigure(1, weight=0)
+        body.grid_rowconfigure(2, weight=0)
         body.grid_rowconfigure(3, weight=1)
 
-        # Header
-        header = ctk.CTkFrame(body, fg_color="transparent")
-        header.grid(row=0, column=0, sticky="ew", pady=(0, 16))
-        ctk.CTkLabel(
-            header,
-            text="Home",
-            font=T.font_tuple(T.H1),
-            text_color=T.HEADING,
-            anchor="w",
-        ).grid(row=0, column=0, sticky="w")
-        ctk.CTkLabel(
-            header,
-            text="Welcome to Sentivo Tools. Your all-in-one toolkit for eCommerce data and automation.",
-            font=T.font_tuple(T.BODY),
-            text_color=T.TEXT_SECONDARY,
-            anchor="w",
-            wraplength=720,
-        ).grid(row=1, column=0, sticky="w", pady=(4, 0))
+        PageHeader(
+            body,
+            "Home",
+            "Welcome to Sentivo Tools. Your all-in-one toolkit for eCommerce data and automation.",
+        ).grid(row=0, column=0, sticky="ew", pady=(0, 16))
 
         # Job Status card
         self.job_card = T.card_frame(body)
@@ -163,13 +155,13 @@ class HomeScreen(ctk.CTkFrame):
         circle = ctk.CTkFrame(
             inner,
             fg_color=T.get("ACCENT_DIM"),
-            corner_radius=20,
-            width=44,
-            height=44,
+            corner_radius=24,
+            width=48,
+            height=48,
         )
         circle.grid(row=0, column=0, sticky="w")
         circle.grid_propagate(False)
-        img = load_icon(icon_name, 22, color="navy")
+        img = load_icon(icon_name, 24, color="navy")
         if img is not None:
             self._icons.append(img)
         ctk.CTkLabel(circle, text="", image=img).place(relx=0.5, rely=0.5, anchor="center")
