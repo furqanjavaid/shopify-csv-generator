@@ -227,14 +227,14 @@ def attach_sidebar(parent, app, active_page: str) -> ctk.CTkFrame:
     top_pad.grid(row=0, column=0, sticky="ew")
     top_pad.grid_propagate(False)
 
-    # Extra bottom padding so the last card is fully visible above the window edge / status bar
+    # Modest bottom pad — avoid large virtual scroll height after the last card
     inner = ctk.CTkFrame(scroll, fg_color="transparent")
     inner.grid(
         row=1,
         column=0,
         sticky="ew",
         padx=T.PAGE_PADDING,
-        pady=(T.PAGE_PADDING - 8, T.PAGE_PADDING + 28),
+        pady=(T.PAGE_PADDING - 8, T.PAGE_PADDING),
     )
     inner.grid_columnconfigure(0, weight=1)
     return inner

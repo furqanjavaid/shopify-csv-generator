@@ -210,16 +210,15 @@ class ConverterScreen(ctk.CTkFrame):
         )
         self.count_badge.grid(row=5, column=0, columnspan=2, sticky="w", pady=(10, 0))
 
-        # Bottom: Queue + Preview
+        # Bottom: Queue + Preview (top-aligned; no row weights that inflate scroll height)
         bottom = ctk.CTkFrame(body, fg_color="transparent")
         bottom.grid(row=2, column=0, sticky="ew")
         bottom.grid_columnconfigure(0, weight=7)
         bottom.grid_columnconfigure(1, weight=3)
 
         queue_card = T.card_frame(bottom)
-        queue_card.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        queue_card.grid(row=0, column=0, sticky="new", padx=(0, 10))
         queue_card.grid_columnconfigure(0, weight=1)
-        queue_card.grid_rowconfigure(1, weight=1)
 
         qh = ctk.CTkFrame(queue_card, fg_color="transparent")
         qh.grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 6))
@@ -240,10 +239,13 @@ class ConverterScreen(ctk.CTkFrame):
                 row=0, column=col, sticky="ew", padx=4, pady=4
             )
 
-        self.queue_list = ctk.CTkScrollableFrame(queue_card, fg_color="transparent")
-        self.queue_list.grid(row=2, column=0, sticky="nsew", padx=8, pady=(4, 12))
+        # Fixed-height host so the queue cannot stretch to the Preview column height
+        queue_host = ctk.CTkFrame(queue_card, fg_color="transparent", height=180)
+        queue_host.grid(row=2, column=0, sticky="ew", padx=8, pady=(4, 12))
+        queue_host.grid_propagate(False)
+        self.queue_list = T.thin_scrollable_frame(queue_host, fg_color="transparent")
+        self.queue_list.pack(fill="both", expand=True)
         self.queue_list.grid_columnconfigure(0, weight=1)
-        queue_card.grid_rowconfigure(2, weight=1)
         self._queue_empty = ctk.CTkLabel(
             self.queue_list,
             text="No images in queue. Choose files to begin.",
@@ -259,8 +261,9 @@ class ConverterScreen(ctk.CTkFrame):
 
         # Preview card
         prev = T.card_frame(bottom)
-        prev.grid(row=0, column=1, sticky="nsew")
+        prev.grid(row=0, column=1, sticky="new")
         prev.grid_columnconfigure(0, weight=1)
+
         ctk.CTkLabel(
             prev, text="Preview & Status", font=T.font(14, "bold"), text_color=T.HEADING, anchor="w"
         ).grid(row=0, column=0, sticky="w", padx=14, pady=(14, 8))
@@ -313,14 +316,14 @@ class ConverterScreen(ctk.CTkFrame):
             lab = ctk.CTkLabel(row, text="0", font=T.font(11, "bold"), text_color=T.TEXT_PRIMARY, anchor="e")
             lab.grid(row=0, column=2, sticky="e")
             self.summary_labels[key] = lab
-        ctk.CTkFrame(summary, height=6, fg_color="transparent").grid(row=6, column=0)
 
         self.output_path_label = ctk.CTkLabel(
             prev, text="Output: —", font=T.font(10), text_color=T.TEXT_MUTED, anchor="w", wraplength=220
         )
         self.output_path_label.grid(row=4, column=0, sticky="ew", padx=14, pady=(4, 14))
 
-        self.success_host = ctk.CTkFrame(body, fg_color="transparent")
+        # height=0: CTkFrame defaults to 200px and would leave a huge blank scroll gap when empty
+        self.success_host = ctk.CTkFrame(body, fg_color="transparent", height=0)
         self.success_host.grid(row=3, column=0, sticky="ew")
 
     def _on_quality(self, value: float) -> None:

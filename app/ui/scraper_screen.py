@@ -90,7 +90,7 @@ class ScraperScreen(ctk.CTkFrame):
         self._running = False
         self._elapsed_after = None
 
-        # Bottom status bar
+        # Slim status strip first (pack before expanding shell so it stays a hairline footer)
         self.status_bar = StatusBar(self)
         self.status_bar.pack(side="bottom", fill="x")
         self.count_badge = self.status_bar.left
