@@ -7,15 +7,84 @@ import os
 import subprocess
 import sys
 import threading
+import tkinter as tk
 from pathlib import Path
 
 import customtkinter as ctk
 
 from app.ui import theme as T
 from app.ui.components import PageHeader
+from app.ui.icons import load_icon
 from app.ui.sidebar import attach_sidebar
 from app.utils.helpers import is_valid_url
 from app.utils.job_status import TOOL_STORE_AUDITOR
+
+
+class ScoreRing(ctk.CTkFrame):
+    """Lightweight circular progress ring (canvas) with centered value label."""
+
+    def __init__(
+        self,
+        master,
+        *,
+        size: int = 72,
+        thickness: int = 7,
+        color: str = "#C9A84C",
+        track: str = "#E8E5E0",
+        bg: str = "#FFFFFF",
+        **kwargs,
+    ):
+        super().__init__(master, fg_color="transparent", width=size, height=size, **kwargs)
+        self.grid_propagate(False)
+        self.pack_propagate(False)
+        self._size = size
+        self._thickness = thickness
+        self._color = color
+        self._track = track
+        self._canvas = tk.Canvas(
+            self,
+            width=size,
+            height=size,
+            highlightthickness=0,
+            bd=0,
+            bg=bg,
+        )
+        self._canvas.place(relx=0.5, rely=0.5, anchor="center")
+        self.value_label = ctk.CTkLabel(
+            self,
+            text="—",
+            font=T.font(16, "bold"),
+            text_color=T.HEADING,
+            fg_color="transparent",
+        )
+        self.value_label.place(relx=0.5, rely=0.5, anchor="center")
+        self.set_progress(0.0)
+
+    def set_progress(self, ratio: float) -> None:
+        ratio = max(0.0, min(1.0, float(ratio)))
+        c = self._canvas
+        c.delete("all")
+        pad = self._thickness / 2 + 2
+        x0, y0 = pad, pad
+        x1, y1 = self._size - pad, self._size - pad
+        c.create_oval(x0, y0, x1, y1, outline=self._track, width=self._thickness)
+        if ratio > 0.001:
+            # Tk arcs: 0° at 3 o'clock, counter-clockwise; start at top (-90°)
+            extent = -360.0 * ratio
+            c.create_arc(
+                x0,
+                y0,
+                x1,
+                y1,
+                start=90,
+                extent=extent,
+                style=tk.ARC,
+                outline=self._color,
+                width=self._thickness,
+            )
+
+    def set_value_text(self, text: str) -> None:
+        self.value_label.configure(text=text)
 
 
 class AuditScreen(ctk.CTkFrame):
@@ -29,6 +98,8 @@ class AuditScreen(ctk.CTkFrame):
         self._running = False
         self.mode_var = ctk.StringVar(value="cro")
         self._findings_rows: list[ctk.CTkFrame] = []
+        self._findings_data: list[dict] = []
+        self._icons: list[ctk.CTkImage] = []
 
         # Module checklist vars (UI; mode_var drives actual run)
         self.mod_atc = ctk.BooleanVar(value=True)
@@ -49,7 +120,7 @@ class AuditScreen(ctk.CTkFrame):
             "Audit eCommerce stores for issues and opportunities to improve performance, SEO, content and more.",
         ).grid(row=0, column=0, sticky="nw", pady=(0, 14))
 
-        # URL card
+        # ── URL card ──────────────────────────────────────
         url_card = T.card_frame(body)
         url_card.grid(row=1, column=0, sticky="ew", pady=(0, 14))
         url_card.grid_columnconfigure(0, weight=1)
@@ -57,9 +128,34 @@ class AuditScreen(ctk.CTkFrame):
         url_inner.grid(row=0, column=0, sticky="ew", padx=18, pady=16)
         url_inner.grid_columnconfigure(0, weight=1)
 
+        head = ctk.CTkFrame(url_inner, fg_color="transparent")
+        head.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        head.grid_columnconfigure(1, weight=1)
+        link_circle = ctk.CTkFrame(
+            head,
+            width=36,
+            height=36,
+            corner_radius=18,
+            fg_color=T.get("CIRCLE_ICON_BG"),
+        )
+        link_circle.grid(row=0, column=0, rowspan=2, sticky="nw", padx=(0, 10))
+        link_circle.grid_propagate(False)
+        link_img = load_icon("link", size=18, color="navy")
+        if link_img is not None:
+            self._icons.append(link_img)
+        ctk.CTkLabel(link_circle, text="", image=link_img, fg_color="transparent").place(
+            relx=0.5, rely=0.5, anchor="center"
+        )
         ctk.CTkLabel(
-            url_inner, text="Enter Store URL", font=T.font(14, "bold"), text_color=T.HEADING, anchor="w"
-        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+            head, text="Enter Store URL", font=T.font(14, "bold"), text_color=T.HEADING, anchor="w"
+        ).grid(row=0, column=1, sticky="w")
+        ctk.CTkLabel(
+            head,
+            text="Paste a storefront URL to run CRO and technical checks.",
+            font=T.font_tuple(T.CAPTION),
+            text_color=T.TEXT_MUTED,
+            anchor="w",
+        ).grid(row=1, column=1, sticky="w", pady=(2, 0))
 
         self.url_entry = T.styled_entry(url_inner, placeholder="https://www.example-store.com")
         self.url_entry.grid(row=1, column=0, sticky="ew", padx=(0, 10))
@@ -95,29 +191,62 @@ class AuditScreen(ctk.CTkFrame):
         self.progress.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         self.progress.grid_remove()
 
-        # Score cards
+        # ── Score cards ───────────────────────────────────
         self.summary_row = ctk.CTkFrame(body, fg_color="transparent")
         self.summary_row.grid(row=2, column=0, sticky="ew", pady=(0, 14))
-        self.summary_row.grid_columnconfigure((0, 1, 2, 3), weight=1)
-        self.score_value = self._make_score_card(self.summary_row, 0, "Performance Score", "—", "/100", T.GOLD)
-        self.seo_value = self._make_score_card(self.summary_row, 1, "SEO Score", "—", "/100", T.GOLD)
-        self.content_value = self._make_score_card(self.summary_row, 2, "Content Completeness", "—", "/100", T.GOLD)
-        self.issues_value = self._make_score_card(self.summary_row, 3, "Technical Issues", "0", "Issues", T.ACCENT)
+        self.summary_row.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="scores")
+        self.score_value = self._make_score_card(
+            self.summary_row,
+            0,
+            title="Performance Score",
+            description="Overall store performance across key metrics.",
+            icon_name="bar-chart",
+            ring_color=T.GOLD,
+            initial="—",
+            is_issues=False,
+        )
+        self.seo_value = self._make_score_card(
+            self.summary_row,
+            1,
+            title="SEO Score",
+            description="Search visibility and on-page SEO health.",
+            icon_name="eye",
+            ring_color=T.GOLD,
+            initial="—",
+            is_issues=False,
+        )
+        self.content_value = self._make_score_card(
+            self.summary_row,
+            2,
+            title="Content Completeness",
+            description="Product and page content quality coverage.",
+            icon_name="file",
+            ring_color=T.GOLD,
+            initial="—",
+            is_issues=False,
+        )
+        self.issues_value = self._make_score_card(
+            self.summary_row,
+            3,
+            title="Technical Issues",
+            description="Open technical and conversion issues found.",
+            icon_name="alert-triangle",
+            ring_color=T.ACCENT,
+            initial="0",
+            is_issues=True,
+        )
         self.recs_value = self.issues_value  # alias for legacy updates
-        # Hidden CRO label used by success handler
         self._cro_score_label = self.score_value
 
-        # Findings + Recommendations — side by side, same top alignment (7 / 3)
+        # ── Findings + Recommendations (7 / 3) ─────────────
         bottom = ctk.CTkFrame(body, fg_color="transparent")
         bottom.grid(row=3, column=0, sticky="ew")
         bottom.grid_columnconfigure(0, weight=7)
         bottom.grid_columnconfigure(1, weight=3)
-        bottom.grid_rowconfigure(0, weight=1, minsize=280)
 
         findings_card = T.card_frame(bottom)
         findings_card.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
         findings_card.grid_columnconfigure(0, weight=1)
-        findings_card.grid_rowconfigure(2, weight=1)
 
         fh = ctk.CTkFrame(findings_card, fg_color="transparent")
         fh.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 6))
@@ -135,24 +264,31 @@ class AuditScreen(ctk.CTkFrame):
         self.category_filter = ctk.CTkOptionMenu(
             fh,
             values=["All Categories"],
-            width=140,
+            width=150,
+            command=self._apply_category_filter,
             **T.option_menu_style(),
         )
         self.category_filter.grid(row=0, column=1, rowspan=2, sticky="e")
+        self.category_filter.set("All Categories")
 
-        # Table header
+        # Table header: Priority | Category | Issue / Opportunity | Status
         thead = ctk.CTkFrame(findings_card, fg_color=T.BG_PRIMARY, corner_radius=4)
         thead.grid(row=1, column=0, sticky="ew", padx=12, pady=(4, 0))
         thead.grid_columnconfigure(2, weight=1)
-        for col, (txt, w) in enumerate((("#", 28), ("Priority", 80), ("Issue", 1), ("Status", 120))):
+        for col, (txt, w) in enumerate(
+            (("Priority", 88), ("Category", 110), ("Issue / Opportunity", 1), ("Status", 120))
+        ):
             ctk.CTkLabel(
-                thead, text=txt, font=T.font(11, "bold"), text_color=T.TEXT_MUTED, width=w if col != 2 else 0, anchor="w"
+                thead,
+                text=txt,
+                font=T.font(11, "bold"),
+                text_color=T.TEXT_MUTED,
+                width=w if col != 2 else 0,
+                anchor="w",
             ).grid(row=0, column=col, sticky="ew" if col == 2 else "w", padx=6, pady=6)
 
-        self.findings_list = ctk.CTkScrollableFrame(
-            findings_card, fg_color="transparent", height=220
-        )
-        self.findings_list.grid(row=2, column=0, sticky="nsew", padx=8, pady=(4, 12))
+        self.findings_list = ctk.CTkScrollableFrame(findings_card, fg_color="transparent", height=220)
+        self.findings_list.grid(row=2, column=0, sticky="ew", padx=8, pady=(4, 12))
         self.findings_list.grid_columnconfigure(0, weight=1)
         self._findings_placeholder = ctk.CTkLabel(
             self.findings_list,
@@ -163,25 +299,39 @@ class AuditScreen(ctk.CTkFrame):
         )
         self._findings_placeholder.grid(row=0, column=0, sticky="w", padx=8, pady=8)
 
-        # Recommendations (own header rows — not overlapping on row 0)
+        # Recommendations
         rec_card = T.card_frame(bottom)
         rec_card.grid(row=0, column=1, sticky="nsew")
         rec_card.grid_columnconfigure(0, weight=1)
-        rec_card.grid_rowconfigure(2, weight=1)
+
+        rh = ctk.CTkFrame(rec_card, fg_color="transparent")
+        rh.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 4))
+        rh.grid_columnconfigure(1, weight=1)
+        gold_circle = ctk.CTkFrame(
+            rh, width=36, height=36, corner_radius=18, fg_color=T.get("AMBER_BG")
+        )
+        gold_circle.grid(row=0, column=0, rowspan=2, sticky="nw", padx=(0, 10))
+        gold_circle.grid_propagate(False)
+        rec_img = load_icon("check", size=18, color="gold")
+        if rec_img is not None:
+            self._icons.append(rec_img)
+        ctk.CTkLabel(gold_circle, text="", image=rec_img, fg_color="transparent").place(
+            relx=0.5, rely=0.5, anchor="center"
+        )
         ctk.CTkLabel(
-            rec_card, text="Top Recommendations", font=T.font(14, "bold"), text_color=T.HEADING, anchor="w"
-        ).grid(row=0, column=0, sticky="nw", padx=16, pady=(14, 2))
+            rh, text="Top Recommendations", font=T.font(14, "bold"), text_color=T.HEADING, anchor="w"
+        ).grid(row=0, column=1, sticky="w")
         ctk.CTkLabel(
-            rec_card,
+            rh,
             text="Prioritised actions to improve the store.",
             font=T.font_tuple(T.CAPTION),
             text_color=T.TEXT_MUTED,
             anchor="w",
-            wraplength=220,
-        ).grid(row=1, column=0, sticky="nw", padx=16, pady=(0, 4))
+            wraplength=200,
+        ).grid(row=1, column=1, sticky="w", pady=(2, 0))
 
         self.recs_list = ctk.CTkScrollableFrame(rec_card, fg_color="transparent", height=220)
-        self.recs_list.grid(row=2, column=0, sticky="nsew", padx=10, pady=(4, 12))
+        self.recs_list.grid(row=1, column=0, sticky="ew", padx=10, pady=(4, 12))
         self.recs_list.grid_columnconfigure(0, weight=1)
         self._recs_placeholder = ctk.CTkLabel(
             self.recs_list,
@@ -193,7 +343,7 @@ class AuditScreen(ctk.CTkFrame):
         )
         self._recs_placeholder.grid(row=0, column=0, sticky="w", padx=6, pady=6)
 
-        # Action buttons inside scroll content (right-aligned), not a floating bottom bar
+        # Action buttons (real app functionality)
         actions = ctk.CTkFrame(body, fg_color="transparent")
         actions.grid(row=4, column=0, sticky="ew", pady=(14, 8))
         actions.grid_columnconfigure(0, weight=1)
@@ -211,6 +361,8 @@ class AuditScreen(ctk.CTkFrame):
         # Hidden log for progress messages
         self.log_box = ctk.CTkTextbox(body, height=1, fg_color=T.BG_PRIMARY, text_color=T.TEXT_MUTED)
         self.log_box.grid_remove()
+
+    # ── UI helpers ────────────────────────────────────────
 
     def _module_check(self, parent, text: str, var: ctk.BooleanVar, row: int, col: int) -> None:
         ctk.CTkCheckBox(
@@ -231,28 +383,125 @@ class AuditScreen(ctk.CTkFrame):
         self.mode_var.set("full" if self.mod_seo.get() else "cro")
 
     def _make_score_card(
-        self, parent, col: int, title: str, value: str, caption: str, color: str
+        self,
+        parent,
+        col: int,
+        *,
+        title: str,
+        description: str,
+        icon_name: str,
+        ring_color: str,
+        initial: str,
+        is_issues: bool,
     ) -> ctk.CTkLabel:
         card = T.card_frame(parent)
         card.grid(row=0, column=col, sticky="nsew", padx=(0 if col == 0 else 6, 0 if col == 3 else 6))
         inner = ctk.CTkFrame(card, fg_color="transparent")
         inner.grid(row=0, column=0, sticky="ew", padx=14, pady=14)
         inner.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(inner, text=title, font=T.font(12, "bold"), text_color=T.HEADING, anchor="w").grid(
-            row=0, column=0, sticky="w"
+
+        top = ctk.CTkFrame(inner, fg_color="transparent")
+        top.grid(row=0, column=0, sticky="w")
+
+        ring = ScoreRing(
+            top,
+            size=72,
+            thickness=7,
+            color=ring_color,
+            track="#E8E5E0",
+            bg=T.BG_SURFACE_A,
         )
-        value_label = ctk.CTkLabel(inner, text=value, font=T.font(28, "bold"), text_color=color, anchor="w")
-        value_label.grid(row=1, column=0, sticky="w", pady=(8, 0))
-        ctk.CTkLabel(inner, text=caption, font=T.font_tuple(T.CAPTION), text_color=T.TEXT_MUTED, anchor="w").grid(
-            row=2, column=0, sticky="w", pady=(2, 0)
+        ring.grid(row=0, column=0, sticky="w")
+        ring.set_value_text(initial)
+
+        icon_circle = ctk.CTkFrame(
+            top,
+            width=32,
+            height=32,
+            corner_radius=16,
+            fg_color=T.get("CIRCLE_ICON_BG"),
         )
-        bar = ctk.CTkProgressBar(
-            inner, height=8, progress_color=color, fg_color=T.BORDER, corner_radius=4
+        icon_circle.grid(row=0, column=1, sticky="n", padx=(10, 0), pady=(4, 0))
+        icon_circle.grid_propagate(False)
+        img = load_icon(icon_name, size=16, color="navy")
+        if img is not None:
+            self._icons.append(img)
+        ctk.CTkLabel(icon_circle, text="", image=img, fg_color="transparent").place(
+            relx=0.5, rely=0.5, anchor="center"
         )
-        bar.grid(row=3, column=0, sticky="ew", pady=(10, 0))
-        bar.set(0)
-        value_label._score_bar = bar  # type: ignore[attr-defined]
+
+        ctk.CTkLabel(inner, text=title, font=T.font(13, "bold"), text_color=T.HEADING, anchor="w").grid(
+            row=1, column=0, sticky="w", pady=(10, 0)
+        )
+        ctk.CTkLabel(
+            inner,
+            text=description,
+            font=T.font_tuple(T.CAPTION),
+            text_color=T.TEXT_MUTED,
+            anchor="w",
+            wraplength=180,
+            justify="left",
+        ).grid(row=2, column=0, sticky="w", pady=(2, 0))
+
+        ctk.CTkFrame(inner, height=1, fg_color=T.BORDER, corner_radius=0).grid(
+            row=3, column=0, sticky="ew", pady=(10, 6)
+        )
+        delta = ctk.CTkLabel(
+            inner,
+            text="Awaiting audit" if not is_issues else "No issues yet",
+            font=T.font(11),
+            text_color=T.TEXT_SECONDARY,
+            anchor="w",
+        )
+        delta.grid(row=4, column=0, sticky="w")
+
+        value_label = ring.value_label
+        value_label._score_ring = ring  # type: ignore[attr-defined]
+        value_label._delta_label = delta  # type: ignore[attr-defined]
+        value_label._is_issues = is_issues  # type: ignore[attr-defined]
         return value_label
+
+    @staticmethod
+    def _priority_style(severity: str) -> tuple[str, str, str]:
+        s = (severity or "medium").lower()
+        if "high" in s:
+            return "High", "#B94C3F", "#F8E8E6"
+        if "low" in s:
+            return "Low", "#3B6EA5", "#E8F0F8"
+        return "Medium", "#8A7010", "#F5EDD8"
+
+    @staticmethod
+    def _status_style(severity: str) -> tuple[str, str, str]:
+        s = (severity or "medium").lower()
+        if "high" in s:
+            return "Needs Fix", "#B94C3F", "#F8E8E6"
+        if "low" in s:
+            return "Opportunity", "#3B6EA5", "#E8F0F8"
+        return "Needs Attention", "#8A7010", "#F5EDD8"
+
+    @staticmethod
+    def _score_status_text(disp: str | int) -> str:
+        try:
+            n = int(disp)
+        except (TypeError, ValueError):
+            return "Awaiting audit"
+        if n >= 80:
+            return "Strong"
+        if n >= 60:
+            return "Fair"
+        return "Needs attention"
+
+    def _pill(self, parent, text: str, fg: str, bg: str, width: int = 72) -> ctk.CTkLabel:
+        return ctk.CTkLabel(
+            parent,
+            text=text,
+            font=T.font(11, "bold"),
+            text_color=fg,
+            fg_color=bg,
+            corner_radius=10,
+            width=width,
+            height=22,
+        )
 
     def _append_log(self, message: str) -> None:
         self.log_box.configure(state="normal")
@@ -264,10 +513,13 @@ class AuditScreen(ctk.CTkFrame):
         self.after(0, lambda m=message: self._append_log(m))
 
     def _clear_findings_ui(self) -> None:
+        self._findings_data = []
         for child in self.findings_list.winfo_children():
             child.destroy()
         for child in self.recs_list.winfo_children():
             child.destroy()
+        self.category_filter.configure(values=["All Categories"])
+        self.category_filter.set("All Categories")
         self._findings_placeholder = ctk.CTkLabel(
             self.findings_list,
             text="Run an audit to see findings here.",
@@ -286,13 +538,14 @@ class AuditScreen(ctk.CTkFrame):
         )
         self._recs_placeholder.grid(row=0, column=0, sticky="w", padx=6, pady=6)
 
-    def _populate_findings(self, findings: list) -> None:
+    def _apply_category_filter(self, _choice: str | None = None) -> None:
+        self._render_findings_rows()
+
+    def _render_findings_rows(self) -> None:
         for child in self.findings_list.winfo_children():
             child.destroy()
-        for child in self.recs_list.winfo_children():
-            child.destroy()
 
-        failed = [f for f in findings if not f.get("passed")]
+        failed = self._findings_data
         if not failed:
             ctk.CTkLabel(
                 self.findings_list,
@@ -303,46 +556,78 @@ class AuditScreen(ctk.CTkFrame):
             ).grid(row=0, column=0, sticky="w", padx=8, pady=8)
             return
 
-        for i, f in enumerate(failed[:40]):
+        selected = self.category_filter.get() if self.category_filter else "All Categories"
+        rows = failed
+        if selected and selected != "All Categories":
+            rows = [
+                f
+                for f in failed
+                if (f.get("category") or "—") == selected
+            ]
+
+        if not rows:
+            ctk.CTkLabel(
+                self.findings_list,
+                text="No findings in this category.",
+                font=T.font_tuple(T.CAPTION),
+                text_color=T.TEXT_MUTED,
+                anchor="w",
+            ).grid(row=0, column=0, sticky="w", padx=8, pady=8)
+            return
+
+        for i, f in enumerate(rows[:40]):
             row = ctk.CTkFrame(self.findings_list, fg_color="transparent")
-            row.grid(row=i, column=0, sticky="ew", pady=2)
+            row.grid(row=i, column=0, sticky="ew", pady=3)
             row.grid_columnconfigure(2, weight=1)
 
             severity = (f.get("severity") or f.get("priority") or "medium").lower()
-            if "high" in severity:
-                priority, pcolor, status, scolor, sbg = "High", "#B94C3F", "Needs Fix", "#B94C3F", "#F8E8E6"
-            elif "low" in severity:
-                priority, pcolor, status, scolor, sbg = "Low", "#3B6EA5", "Opportunity", "#3B6EA5", "#E8F0F8"
-            else:
-                priority, pcolor, status, scolor, sbg = "Medium", "#C9A84C", "Needs Attention", "#8A7010", "#F5EDD8"
+            priority, pfg, pbg = self._priority_style(severity)
+            status, sfg, sbg = self._status_style(severity)
 
-            ctk.CTkLabel(row, text=str(i + 1), font=T.font(11), text_color=T.TEXT_MUTED, width=28, anchor="w").grid(
-                row=0, column=0, padx=4
-            )
-            pwrap = ctk.CTkFrame(row, fg_color="transparent")
-            pwrap.grid(row=0, column=1, sticky="w", padx=4)
-            ctk.CTkLabel(pwrap, text="●", font=T.font(10), text_color=pcolor, width=14).grid(row=0, column=0)
-            ctk.CTkLabel(pwrap, text=priority, font=T.font(11), text_color=T.TEXT_PRIMARY, anchor="w").grid(
-                row=0, column=1
-            )
+            self._pill(row, priority, pfg, pbg, width=72).grid(row=0, column=0, sticky="w", padx=(4, 6))
+
+            cat = f.get("category")
+            cat_txt = str(cat).strip() if cat else "—"
+            ctk.CTkLabel(
+                row, text=cat_txt[:28], font=T.font(11), text_color=T.TEXT_SECONDARY, anchor="w", width=110
+            ).grid(row=0, column=1, sticky="w", padx=4)
 
             issue = f.get("title") or f.get("name") or f.get("check") or "Issue"
-            cat = f.get("category") or ""
-            issue_txt = f"{issue}" + (f"  ·  {cat}" if cat else "")
             ctk.CTkLabel(
-                row, text=issue_txt[:80], font=T.font(12), text_color=T.TEXT_PRIMARY, anchor="w"
+                row, text=str(issue)[:80], font=T.font(12), text_color=T.TEXT_PRIMARY, anchor="w"
             ).grid(row=0, column=2, sticky="ew", padx=6)
 
+            self._pill(row, status, sfg, sbg, width=118).grid(row=0, column=3, sticky="e", padx=4)
+
+    def _populate_findings(self, findings: list) -> None:
+        for child in self.findings_list.winfo_children():
+            child.destroy()
+        for child in self.recs_list.winfo_children():
+            child.destroy()
+
+        failed = [f for f in findings if not f.get("passed")]
+        self._findings_data = failed
+
+        cats = sorted(
+            {
+                str(f.get("category")).strip()
+                for f in failed
+                if f.get("category") and str(f.get("category")).strip()
+            }
+        )
+        self.category_filter.configure(values=["All Categories", *cats] if cats else ["All Categories"])
+        self.category_filter.set("All Categories")
+
+        if not failed:
             ctk.CTkLabel(
-                row,
-                text=status,
-                font=T.font(11, "bold"),
-                text_color=scolor,
-                fg_color=sbg,
-                corner_radius=4,
-                width=110,
-                height=22,
-            ).grid(row=0, column=3, padx=4)
+                self.findings_list,
+                text="No issues found — great job!",
+                font=T.font_tuple(T.CAPTION),
+                text_color=T.SUCCESS,
+                anchor="w",
+            ).grid(row=0, column=0, sticky="w", padx=8, pady=8)
+        else:
+            self._render_findings_rows()
 
         # Top recommendations from failed items with fix text
         recs = [f for f in failed if f.get("fix") or f.get("recommendation")][:5]
@@ -356,9 +641,11 @@ class AuditScreen(ctk.CTkFrame):
                 anchor="w",
             ).grid(row=0, column=0, sticky="w", padx=6, pady=6)
             return
+
         for i, f in enumerate(recs):
+            r = i * 2
             item = ctk.CTkFrame(self.recs_list, fg_color="transparent")
-            item.grid(row=i, column=0, sticky="ew", pady=6)
+            item.grid(row=r, column=0, sticky="ew")
             item.grid_columnconfigure(1, weight=1)
             num = ctk.CTkLabel(
                 item,
@@ -366,19 +653,32 @@ class AuditScreen(ctk.CTkFrame):
                 font=T.font(12, "bold"),
                 text_color=T.BTN_ON_ACCENT,
                 fg_color=T.GOLD,
-                width=24,
-                height=24,
-                corner_radius=12,
+                width=26,
+                height=26,
+                corner_radius=13,
             )
-            num.grid(row=0, column=0, rowspan=2, sticky="n", padx=(0, 8))
+            num.grid(row=0, column=0, rowspan=2, sticky="n", padx=(0, 10), pady=(8, 0))
             title = f.get("title") or f.get("name") or f.get("check") or "Recommendation"
-            ctk.CTkLabel(item, text=title[:48], font=T.font(12, "bold"), text_color=T.HEADING, anchor="w").grid(
-                row=0, column=1, sticky="w"
-            )
-            fix = f.get("fix") or f.get("recommendation") or ""
             ctk.CTkLabel(
-                item, text=str(fix)[:90], font=T.font(11), text_color=T.TEXT_MUTED, anchor="w", wraplength=200
-            ).grid(row=1, column=1, sticky="w")
+                item, text=str(title)[:56], font=T.font(12, "bold"), text_color=T.HEADING, anchor="w"
+            ).grid(row=0, column=1, sticky="w", pady=(8, 0))
+            fix = f.get("fix") or f.get("recommendation") or ""
+            if fix:
+                ctk.CTkLabel(
+                    item,
+                    text=str(fix)[:110],
+                    font=T.font(11),
+                    text_color=T.TEXT_MUTED,
+                    anchor="w",
+                    wraplength=200,
+                    justify="left",
+                ).grid(row=1, column=1, sticky="w", pady=(2, 8))
+            else:
+                ctk.CTkFrame(item, height=8, fg_color="transparent").grid(row=1, column=1)
+            if i < len(recs) - 1:
+                ctk.CTkFrame(self.recs_list, height=1, fg_color=T.BORDER, corner_radius=0).grid(
+                    row=r + 1, column=0, sticky="ew", padx=2, pady=2
+                )
 
     def _start_audit(self) -> None:
         store = getattr(self.app, "job_status", None)
@@ -450,25 +750,35 @@ class AuditScreen(ctk.CTkFrame):
         seo = scores.get("seo", scores.get("SEO", overall))
         content = scores.get("content", scores.get("cro", overall))
 
-        def _set_score(label: ctk.CTkLabel, raw, denom: float = 10.0) -> None:
+        def _set_score(label: ctk.CTkLabel, raw, *, is_issues: bool = False) -> None:
+            ring: ScoreRing | None = getattr(label, "_score_ring", None)
+            delta: ctk.CTkLabel | None = getattr(label, "_delta_label", None)
             try:
                 n = float(raw)
-                # Display on /100 scale when source is /10
                 disp = int(round(n * 10)) if n <= 10 else int(round(n))
                 label.configure(text=str(disp))
-                bar = getattr(label, "_score_bar", None)
-                if bar is not None:
-                    bar.set(min(1.0, max(0.0, disp / 100.0)))
+                if ring is not None:
+                    ring.set_value_text(str(disp))
+                    ring.set_progress(min(1.0, max(0.0, disp / 100.0)))
+                if delta is not None and not is_issues:
+                    delta.configure(text=self._score_status_text(disp))
             except (TypeError, ValueError):
                 label.configure(text=str(raw))
+                if ring is not None:
+                    ring.set_value_text(str(raw))
 
         _set_score(self.score_value, overall)
         _set_score(self.seo_value, seo)
         _set_score(self.content_value, content)
+
         self.issues_value.configure(text=str(issues))
-        bar = getattr(self.issues_value, "_score_bar", None)
-        if bar is not None:
-            bar.set(min(1.0, issues / 20.0) if issues else 0)
+        ring = getattr(self.issues_value, "_score_ring", None)
+        if ring is not None:
+            ring.set_value_text(str(issues))
+            ring.set_progress(min(1.0, issues / 20.0) if issues else 0.0)
+        delta = getattr(self.issues_value, "_delta_label", None)
+        if delta is not None:
+            delta.configure(text="No issues found" if issues == 0 else f"{issues} open issue{'s' if issues != 1 else ''}")
 
         self._populate_findings(findings)
 
