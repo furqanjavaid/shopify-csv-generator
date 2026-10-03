@@ -21,11 +21,7 @@ class HomeScreen(ctk.CTkFrame):
         self._icons: list[ctk.CTkImage] = []
 
         body = attach_sidebar(self, app, "home")
-        # attach_sidebar weights row 0 — reset so the page header is not crushed/clipped
-        body.grid_rowconfigure(0, weight=0)
-        body.grid_rowconfigure(1, weight=0)
-        body.grid_rowconfigure(2, weight=0)
-        body.grid_rowconfigure(3, weight=1)
+        body.grid_columnconfigure(0, weight=1)
 
         PageHeader(
             body,
@@ -133,12 +129,11 @@ class HomeScreen(ctk.CTkFrame):
             self._go_audit,
         )
 
-        # Bottom: recent + system
+        # Bottom: recent + system (scrollable page — no forced expand that clips)
         bottom = ctk.CTkFrame(body, fg_color="transparent")
-        bottom.grid(row=3, column=0, sticky="nsew")
+        bottom.grid(row=3, column=0, sticky="ew")
         bottom.grid_columnconfigure(0, weight=7)
         bottom.grid_columnconfigure(1, weight=3)
-        bottom.grid_rowconfigure(0, weight=1)
         self._recent_tasks(bottom)
         self._system_status(bottom)
 

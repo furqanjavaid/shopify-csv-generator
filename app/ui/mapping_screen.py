@@ -97,12 +97,19 @@ class MappingScreen(ctk.CTkFrame):
         self.auto_mapping = self.mapper.auto_map(self.parsed_data["headers"])
         self.dropdowns: list[dict[str, Any]] = []
 
-        # Persistent bottom bar FIRST
+        # Persistent bottom bar FIRST (theme shell, not a white strip)
         self.bottom_bar = ctk.CTkFrame(
-            self, fg_color=T.BG_SURFACE_A, height=64, corner_radius=0
+            self,
+            fg_color=T.BG_PRIMARY,
+            height=64,
+            corner_radius=0,
+            border_width=0,
         )
         self.bottom_bar.pack(side="bottom", fill="x")
         self.bottom_bar.pack_propagate(False)
+        ctk.CTkFrame(self.bottom_bar, height=1, fg_color=T.BORDER, corner_radius=0).pack(
+            fill="x", side="top"
+        )
 
         self.generate_btn = ctk.CTkButton(
             self.bottom_bar,

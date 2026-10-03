@@ -34,7 +34,7 @@ class ConverterScreen(ctk.CTkFrame):
         self._selected_preview_idx = 0
 
         body = attach_sidebar(self, app, "converter")
-        body.grid_rowconfigure(2, weight=1)
+        body.grid_columnconfigure(0, weight=1)
 
         # Header
         header = ctk.CTkFrame(body, fg_color="transparent")
@@ -212,10 +212,9 @@ class ConverterScreen(ctk.CTkFrame):
 
         # Bottom: Queue + Preview
         bottom = ctk.CTkFrame(body, fg_color="transparent")
-        bottom.grid(row=2, column=0, sticky="nsew")
+        bottom.grid(row=2, column=0, sticky="ew")
         bottom.grid_columnconfigure(0, weight=7)
         bottom.grid_columnconfigure(1, weight=3)
-        bottom.grid_rowconfigure(0, weight=1)
 
         queue_card = T.card_frame(bottom)
         queue_card.grid(row=0, column=0, sticky="nsew", padx=(0, 10))

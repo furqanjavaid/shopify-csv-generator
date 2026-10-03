@@ -40,12 +40,7 @@ class AuditScreen(ctk.CTkFrame):
         self.mod_email = ctk.BooleanVar(value=True)
         self.mod_seo = ctk.BooleanVar(value=False)
 
-        shell = attach_sidebar(self, app, "audit")
-        shell.grid_rowconfigure(0, weight=1)
-        shell.grid_columnconfigure(0, weight=1)
-
-        body = T.thin_scrollable_frame(shell)
-        body.grid(row=0, column=0, sticky="nsew")
+        body = attach_sidebar(self, app, "audit")
         body.grid_columnconfigure(0, weight=1)
 
         PageHeader(
@@ -117,7 +112,6 @@ class AuditScreen(ctk.CTkFrame):
         bottom.grid(row=3, column=0, sticky="ew")
         bottom.grid_columnconfigure(0, weight=7)
         bottom.grid_columnconfigure(1, weight=3)
-        bottom.grid_rowconfigure(0, weight=1)
 
         findings_card = T.card_frame(bottom)
         findings_card.grid(row=0, column=0, sticky="nsew", padx=(0, 10))

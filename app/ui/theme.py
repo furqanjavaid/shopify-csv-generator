@@ -56,7 +56,7 @@ _LIGHT = {
     "BG_PRIMARY": "#F0EDE8",
     "BG_SURFACE_A": "#FFFFFF",
     "BG_SURFACE_B": "#FFFFFF",
-    "BORDER": "#E4E0D8",
+    "BORDER": "#D8D5D0",
     "TEXT_PRIMARY": "#1F2937",
     "TEXT_SECONDARY": "#6B7280",
     "TEXT_MUTED": "#6B7280",

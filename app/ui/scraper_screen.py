@@ -34,6 +34,7 @@ from app.ui.components import (
     PrimaryButton,
     StatusBar,
 )
+from app.ui.icons import load_icon
 from app.ui.sidebar import attach_sidebar
 from app.utils.helpers import is_valid_url, output_filename_from_url
 from app.utils.job_status import TOOL_URL_SCRAPER
@@ -51,8 +52,9 @@ DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "output" / "gui_extract"
 LOG_COLOR_INFO = "#8B7340"
 LOG_COLOR_WARN = "#E88C00"
 LOG_COLOR_ERROR = "#CC3333"
-LOG_MIN_HEIGHT = 300
+LOG_MIN_HEIGHT = 160
 PROGRESS_AMBER = "#C9A84C"
+SEED_URL_PLACEHOLDER = "https://your-store.com/collections/all"
 
 PILOT_OUTPUT_BUTTONS = (
     ("Open output folder", "folder"),
@@ -95,41 +97,41 @@ class ScraperScreen(ctk.CTkFrame):
         self.status_right = self.status_bar.right
         self.next_btn = None
         self.clear_btn = None
+        self._status_spin_i = 0
+        self._status_spin_frames = ("◐", "◓", "◑", "◒")
 
-        shell = attach_sidebar(self, app, "scraper")
-        shell.grid_rowconfigure(0, weight=1)
-        shell.grid_columnconfigure(0, weight=1)
-
-        body = T.thin_scrollable_frame(shell)
-        body.grid(row=0, column=0, sticky="nsew")
+        body = attach_sidebar(self, app, "scraper")
         body.grid_columnconfigure(0, weight=1)
-        body.grid_rowconfigure(2, weight=1)
 
         PageHeader(
             body,
             "URL Scraper",
             "Scrape products and metadata from ecommerce stores using seed URLs.",
-        ).grid(row=0, column=0, sticky="ew", pady=(0, 14))
+        ).grid(row=0, column=0, sticky="ew", pady=(0, 8))
 
         # ── Scraper Configuration card ────────────────────
         config = Card(
             body,
             title="Scraper Configuration",
-            subtitle="Choose mode, output folder, and seed URLs",
+            subtitle="Configure your scraping settings and provide seed URLs to start.",
             icon="link",
+            expand_body=False,
         )
-        config.grid(row=1, column=0, sticky="ew", pady=(0, 14))
+        config.grid(row=1, column=0, sticky="ew", pady=(0, 8))
         cfg = config.body
         cfg.grid_columnconfigure((0, 1), weight=1)
 
-        # Mode
-        mode_row = ctk.CTkFrame(cfg, fg_color="transparent")
-        mode_row.grid(row=0, column=0, sticky="ew", padx=(0, 8), pady=(0, 10))
-        mode_row.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(mode_row, text="Mode", font=T.font(12, "bold"), text_color=T.TEXT_MUTED, anchor="w").grid(row=0, column=0, sticky="w")
+        # Left column: Mode + Max Products
+        left_col = ctk.CTkFrame(cfg, fg_color="transparent")
+        left_col.grid(row=0, column=0, sticky="new", padx=(0, 10), pady=(0, 4))
+        left_col.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            left_col, text="Mode", font=T.font(12, "bold"), text_color=T.TEXT_MUTED, anchor="w"
+        ).grid(row=0, column=0, sticky="w")
         self.mode_var = ctk.StringVar(value=MODE_UNIVERSAL_FULL)
         self.mode_menu = Combobox(
-            mode_row,
+            left_col,
             [MODE_UNIVERSAL_FULL, MODE_UNIVERSAL, MODE_LEGACY],
             variable=self.mode_var,
             command=self._on_mode_changed,
@@ -137,40 +139,48 @@ class ScraperScreen(ctk.CTkFrame):
         )
         self.mode_menu.grid(row=1, column=0, sticky="ew", pady=(4, 0))
         self.mode_hint = ctk.CTkLabel(
-            mode_row, text="", font=T.font_tuple(T.CAPTION), text_color=T.TEXT_MUTED, anchor="w"
+            left_col, text="", font=T.font_tuple(T.CAPTION), text_color=T.TEXT_MUTED, anchor="w"
         )
         self.mode_hint.grid(row=2, column=0, sticky="w", pady=(2, 0))
 
-        # Output folder
-        out_row = ctk.CTkFrame(cfg, fg_color="transparent")
-        out_row.grid(row=0, column=1, sticky="ew", padx=(8, 0), pady=(0, 10))
-        out_row.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(out_row, text="Output Folder", font=T.font(12, "bold"), text_color=T.TEXT_MUTED, anchor="w").grid(row=0, column=0, columnspan=2, sticky="w")
-        self.output_entry = T.styled_entry(out_row, placeholder="Select output folder…")
-        self.output_entry.grid(row=1, column=0, sticky="ew", padx=(0, 8), pady=(4, 0))
-        self.output_entry.insert(0, self._output_folder)
-        self.browse_btn = OutlineButton(out_row, "Browse", self._browse_output_folder, icon="folder", width=110)
-        self.browse_btn.grid(row=1, column=1, pady=(4, 0))
-
-        # Universal opts host (max + vendor + pilot)
         self.universal_opts = ctk.CTkFrame(cfg, fg_color="transparent")
-        self.universal_opts.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 8))
-        self.universal_opts.grid_columnconfigure((0, 1), weight=1)
-
-        max_row = ctk.CTkFrame(self.universal_opts, fg_color="transparent")
-        max_row.grid(row=0, column=0, sticky="ew", padx=(0, 8))
-        max_row.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(max_row, text="Max Products (per store)", font=T.font(12, "bold"), text_color=T.TEXT_MUTED, anchor="w").grid(row=0, column=0, sticky="w")
-        self.max_products_entry = T.styled_entry(max_row, placeholder="empty = unlimited")
+        # Placeholder grid later; max sits in left, vendor in right via nested frames
+        self._max_host = ctk.CTkFrame(left_col, fg_color="transparent")
+        self._max_host.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+        self._max_host.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            self._max_host,
+            text="Max Products (per store)",
+            font=T.font(12, "bold"),
+            text_color=T.TEXT_MUTED,
+            anchor="w",
+        ).grid(row=0, column=0, sticky="w")
+        self.max_products_entry = T.styled_entry(self._max_host, placeholder="empty = unlimited")
         self.max_products_entry.grid(row=1, column=0, sticky="ew", pady=(4, 0))
 
-        vendor_row = ctk.CTkFrame(self.universal_opts, fg_color="transparent")
-        vendor_row.grid(row=0, column=1, sticky="ew", padx=(8, 0))
-        vendor_row.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(vendor_row, text="Vendor", font=T.font(12, "bold"), text_color=T.TEXT_MUTED, anchor="w").grid(row=0, column=0, columnspan=2, sticky="w")
+        # Right column: Output Folder + Custom Vendor
+        right_col = ctk.CTkFrame(cfg, fg_color="transparent")
+        right_col.grid(row=0, column=1, sticky="new", padx=(10, 0), pady=(0, 4))
+        right_col.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            right_col, text="Output Folder", font=T.font(12, "bold"), text_color=T.TEXT_MUTED, anchor="w"
+        ).grid(row=0, column=0, columnspan=2, sticky="w")
+        self.output_entry = T.styled_entry(right_col, placeholder="Select output folder…")
+        self.output_entry.grid(row=1, column=0, sticky="ew", padx=(0, 8), pady=(4, 0))
+        self.output_entry.insert(0, self._output_folder)
+        right_col.grid_columnconfigure(0, weight=1)
+        self.browse_btn = OutlineButton(
+            right_col, "Browse", self._browse_output_folder, icon="folder", width=110
+        )
+        self.browse_btn.grid(row=1, column=1, pady=(4, 0))
+
+        self._vendor_host = ctk.CTkFrame(right_col, fg_color="transparent")
+        self._vendor_host.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        self._vendor_host.grid_columnconfigure(0, weight=1)
         self.var_custom_vendor = ctk.BooleanVar(value=False)
         self.vendor_checkbox = ctk.CTkCheckBox(
-            vendor_row,
+            self._vendor_host,
             text="Use Custom Vendor Name",
             variable=self.var_custom_vendor,
             command=self._on_vendor_toggle,
@@ -182,45 +192,63 @@ class ScraperScreen(ctk.CTkFrame):
             checkmark_color=T.BTN_ON_ACCENT,
             corner_radius=T.BORDER_RADIUS,
         )
-        self.vendor_checkbox.grid(row=1, column=0, sticky="w", pady=(6, 0))
-        self.vendor_entry = T.styled_entry(vendor_row, placeholder="Vendor name for all products…")
-        self.vendor_entry.grid(row=1, column=1, sticky="ew", padx=(12, 0), pady=(6, 0))
+        self.vendor_checkbox.grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(
+            self._vendor_host,
+            text="Apply a custom vendor name to all scraped products.",
+            font=T.font_tuple(T.CAPTION),
+            text_color=T.TEXT_MUTED,
+            anchor="w",
+            wraplength=360,
+        ).grid(row=1, column=0, sticky="w", pady=(4, 0))
+        self.vendor_entry = T.styled_entry(self._vendor_host, placeholder="Vendor name for all products…")
+        self.vendor_entry.grid(row=2, column=0, sticky="ew", pady=(6, 0))
         self.vendor_entry.grid_remove()
 
+        # Keep universal_opts as a grouping flag host (show/hide max+vendor hosts)
+        self.universal_opts = ctk.CTkFrame(cfg, fg_color="transparent")
+        self.universal_opts.grid_remove()  # not used for layout; hosts toggled directly
         self.pilot_hint = ctk.CTkLabel(
-            self.universal_opts,
+            left_col,
             text="Pilot mode caps at 20 products per domain for QA review.",
             font=T.font_tuple(T.CAPTION),
             text_color=T.TEXT_MUTED,
             anchor="w",
         )
-        self.pilot_hint.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        self.pilot_hint.grid(row=4, column=0, sticky="ew", pady=(6, 0))
         self.pilot_hint.grid_remove()
 
         # Seed URLs
-        ctk.CTkLabel(cfg, text="Seed URLs", font=T.font(12, "bold"), text_color=T.TEXT_MUTED, anchor="w").grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 4))
+        ctk.CTkLabel(
+            cfg, text="Seed URLs", font=T.font(12, "bold"), text_color=T.TEXT_MUTED, anchor="w"
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 2))
         self.url_text = ctk.CTkTextbox(
             cfg,
-            height=100,
+            height=72,
             wrap="none",
             **T.textbox_style(),
         )
-        self.url_text.grid(row=4, column=0, columnspan=2, sticky="ew")
-        self.url_text.insert("1.0", "https://your-store.com/collections/all\n")
+        self.url_text.grid(row=2, column=0, columnspan=2, sticky="ew")
+        self._seed_placeholder_active = False
+        self._install_seed_url_placeholder()
 
-        self.url_entry = T.styled_entry(cfg, placeholder="Legacy: paste one collection URL here (optional)")
-        self.url_entry.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        self.url_entry = T.styled_entry(
+            cfg, placeholder="Legacy: paste one collection URL here (optional)"
+        )
+        self.url_entry.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         self.url_entry.grid_remove()
         self.url_entry.bind("<FocusOut>", self._on_url_changed)
         self.url_entry.bind("<Return>", self._on_url_changed)
 
-        self.platform_label = ctk.CTkLabel(cfg, text="", font=T.font_tuple(T.CAPTION), text_color=T.GOLD, anchor="w")
-        self.platform_label.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        self.platform_label = ctk.CTkLabel(
+            cfg, text="", font=T.font_tuple(T.CAPTION), text_color=T.GOLD, anchor="w"
+        )
+        self.platform_label.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(4, 0))
 
         self._category_options: dict[str, str] = {}
         self._discovered_categories: list[dict] = []
         self.category_row = ctk.CTkFrame(cfg, fg_color="transparent")
-        self.category_row.grid(row=7, column=0, columnspan=2, sticky="ew")
+        self.category_row.grid(row=5, column=0, columnspan=2, sticky="ew")
         self.category_row.grid_columnconfigure(0, weight=1)
         self.category_row.grid_remove()
         self.category_hint = ctk.CTkLabel(
@@ -242,7 +270,7 @@ class ScraperScreen(ctk.CTkFrame):
 
         # Legacy checkboxes
         opts = ctk.CTkFrame(cfg, fg_color="transparent")
-        opts.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        opts.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         self.var_variants = ctk.BooleanVar(value=True)
         self.var_images = ctk.BooleanVar(value=True)
         self.var_compare = ctk.BooleanVar(value=True)
@@ -273,78 +301,123 @@ class ScraperScreen(ctk.CTkFrame):
 
         # Run / Stop
         btn_row = ctk.CTkFrame(cfg, fg_color="transparent")
-        btn_row.grid(row=9, column=0, columnspan=2, sticky="ew", pady=(12, 8))
+        btn_row.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(8, 4))
         btn_row.grid_columnconfigure((0, 1), weight=1)
-        self.scrape_btn = PrimaryButton(btn_row, "Run Scraper", self._start_scrape, icon="play", width=200)
+        self.scrape_btn = PrimaryButton(
+            btn_row, "Run Scraper →", self._start_scrape, icon="play", width=200
+        )
         self.scrape_btn.grid(row=0, column=0, sticky="ew", padx=(0, 8))
-        self.stop_btn = DangerButton(btn_row, "Stop", self._stop_scrape, icon="square", width=140)
+        self.stop_btn = DangerButton(btn_row, "Stop →", self._stop_scrape, icon="square", width=140)
         self.stop_btn.grid(row=0, column=1, sticky="ew", padx=(8, 0))
         self.stop_btn.set_enabled(False)
 
-        # Progress
+        # Progress + percentage (always visible; idle = 0%)
         self.progress_section = ctk.CTkFrame(cfg, fg_color="transparent")
-        self.progress_section.grid(row=10, column=0, columnspan=2, sticky="ew")
+        self.progress_section.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(0, 0))
         self.progress_section.grid_columnconfigure(0, weight=1)
         self.loading_label = ctk.CTkLabel(
-            self.progress_section, text="", font=T.font_tuple(T.CAPTION), text_color=T.GOLD, anchor="w"
+            self.progress_section,
+            text="",
+            font=T.font_tuple(T.CAPTION),
+            text_color=T.GOLD,
+            anchor="w",
         )
-        self.loading_label.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        self.loading_label.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 2))
         self.loading_label.grid_remove()
-        self.progress = GoldProgressBar(self.progress_section, height=12)
-        self.progress.configure(mode="indeterminate")
-        self.progress.grid(row=1, column=0, sticky="ew")
-        self.progress.grid_remove()
+        self.progress = GoldProgressBar(self.progress_section, height=10)
+        self.progress.configure(mode="determinate")
+        self.progress.set(0)
+        self.progress.grid(row=1, column=0, sticky="ew", padx=(0, 10))
+        self.progress_pct = ctk.CTkLabel(
+            self.progress_section,
+            text="0%",
+            font=T.font(12, "bold"),
+            text_color=T.TEXT_MUTED,
+            width=44,
+            anchor="e",
+        )
+        self.progress_pct.grid(row=1, column=1, sticky="e")
 
-        self.error_label = ctk.CTkLabel(cfg, text="", font=T.font_tuple(T.CAPTION), text_color=T.ERROR, anchor="w")
-        self.error_label.grid(row=11, column=0, columnspan=2, sticky="ew")
-        self.strategy_label = ctk.CTkLabel(cfg, text="", font=T.font_tuple(T.CAPTION), text_color=T.TEXT_SECONDARY, anchor="w")
-        self.strategy_label.grid(row=12, column=0, columnspan=2, sticky="ew")
+        self.error_label = ctk.CTkLabel(
+            cfg, text="", font=T.font_tuple(T.CAPTION), text_color=T.ERROR, anchor="w"
+        )
+        self.error_label.grid(row=9, column=0, columnspan=2, sticky="ew")
+        self.strategy_label = ctk.CTkLabel(
+            cfg, text="", font=T.font_tuple(T.CAPTION), text_color=T.TEXT_SECONDARY, anchor="w"
+        )
+        self.strategy_label.grid(row=10, column=0, columnspan=2, sticky="ew")
         self.output_actions = ctk.CTkFrame(cfg, fg_color="transparent")
-        self.output_actions.grid(row=13, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        self.output_actions.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         self.output_actions.grid_remove()
         self._output_buttons: list[ctk.CTkButton] = []
 
         # ── Bottom: Log + Results ─────────────────────────
         bottom = ctk.CTkFrame(body, fg_color="transparent")
-        bottom.grid(row=2, column=0, sticky="nsew")
+        bottom.grid(row=2, column=0, sticky="ew")
         bottom.grid_columnconfigure(0, weight=7)
         bottom.grid_columnconfigure(1, weight=3)
-        bottom.grid_rowconfigure(0, weight=1)
 
-        log_card = Card(bottom, title="Log Area", subtitle="Live extraction output", icon="clock")
+        log_card = Card(
+            bottom,
+            title="Log Area",
+            subtitle="Live output from the scraping process.",
+            icon="clock",
+            expand_body=True,
+        )
         log_card.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
         log_card.body.grid_columnconfigure(0, weight=1)
         log_card.body.grid_rowconfigure(1, weight=1)
         log_head = ctk.CTkFrame(log_card.body, fg_color="transparent")
-        log_head.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        log_head.grid(row=0, column=0, sticky="ew", pady=(0, 4))
         log_head.grid_columnconfigure(0, weight=1)
-        self.clear_btn = OutlineButton(log_head, "Clear Log", self._clear_results, icon="trash", width=120, height=28)
+        self.clear_btn = OutlineButton(
+            log_head, "Clear Log", self._clear_results, icon="trash", width=120, height=28
+        )
         self.clear_btn.grid(row=0, column=0, sticky="e")
         self.log_view = LogBox(log_card.body, height=LOG_MIN_HEIGHT)
         self.log_view.grid(row=1, column=0, sticky="nsew")
         self.log_box = self.log_view.textbox
 
-        results = Card(bottom, title="Results & Status", subtitle="Run summary", icon="bar-chart")
+        results = Card(
+            bottom,
+            title="Results & Status",
+            subtitle="Live run summary",
+            icon="bar-chart",
+            expand_body=True,
+        )
         results.grid(row=0, column=1, sticky="nsew")
         results.body.grid_columnconfigure(0, weight=1)
         self.result_labels = {}
-        for i, (key, title) in enumerate(
-            (
-                ("seeds", "Seed URLs Processed"),
-                ("products", "Products Found"),
-                ("output", "Output Path"),
-                ("elapsed", "Elapsed Time"),
-                ("status", "Status"),
-            )
-        ):
+        self.result_icons = {}
+        result_rows = (
+            ("seeds", "Seed URLs Processed", "link"),
+            ("products", "Products Found", "file"),
+            ("output", "Output Path", "folder"),
+            ("elapsed", "Elapsed Time", "clock"),
+            ("status", "Status", "check"),
+        )
+        for i, (key, title, icon_name) in enumerate(result_rows):
             row = ctk.CTkFrame(results.body, fg_color="transparent")
-            row.grid(row=i, column=0, sticky="ew", pady=3)
-            row.grid_columnconfigure(1, weight=1)
-            ctk.CTkLabel(row, text=title, font=T.font(12), text_color=T.TEXT_MUTED, anchor="w").grid(row=0, column=0, sticky="w")
-            lab = ctk.CTkLabel(row, text="—", font=T.font(12, "bold"), text_color=T.TEXT_PRIMARY, anchor="e")
-            lab.grid(row=0, column=1, sticky="e")
+            row.grid(row=i, column=0, sticky="ew", pady=4)
+            row.grid_columnconfigure(2, weight=1)
+            img = load_icon(icon_name, size=14, color="navy")
+            self.result_icons[key] = img
+            ctk.CTkLabel(row, text="", image=img, width=18).grid(row=0, column=0, sticky="w")
+            ctk.CTkLabel(
+                row, text=title, font=T.font(12), text_color=T.TEXT_MUTED, anchor="w"
+            ).grid(row=0, column=1, sticky="w", padx=(6, 8))
+            lab = ctk.CTkLabel(
+                row, text="—", font=T.font(12, "bold"), text_color=T.TEXT_PRIMARY, anchor="e"
+            )
+            lab.grid(row=0, column=2, sticky="e")
             self.result_labels[key] = lab
-        self.next_btn = PrimaryButton(results.body, "Generate Final CSV", self._go_mapping, icon="arrow-right", width=200)
+        self.next_btn = PrimaryButton(
+            results.body,
+            "Generate Final CSV →",
+            self._go_mapping,
+            icon="arrow-right",
+            width=220,
+        )
         self.next_btn.grid(row=6, column=0, sticky="ew", pady=(16, 0))
 
         # Hidden preview frame for legacy compatibility
@@ -368,8 +441,8 @@ class ScraperScreen(ctk.CTkFrame):
 
     def _on_mode_changed(self, _value: str | None = None) -> None:
         if self._is_universal_full():
-            self.scrape_btn.configure(text="Run →")
-            self.next_btn.configure(text="Final CSV ready")
+            self.scrape_btn.configure(text="Run Scraper →")
+            self.next_btn.configure(text="Generate Final CSV →")
             self.mode_hint.configure(
                 text="Full → shopify_import.csv (no MappingScreen)"
             )
@@ -379,7 +452,7 @@ class ScraperScreen(ctk.CTkFrame):
             self.clear_btn.configure(state="normal")
         elif self._is_universal_pilot():
             self.scrape_btn.configure(text="Run Pilot →")
-            self.next_btn.configure(text="Final CSV ready")
+            self.next_btn.configure(text="Generate Final CSV →")
             self.mode_hint.configure(
                 text="Pilot → shopify_import.csv (no MappingScreen)"
             )
@@ -402,14 +475,29 @@ class ScraperScreen(ctk.CTkFrame):
                 self._disable_actions()
 
     def _show_universal_opts(self, *, show_pilot_hint: bool) -> None:
-        self.universal_opts.grid()
+        try:
+            self._max_host.grid()
+        except Exception:
+            pass
+        try:
+            self._vendor_host.grid()
+        except Exception:
+            pass
         if show_pilot_hint:
             self.pilot_hint.grid()
         else:
             self.pilot_hint.grid_remove()
 
     def _hide_universal_opts(self) -> None:
-        self.universal_opts.grid_remove()
+        try:
+            self._max_host.grid_remove()
+        except Exception:
+            pass
+        try:
+            self._vendor_host.grid_remove()
+        except Exception:
+            pass
+        self.pilot_hint.grid_remove()
 
     def _show_legacy_url_entry(self) -> None:
         self.url_entry.grid()
@@ -527,24 +615,50 @@ class ScraperScreen(ctk.CTkFrame):
         return "info"
 
     def _show_progress(self, text: str = "") -> None:
-        """Show full-width amber progress bar below checkboxes (above Log)."""
+        """Show running progress: indeterminate bar + '…' when no numeric fraction."""
         if text:
             self.loading_label.configure(text=text[:120])
-        self.loading_label.grid()
+            self.loading_label.grid()
         self.progress.grid()
+        self.progress_pct.grid()
+        self.progress_pct.configure(text="…")
         try:
+            self.progress.configure(mode="indeterminate")
             self.progress.start()
         except Exception:
             pass
 
     def _hide_progress(self) -> None:
+        """Reset to idle: determinate 0% (bar stays visible)."""
         try:
             self.progress.stop()
         except Exception:
             pass
-        self.progress.grid_remove()
+        try:
+            self.progress.configure(mode="determinate")
+            self.progress.set(0)
+        except Exception:
+            pass
+        self.progress_pct.configure(text="0%")
         self.loading_label.grid_remove()
         self.loading_label.configure(text="")
+
+    def _set_progress_pct(self, pct: float | None) -> None:
+        """Update determinate progress when a real fraction is known (0–1)."""
+        try:
+            if pct is None:
+                self.progress_pct.configure(text="…")
+                return
+            pct = max(0.0, min(1.0, float(pct)))
+            try:
+                self.progress.stop()
+            except Exception:
+                pass
+            self.progress.configure(mode="determinate")
+            self.progress.set(pct)
+            self.progress_pct.configure(text=f"{int(round(pct * 100))}%")
+        except Exception:
+            pass
 
     def _set_status_badge(self, text: str) -> None:
         try:
@@ -756,13 +870,38 @@ class ScraperScreen(ctk.CTkFrame):
         store = getattr(self.app, "job_status", None)
         if store is None or not store.is_running(TOOL_URL_SCRAPER):
             return
-        elapsed = store.get(TOOL_URL_SCRAPER).elapsed_text()
+        job = store.get(TOOL_URL_SCRAPER)
+        elapsed = job.elapsed_text()
+        meta = job.ui_meta or {}
+        spin = self._status_spin_frames[self._status_spin_i % len(self._status_spin_frames)]
+        self._status_spin_i += 1
+        url_hint = (meta.get("current_url") or self.source_url or "").strip()
+        if len(url_hint) > 48:
+            url_hint = url_hint[:45] + "…"
+        products = job.product_count
+        left_parts = [f"{spin} Running..."]
+        if url_hint:
+            left_parts.append(url_hint)
+        if products is not None:
+            left_parts.append(f"{products} found")
         try:
-            self.count_badge.configure(text=f"Running · {elapsed}")
+            self.count_badge.configure(text="  ·  ".join(left_parts))
         except Exception:
             return
+        seeds_meta = meta.get("seed_total")
+        seeds_done = meta.get("seed_done")
+        right_parts = [f"Elapsed: {elapsed}"]
+        if products is not None:
+            right_parts.append(f"{products} products")
+        if seeds_meta and seeds_done is not None:
+            right_parts.append(f"{seeds_done} of {seeds_meta} URLs")
+        try:
+            self.status_right.configure(text=" | ".join(right_parts))
+        except Exception:
+            pass
         self._update_results(
             elapsed=elapsed,
+            products=str(products) if products is not None else None,
             status="Scraping in progress...",
             status_color=T.SUCCESS,
         )
@@ -784,9 +923,10 @@ class ScraperScreen(ctk.CTkFrame):
                 self._on_mode_changed(mode)
             urls = meta.get("urls")
             if urls is not None:
-                self.url_text.configure(state="normal")
+                self.url_text.configure(state="normal", text_color=T.INPUT_TEXT)
                 self.url_text.delete("1.0", "end")
                 self.url_text.insert("1.0", urls)
+                self._seed_placeholder_active = False
             if meta.get("legacy_url") is not None:
                 self.url_entry.delete(0, "end")
                 self.url_entry.insert(0, str(meta.get("legacy_url") or ""))
@@ -957,13 +1097,66 @@ class ScraperScreen(ctk.CTkFrame):
             and self.category_menu.get() == ALL_CATEGORIES_LABEL
         )
 
+    def _install_seed_url_placeholder(self) -> None:
+        """Muted gray example text that is not a real seed URL."""
+        try:
+            tb = self.url_text._textbox  # noqa: SLF001
+            tb.tag_configure("placeholder", foreground=T.TEXT_MUTED)
+        except Exception:
+            pass
+        self.url_text.bind("<FocusIn>", self._on_seed_focus_in)
+        self.url_text.bind("<FocusOut>", self._on_seed_focus_out)
+        self._show_seed_placeholder()
+
+    def _show_seed_placeholder(self) -> None:
+        self.url_text.delete("1.0", "end")
+        self.url_text.insert("1.0", SEED_URL_PLACEHOLDER)
+        self._seed_placeholder_active = True
+        try:
+            tb = self.url_text._textbox  # noqa: SLF001
+            tb.tag_add("placeholder", "1.0", "end")
+            self.url_text.configure(text_color=T.TEXT_MUTED)
+        except Exception:
+            self.url_text.configure(text_color=T.TEXT_MUTED)
+
+    def _clear_seed_placeholder(self) -> None:
+        if not self._seed_placeholder_active:
+            return
+        self.url_text.delete("1.0", "end")
+        self._seed_placeholder_active = False
+        self.url_text.configure(text_color=T.INPUT_TEXT)
+        try:
+            tb = self.url_text._textbox  # noqa: SLF001
+            tb.tag_remove("placeholder", "1.0", "end")
+        except Exception:
+            pass
+
+    def _on_seed_focus_in(self, _event=None) -> None:
+        if self._seed_placeholder_active:
+            self._clear_seed_placeholder()
+
+    def _on_seed_focus_out(self, _event=None) -> None:
+        raw = self.url_text.get("1.0", "end").strip()
+        if not raw:
+            self._show_seed_placeholder()
+
+    def _seed_text_is_placeholder(self) -> bool:
+        if self._seed_placeholder_active:
+            return True
+        raw = self.url_text.get("1.0", "end").strip()
+        return raw == SEED_URL_PLACEHOLDER
+
     def _parse_urls_from_text(self) -> list[str]:
+        if self._seed_text_is_placeholder():
+            return []
         raw = self.url_text.get("1.0", "end")
         urls: list[str] = []
         seen: set[str] = set()
         for line in raw.splitlines():
             u = line.strip()
             if not u or u.startswith("#"):
+                continue
+            if u == SEED_URL_PLACEHOLDER:
                 continue
             if u in seen:
                 continue
@@ -977,7 +1170,6 @@ class ScraperScreen(ctk.CTkFrame):
         self.source_url = ""
         self.suggested_filename = "shopify_products.csv"
         self._universal_output_dir = None
-        self.url_text.delete("1.0", "end")
         self.url_entry.delete(0, "end")
         self.error_label.configure(text="")
         self.strategy_label.configure(text="")
@@ -1000,6 +1192,7 @@ class ScraperScreen(ctk.CTkFrame):
         self._hide_progress()
         self._stop_requested = False
         self._set_running(False)
+        self._show_seed_placeholder()
         self._on_mode_changed(self.mode_var.get())
 
     def _on_url_changed(self, _event=None) -> None:

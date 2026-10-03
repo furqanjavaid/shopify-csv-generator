@@ -202,8 +202,8 @@ class Sidebar(ctk.CTkFrame):
 
 def attach_sidebar(parent, app, active_page: str) -> ctk.CTkFrame:
     """
-    Attach navy sidebar + return main content frame.
-    Content area uses grid; shell uses pack only where required by parent.
+    Attach fixed navy sidebar + return a vertically scrollable main content host.
+    Sidebar does not scroll; page content scrolls when taller than the viewport.
     """
     c = current_colors()
     shell = ctk.CTkFrame(parent, fg_color=c["BG_PRIMARY"], corner_radius=0)
@@ -218,8 +218,18 @@ def attach_sidebar(parent, app, active_page: str) -> ctk.CTkFrame:
     content.grid_columnconfigure(0, weight=1)
     content.grid_rowconfigure(0, weight=1)
 
-    inner = ctk.CTkFrame(content, fg_color="transparent")
-    inner.grid(row=0, column=0, sticky="nsew", padx=T.PAGE_PADDING, pady=T.PAGE_PADDING)
+    scroll = T.thin_scrollable_frame(content, fg_color=c["BG_PRIMARY"])
+    scroll.grid(row=0, column=0, sticky="nsew")
+    scroll.grid_columnconfigure(0, weight=1)
+
+    # Extra bottom padding so the last card is fully visible above the window edge / status bar
+    inner = ctk.CTkFrame(scroll, fg_color="transparent")
+    inner.grid(
+        row=0,
+        column=0,
+        sticky="ew",
+        padx=T.PAGE_PADDING,
+        pady=(T.PAGE_PADDING, T.PAGE_PADDING + 28),
+    )
     inner.grid_columnconfigure(0, weight=1)
-    # Do not weight row 0 — screens place the page header there and it must not clip.
     return inner

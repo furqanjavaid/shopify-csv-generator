@@ -58,6 +58,7 @@ class Card(ctk.CTkFrame):
         title: str = "",
         subtitle: str = "",
         icon: str | None = None,
+        expand_body: bool = False,
         **kwargs,
     ):
         c = current_colors()
@@ -74,7 +75,7 @@ class Card(ctk.CTkFrame):
         row = 0
         if title or icon:
             head = ctk.CTkFrame(self, fg_color="transparent")
-            head.grid(row=0, column=0, sticky="ew", padx=T.CARD_PADDING, pady=(T.CARD_PADDING, 8))
+            head.grid(row=0, column=0, sticky="ew", padx=T.CARD_PADDING, pady=(T.CARD_PADDING, 6))
             head.grid_columnconfigure(1, weight=1)
             if icon:
                 circle = ctk.CTkFrame(
@@ -115,14 +116,15 @@ class Card(ctk.CTkFrame):
             row = 1
         self.body.grid(row=row, column=0, sticky="nsew", padx=T.CARD_PADDING, pady=(0, T.CARD_PADDING))
         self.body.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(row, weight=1)
+        if expand_body:
+            self.grid_rowconfigure(row, weight=1)
 
 
 # ── StatCard ────────────────────────────────────────────
 
 
 class StatCard(ctk.CTkFrame):
-    """Horizontal: circle icon left, big number + small label right."""
+    """Stat tile: vertical (icon above) or horizontal (icon left)."""
 
     def __init__(
         self,
@@ -133,6 +135,7 @@ class StatCard(ctk.CTkFrame):
         icon: str | None = None,
         icon_color: str = "navy",
         circle_bg: str | None = None,
+        layout: str = "vertical",
         **kwargs,
     ):
         c = current_colors()
@@ -146,9 +149,10 @@ class StatCard(ctk.CTkFrame):
         super().__init__(master, **opts)
         inner = ctk.CTkFrame(self, fg_color="transparent")
         inner.grid(row=0, column=0, sticky="ew", padx=14, pady=14)
-        inner.grid_columnconfigure(1, weight=1)
 
-        col = 0
+        horizontal = str(layout).lower() in ("horizontal", "h", "row")
+        circle = None
+        img = None
         if icon:
             circle = ctk.CTkFrame(
                 inner,
@@ -157,28 +161,40 @@ class StatCard(ctk.CTkFrame):
                 corner_radius=20,
                 fg_color=circle_bg or c["CIRCLE_ICON_BG"],
             )
-            circle.grid(row=0, column=0, rowspan=2, sticky="w", padx=(0, 12))
             circle.grid_propagate(False)
             img = load_icon(icon, size=18, color=icon_color)
             ctk.CTkLabel(circle, text="", image=img).place(relx=0.5, rely=0.5, anchor="center")
             self._icon = img
-            col = 1
 
         self.value_label = ctk.CTkLabel(
             inner,
             text=str(value),
-            font=T.font(22, "bold"),
+            font=T.font(22 if horizontal else 28, "bold"),
             text_color=c["HEADING"],
             anchor="w",
         )
-        self.value_label.grid(row=0, column=col, sticky="sw")
-        ctk.CTkLabel(
+        label_w = ctk.CTkLabel(
             inner,
             text=label,
             font=T.font_tuple(T.CAPTION),
             text_color=c["TEXT_MUTED"],
             anchor="w",
-        ).grid(row=1, column=col, sticky="nw", pady=(2, 0))
+        )
+
+        if horizontal:
+            inner.grid_columnconfigure(1, weight=1)
+            if circle is not None:
+                circle.grid(row=0, column=0, rowspan=2, sticky="w", padx=(0, 12))
+            self.value_label.grid(row=0, column=1, sticky="sw")
+            label_w.grid(row=1, column=1, sticky="nw", pady=(2, 0))
+        else:
+            inner.grid_columnconfigure(0, weight=1)
+            row = 0
+            if circle is not None:
+                circle.grid(row=0, column=0, sticky="w", pady=(0, 8))
+                row = 1
+            self.value_label.grid(row=row, column=0, sticky="w")
+            label_w.grid(row=row + 1, column=0, sticky="w", pady=(2, 0))
 
     def set_value(self, value: str | int) -> None:
         self.value_label.configure(text=str(value))
@@ -443,7 +459,8 @@ class Combobox(ctk.CTkFrame):
             variable.set(values[0])
         self._chevron = load_icon("chevron-down", size=14, color="muted")
 
-        # Value left, chevron pinned to the right edge of the bordered field.
+        # Text expands left; chevron sits in its own column at the right edge.
+        # (CTk forbids width/height in .place() — size the widgets in the constructor.)
         self._btn = ctk.CTkButton(
             self,
             textvariable=self._var,
@@ -456,19 +473,17 @@ class Combobox(ctk.CTkFrame):
             height=T.INPUT_HEIGHT - 4,
             command=self._open_menu,
         )
-        self._btn.grid(row=0, column=0, sticky="nsew", padx=(6, 0), pady=2)
-        self._chevron_btn = ctk.CTkButton(
+        self._btn.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=2)
+        self._chevron_btn = ctk.CTkLabel(
             self,
             text="",
             image=self._chevron,
-            width=28,
             fg_color="transparent",
-            hover_color=c["BG_PRIMARY"],
-            corner_radius=T.BORDER_RADIUS - 2,
+            width=28,
             height=T.INPUT_HEIGHT - 4,
-            command=self._open_menu,
         )
-        self._chevron_btn.grid(row=0, column=1, sticky="e", padx=(0, 4), pady=2)
+        self._chevron_btn.grid(row=0, column=1, sticky="e", padx=(0, 6), pady=2)
+        self._chevron_btn.bind("<Button-1>", lambda _e: self._open_menu())
         self._menu: ctk.CTkToplevel | None = None
 
     def configure(self, **kwargs):  # noqa: A003
@@ -479,7 +494,6 @@ class Combobox(ctk.CTkFrame):
         if state is not None:
             st = "disabled" if str(state) == "disabled" else "normal"
             self._btn.configure(state=st)
-            self._chevron_btn.configure(state=st)
         if kwargs:
             super().configure(**kwargs)
 
@@ -740,17 +754,22 @@ class StatusBar(ctk.CTkFrame):
     def __init__(self, master, **kwargs):
         c = current_colors()
         opts = {
-            "fg_color": "#E8E5E0",
+            "fg_color": c["BG_PRIMARY"],
             "height": 36,
             "corner_radius": 0,
-            "border_width": 1,
-            "border_color": c["BORDER"],
+            "border_width": 0,
         }
         opts.update(kwargs)
         super().__init__(master, **opts)
         self.pack_propagate(False)
         self.grid_propagate(False)
         self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
+        # Subtle top divider (theme border), not a white strip
+        ctk.CTkFrame(self, height=1, fg_color=c["BORDER"], corner_radius=0).grid(
+            row=0, column=0, columnspan=2, sticky="ew"
+        )
 
         self.left = ctk.CTkLabel(
             self,
@@ -758,16 +777,18 @@ class StatusBar(ctk.CTkFrame):
             font=T.font(12),
             text_color=c["TEXT_SECONDARY"],
             anchor="w",
+            fg_color="transparent",
         )
-        self.left.grid(row=0, column=0, sticky="w", padx=14, pady=6)
+        self.left.grid(row=1, column=0, sticky="w", padx=14, pady=6)
         self.right = ctk.CTkLabel(
             self,
             text="",
             font=T.font(12),
             text_color=c["TEXT_MUTED"],
             anchor="e",
+            fg_color="transparent",
         )
-        self.right.grid(row=0, column=1, sticky="e", padx=14, pady=6)
+        self.right.grid(row=1, column=1, sticky="e", padx=14, pady=6)
 
     def set_left(self, text: str) -> None:
         self.left.configure(text=text)
