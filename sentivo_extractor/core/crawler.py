@@ -67,6 +67,7 @@ from sentivo_extractor.core.site_rule_suggester import domain_from_url
 from sentivo_extractor.core.utils import DEFAULT_USER_AGENT, close_logger, setup_logger, write_json
 from sentivo_extractor.core.validator import validate_products
 from sentivo_extractor.extractors import build_default_registry
+from sentivo_extractor.post_processors.variant_merger import merge_products_by_base_title
 
 
 class UniversalCrawler:
@@ -340,6 +341,16 @@ class UniversalCrawler:
         if self.vendor_override:
             for product in products:
                 product["vendor"] = self.vendor_override
+
+        # Merge same-base-title simple PDPs into one Shopify product with Size variants
+        before_merge = len(products)
+        products = merge_products_by_base_title(products, log=self.logger)
+        if len(products) != before_merge:
+            self.logger.info(
+                "Post-process variant merger: %s → %s product(s)",
+                before_merge,
+                len(products),
+            )
 
         # Duplicate SKU policy
         products, sku_failed, sku_warnings = apply_duplicate_sku_policy(
