@@ -188,9 +188,12 @@ ISSUE_TEMPLATES = {
 
 PASSING_MESSAGES = {
     "trust_badges": "Trust signals present — {count} trust elements detected including {match}",
-    "price_visible": "Price clearly visible on product page — {price} displayed above the fold",
+    # Do not embed raw price_text — it can contain review-like copy and contradict reviews fails
+    "price_visible": "Price element clearly visible on the product page",
     "cart_checkout": "Cart to checkout flow working — checkout button visible and functional",
-    "mobile_atc": "Mobile Add to Cart accessible — above fold on 390px viewport, tap target meets 44px minimum",
+    # Keep tap-target vs above-fold as separate truths (never combine into one claim)
+    "mobile_atc_tap": "Mobile Add to Cart tap target meets the 44px minimum",
+    "mobile_atc_fold": "Mobile Add to Cart is above the fold on a 390px viewport",
     "page_speed": "Homepage response time excellent — {time}s server response",
     "email_capture": "Email capture present — {count} capture points detected",
     "cross_sell": "Cross-sell or upsell block detected on product pages",
@@ -276,8 +279,8 @@ CHECK_ID_TO_PASSING = {
     3: "trust_badges",
     4: "price_visible",
     5: "cart_checkout",
-    6: "mobile_atc",
-    61: "mobile_atc",
+    6: "mobile_atc_tap",
+    61: "mobile_atc_fold",
     7: "page_speed",
     8: "email_capture",
     10: "cross_sell",

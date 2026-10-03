@@ -110,12 +110,26 @@ def enrich_finding(finding: dict, raw: dict | None = None) -> dict:
 
 
 def format_passing_message(finding: dict, raw: dict | None = None) -> str:
-    """Build expert passing-check copy when a template exists."""
+    """Build expert passing-check copy when a template exists.
+
+    Only call for findings that actually passed. Messages must not claim
+    facts that belong to a different check (e.g. reviews vs price text,
+    mobile tap-target vs above-fold).
+    """
     raw = raw or {}
+    if finding.get("passed") is not True:
+        # Fail-closed: never emit a passing line for a failed check
+        return f"✓ {finding.get('check_name') or finding.get('issue') or 'Check'}"
+
+    # Reviews: only claim widget detection when the raw flag is true
+    if finding.get("check_id") == 2 and not raw.get("product_has_reviews"):
+        return f"✓ {finding.get('check_name') or 'Reviews Present'}"
+
     cid = finding.get("check_id")
     key = CHECK_ID_TO_PASSING.get(cid)
     if not key or key not in PASSING_MESSAGES:
-        return f"✓ {finding.get('check_name')}: {(finding.get('evidence') or '')[:80]}"
+        name = finding.get("check_name") or finding.get("issue") or "Check"
+        return f"✓ {name}: {(finding.get('evidence') or '')[:80]}"
 
     tpl = PASSING_MESSAGES[key]
     try:
@@ -416,8 +430,19 @@ def generate_report(audit_data: dict, output_dir: str) -> str:
     else:
         add_para(doc, "• No low-priority gaps.", size=10)
 
-    # Passed checks brief — expert passing messages
-    passes = [f for f in findings if f.get("passed") and f.get("status") == "pass"]
+    # Passed checks brief — single source of truth: passed findings only
+    failed_ids = {
+        f.get("check_id")
+        for f in findings
+        if f.get("passed") is False or f.get("status") == "fail"
+    }
+    passes = [
+        f
+        for f in findings
+        if f.get("passed") is True
+        and f.get("status") == "pass"
+        and f.get("check_id") not in failed_ids
+    ]
     if passes:
         add_para(doc, "Passing checks", size=12, bold=True, space_after=4)
         for f in passes:

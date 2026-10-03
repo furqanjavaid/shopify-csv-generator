@@ -1106,14 +1106,13 @@ def build_report_findings(raw: dict, base_url: str) -> list[dict]:
         cart_shot,
     ))
 
-    # 6 Mobile ATC tap
+    # 6 Mobile ATC tap (distinct from above-fold — do not conflate)
     mobile_tap_ok = bool(raw.get("mobile_atc_tap_target_ok"))
     findings.append(_finding(
         6, "Mobile ATC Tap Target", "HIGH", "mobile",
         mobile_tap_ok,
         "Mobile ATC tap target OK" if mobile_tap_ok
         else "Mobile ATC tap target too small or missing",
-        f"Above fold: {raw.get('mobile_atc_above_fold')}; "
         f"tap target ≥44px: {raw.get('mobile_atc_tap_target_ok')}",
         "Small tap targets cause mis-taps and abandoned carts on mobile",
         "Set min-height/min-width of ATC to at least 48px on mobile",
@@ -1121,7 +1120,7 @@ def build_report_findings(raw: dict, base_url: str) -> list[dict]:
         mobile_shot,
     ))
 
-    # 6b Mobile ATC fold
+    # 6b Mobile ATC fold (distinct from tap-target size)
     findings.append(_finding(
         61, "Mobile ATC Above Fold", "HIGH", "mobile",
         bool(raw.get("mobile_atc_above_fold")),

@@ -592,9 +592,16 @@ class AuditScreen(ctk.CTkFrame):
                 row, text=cat_txt[:28], font=T.font(11), text_color=T.TEXT_SECONDARY, anchor="w", width=110
             ).grid(row=0, column=1, sticky="w", padx=4)
 
-            issue = f.get("title") or f.get("name") or f.get("check") or "Issue"
+            # Schema uses "issue" / "check_name" — never invent a literal "Issue"
+            issue = f.get("issue") or f.get("check_name") or "—"
             ctk.CTkLabel(
-                row, text=str(issue)[:80], font=T.font(12), text_color=T.TEXT_PRIMARY, anchor="w"
+                row,
+                text=str(issue)[:90],
+                font=T.font(12),
+                text_color=T.TEXT_PRIMARY,
+                anchor="w",
+                wraplength=340,
+                justify="left",
             ).grid(row=0, column=2, sticky="ew", padx=6)
 
             self._pill(row, status, sfg, sbg, width=118).grid(row=0, column=3, sticky="e", padx=4)
@@ -658,7 +665,8 @@ class AuditScreen(ctk.CTkFrame):
                 corner_radius=13,
             )
             num.grid(row=0, column=0, rowspan=2, sticky="n", padx=(0, 10), pady=(8, 0))
-            title = f.get("title") or f.get("name") or f.get("check") or "Recommendation"
+            # Prefer check_name, then issue — never a generic "Recommendation"
+            title = f.get("check_name") or f.get("issue") or "—"
             ctk.CTkLabel(
                 item, text=str(title)[:56], font=T.font(12, "bold"), text_color=T.HEADING, anchor="w"
             ).grid(row=0, column=1, sticky="w", pady=(8, 0))
@@ -746,13 +754,27 @@ class AuditScreen(ctk.CTkFrame):
         issues = sum(1 for f in findings if not f.get("passed"))
         recs = sum(1 for f in findings if not f.get("passed") and f.get("fix"))
         scores = audit_data.get("scores") or {}
+        # Score card sources (do NOT fall back unrelated cards to overall):
+        # - Performance Score  → scores["overall"]
+        # - SEO Score          → scores["seo"] / categories["seo"] if present, else "—"
+        # - Content Completeness → scores["content"] / categories["content"] if present, else "—"
+        # - Technical Issues   → count of findings with passed=False
+        cats = scores.get("categories") or {}
         overall = scores.get("overall", "—")
-        seo = scores.get("seo", scores.get("SEO", overall))
-        content = scores.get("content", scores.get("cro", overall))
+        seo = scores.get("seo", scores.get("SEO", cats.get("seo", "—")))
+        content = scores.get("content", cats.get("content", "—"))
 
-        def _set_score(label: ctk.CTkLabel, raw, *, is_issues: bool = False) -> None:
+        def _set_score(label: ctk.CTkLabel, raw) -> None:
             ring: ScoreRing | None = getattr(label, "_score_ring", None)
             delta: ctk.CTkLabel | None = getattr(label, "_delta_label", None)
+            if raw is None or raw == "—" or raw == "":
+                label.configure(text="—")
+                if ring is not None:
+                    ring.set_value_text("—")
+                    ring.set_progress(0.0)
+                if delta is not None:
+                    delta.configure(text="Not available")
+                return
             try:
                 n = float(raw)
                 disp = int(round(n * 10)) if n <= 10 else int(round(n))
@@ -760,12 +782,15 @@ class AuditScreen(ctk.CTkFrame):
                 if ring is not None:
                     ring.set_value_text(str(disp))
                     ring.set_progress(min(1.0, max(0.0, disp / 100.0)))
-                if delta is not None and not is_issues:
+                if delta is not None:
                     delta.configure(text=self._score_status_text(disp))
             except (TypeError, ValueError):
-                label.configure(text=str(raw))
+                label.configure(text="—")
                 if ring is not None:
-                    ring.set_value_text(str(raw))
+                    ring.set_value_text("—")
+                    ring.set_progress(0.0)
+                if delta is not None:
+                    delta.configure(text="Not available")
 
         _set_score(self.score_value, overall)
         _set_score(self.seo_value, seo)
