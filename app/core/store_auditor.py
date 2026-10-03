@@ -180,6 +180,14 @@ _JUNK_IMAGE_RE = re.compile(
     re.I,
 )
 
+# Shopify hosted videos and generated video poster/thumbnail frames
+_VIDEO_EXT_RE = re.compile(r"\.(?:mp4|webm|mov|m4v|ogg|ogv|m3u8)(?:$|\?|#)", re.I)
+_VIDEO_POSTER_RE = re.compile(
+    r"(?:\.thumbnail\.\d+|/videos/|video[_-]?poster|posterframe|preview_image|"
+    r"deferred-media__poster)",
+    re.I,
+)
+
 # Sections that must never contribute to the audited product's gallery count
 _EXCLUDE_SECTION_RE = re.compile(
     r"related|recommend|upsell|cross-?sell|complementary|recently|"
@@ -300,13 +308,37 @@ def html_unescape_url(url: str) -> str:
     return u
 
 
-def _is_productish_image_url(url: str) -> bool:
-    """Filter obvious non-product UI assets. Operates on raw or canonical forms."""
-    if not url or _JUNK_IMAGE_RE.search(url):
-        return False
-    raw = html_unescape_url(url).lower()
+def classify_gallery_asset(url: str) -> str:
+    """
+    Classify a candidate URL for gallery counting.
+
+    Returns one of: "image", "video", "video_poster", "junk".
+    """
+    if not url:
+        return "junk"
+    raw = html_unescape_url(url)
+    if not raw or raw.startswith("data:") or raw.startswith("#"):
+        return "junk"
+    if _JUNK_IMAGE_RE.search(raw):
+        return "junk"
+    low = raw.lower()
+    # Shopify video CDN hosts/paths (file may still end in .jpg for posters)
+    if (
+        _VIDEO_EXT_RE.search(raw)
+        or "/cdn/shop/videos/" in low
+        or "/videos/c/" in low
+        or "cdn.shopify.com/videos/" in low
+    ):
+        if _VIDEO_EXT_RE.search(raw):
+            return "video"
+        return "video_poster"
+    # Shopify auto-generated video poster frames, e.g. *.thumbnail.0000000000
+    if re.search(r"\.thumbnail\.\d+", raw, re.I):
+        return "video_poster"
+    if re.search(r"(?:video[_-]?poster|posterframe|deferred-media__poster)", raw, re.I):
+        return "video_poster"
     if any(
-        token in raw
+        token in low
         for token in (
             "cdn.shopify.com",
             "/cdn/shop/",
@@ -314,10 +346,18 @@ def _is_productish_image_url(url: str) -> bool:
             "shopify.com/s/files",
         )
     ):
-        return True
-    if re.search(r"/(?:product|media|gallery|catalog|uploads?|images?)/", raw):
-        return bool(re.search(r"\.(?:jpe?g|png|webp|gif|avif)(?:$|\?)", raw))
-    return bool(re.search(r"\.(?:jpe?g|png|webp|gif|avif)(?:$|\?)", raw))
+        # CDN path but video already handled; accept image-like / unknown files assets
+        if re.search(r"\.(?:jpe?g|png|webp|gif|avif|pjpg)(?:$|\?)", raw, re.I) or "/files/" in low or "/products/" in low:
+            return "image"
+        return "junk"
+    if re.search(r"\.(?:jpe?g|png|webp|gif|avif)(?:$|\?)", raw, re.I):
+        return "image"
+    return "junk"
+
+
+def _is_productish_image_url(url: str) -> bool:
+    """True only for countable product gallery images (not video/poster/junk)."""
+    return classify_gallery_asset(url) == "image"
 
 
 def _element_in_excluded_section(el) -> bool:
@@ -333,20 +373,74 @@ def _element_in_excluded_section(el) -> bool:
     return False
 
 
+def _element_is_video_context(el) -> bool:
+    """True for <video>/<source type=video> / deferred-media video posters."""
+    if getattr(el, "name", None) == "video":
+        return True
+    if getattr(el, "name", None) == "source":
+        typ = (el.get("type") or "").lower()
+        if typ.startswith("video/"):
+            return True
+        parent = getattr(el, "parent", None)
+        if parent is not None and getattr(parent, "name", None) == "video":
+            return True
+    cur = el
+    while cur is not None and getattr(cur, "name", None) is not None:
+        classes = " ".join(cur.get("class") or [])
+        name = (getattr(cur, "name", None) or "").lower()
+        if name == "video":
+            return True
+        if re.search(
+            r"deferred-media__poster|poster-button|product__media-item--video|"
+            r"media-item--video|video-section",
+            classes,
+            re.I,
+        ):
+            return True
+        # Entire deferred-media block is video UI (poster button + video template)
+        if re.search(r"(?:^|\s)deferred-media(?:\s|$)", classes, re.I) or name == "deferred-media":
+            return True
+        cur = getattr(cur, "parent", None)
+    classes = " ".join(el.get("class") or []) if hasattr(el, "get") else ""
+    if re.search(r"deferred-media__poster|poster-button", classes, re.I):
+        return True
+    return False
+
+
+def _track_excluded(
+    excluded: dict[str, list[str]] | None,
+    kind: str,
+    raw: str,
+) -> None:
+    if excluded is None:
+        return
+    bucket = {
+        "video": "excluded_videos",
+        "video_poster": "excluded_video_posters",
+        "junk": "excluded_other",
+    }.get(kind, "excluded_other")
+    excluded.setdefault(bucket, []).append(str(raw)[:240])
+
+
 def _add_canonical_image(
     raw: str | None,
     seen: set[str],
     found: list[str],
     by_source: dict[str, list[str]],
     source: str,
+    excluded: dict[str, list[str]] | None = None,
+    *,
+    force_kind: str | None = None,
 ) -> None:
     if not raw:
         return
     parts = [p.strip().split()[0] for p in str(raw).split(",") if p.strip()]
     for part in parts or [str(raw)]:
-        if not _is_productish_image_url(part):
+        kind = force_kind or classify_gallery_asset(part)
+        key = canonical_product_image_key(part) or part
+        if kind != "image":
+            _track_excluded(excluded, kind, part)
             continue
-        key = canonical_product_image_key(part)
         if not key or key in seen:
             continue
         seen.add(key)
@@ -354,22 +448,20 @@ def _add_canonical_image(
         by_source.setdefault(source, []).append(key)
 
 
+def _looks_like_product_dict(node: dict) -> bool:
+    has_media = any(k in node for k in ("images", "media", "featured_image", "featured_media"))
+    has_identity = any(k in node for k in ("handle", "variants", "title", "id"))
+    return has_media and has_identity
+
+
 def _iter_shopify_product_objects(data: Any, handle: str | None) -> list[dict]:
-    """Yield product dicts; when handle is set, only the matching product."""
+    """Yield product dicts; when handle is set, prefer the matching product."""
     out: list[dict] = []
 
     def walk(node: Any) -> None:
         if isinstance(node, dict):
-            node_handle = str(node.get("handle") or "").lower()
-            looks_product = any(
-                k in node for k in ("images", "media", "featured_image", "featured_media")
-            ) and any(k in node for k in ("handle", "variants", "title", "id"))
-            if looks_product:
-                if handle:
-                    if node_handle == handle:
-                        out.append(node)
-                else:
-                    out.append(node)
+            if _looks_like_product_dict(node):
+                out.append(node)
             for v in node.values():
                 walk(v)
         elif isinstance(node, list):
@@ -377,12 +469,22 @@ def _iter_shopify_product_objects(data: Any, handle: str | None) -> list[dict]:
                 walk(item)
 
     walk(data)
-    if handle:
-        return [p for p in out if str(p.get("handle") or "").lower() == handle]
-    return out
+    if not handle:
+        return out
+    matched = [p for p in out if str(p.get("handle") or "").lower() == handle]
+    if matched:
+        return matched
+    # Some themes omit handle on the JSON object but embed it nearby / in URLs
+    soft = []
+    for p in out:
+        blob = json.dumps(p, ensure_ascii=False).lower()
+        if handle in blob:
+            soft.append(p)
+    return soft
 
 
 def _urls_from_shopify_product(product: dict) -> list[str]:
+    """Return only genuine image media URLs (never video files or video posters)."""
     urls: list[str] = []
     images = product.get("images") or []
     if isinstance(images, list):
@@ -402,20 +504,94 @@ def _urls_from_shopify_product(product: dict) -> list[str]:
             if not isinstance(item, dict):
                 continue
             media_type = (item.get("media_type") or "image").lower()
-            preview = item.get("preview_image") or {}
-            preview_src = ""
-            if isinstance(preview, dict):
-                preview_src = str(preview.get("src") or "")
+            # Image count = images only. Skip video/external_video/model entirely
+            # (including their preview_image / thumbnail posters).
             if media_type != "image":
-                if preview_src:
-                    urls.append(preview_src)
                 continue
             src = item.get("src") or ""
             if src:
                 urls.append(str(src))
-            if preview_src:
-                urls.append(preview_src)
+            preview = item.get("preview_image") or {}
+            if isinstance(preview, dict) and preview.get("src"):
+                urls.append(str(preview["src"]))
     return [u for u in urls if u]
+
+
+def _script_looks_like_product_json(script, text: str, handle: str | None) -> bool:
+    """Detect Shopify product JSON across common theme embeddings."""
+    stype = (script.get("type") or "").lower()
+    sid = (script.get("id") or "")
+    sid_l = sid.lower()
+    sclass = " ".join(script.get("class") or []).lower()
+    data_attrs = " ".join(
+        f"{k}={v}" for k, v in (script.attrs or {}).items() if str(k).startswith("data-")
+    )
+    data_l = data_attrs.lower()
+    if (
+        "productjson" in sid_l
+        or "product-json" in sid_l
+        or "product_json" in sid_l
+        or re.search(r"productjson|product-json", sid, re.I)
+    ):
+        return True
+    if "productjson" in sclass or "product-json" in sclass:
+        return True
+    if "data-product-json" in data_l or "data-product=" in data_l:
+        return True
+    # Dawn / OS2 section JSON often carries a nested product object
+    if stype in ("application/json", "text/json", "text/template", ""):
+        has_media_marker = (
+            '"media"' in text
+            or '"images"' in text
+            or '"featured_image"' in text
+            or '"media_type"' in text
+            or '"featured_media"' in text
+        )
+        if not has_media_marker:
+            return False
+        if handle and handle in text.lower():
+            return True
+        # Handle-less sole product JSON blobs still accepted for parsing
+        if '"variants"' in text and ('"images"' in text or '"media"' in text):
+            return True
+        # Section payload: {"product":{"media":[...]}} without handle string nearby
+        if '"product"' in text and ('"media"' in text or '"images"' in text):
+            return True
+    return False
+
+
+def _extract_product_json_from_data_attrs(soup, handle: str | None) -> list[dict]:
+    """Collect product dicts from data-product / data-product-json attributes."""
+    products: list[dict] = []
+    for el in soup.find_all(True):
+        if not hasattr(el, "attrs"):
+            continue
+        for key in ("data-product", "data-product-json", "data-product-data"):
+            raw = el.get(key)
+            if not raw or not isinstance(raw, str) or len(raw) < 20:
+                continue
+            try:
+                data = json.loads(html_unescape_url(raw) if raw[:1] != "{" else raw)
+            except Exception:
+                try:
+                    data = json.loads(raw.replace("&quot;", '"').replace("&#39;", "'"))
+                except Exception:
+                    continue
+            products.extend(_iter_shopify_product_objects(data, handle))
+    return products
+
+
+def _merge_product_json_urls(
+    products: list[dict],
+    seen: set[str],
+    found: list[str],
+    by_source: dict[str, list[str]],
+    excluded: dict[str, list[str]],
+    source: str = "shopify_product_json",
+) -> None:
+    for product in products:
+        for u in _urls_from_shopify_product(product):
+            _add_canonical_image(u, seen, found, by_source, source, excluded)
 
 
 def analyze_product_gallery_images(
@@ -423,13 +599,18 @@ def analyze_product_gallery_images(
     product_url: str | None = None,
 ) -> dict[str, Any]:
     """
-    Collect unique logical gallery keys for the audited product only.
+    Collect unique logical gallery *images* for the audited product only.
 
-    Returns {count, keys, by_source} where by_source groups first-seen keys by
-    origin (shopify_product_json, json_ld, gallery_dom, srcset, lazy, picture,
-    background, …).
+    Returns count/keys/by_source plus exclusion lists for videos and posters.
     """
-    empty = {"count": 0, "keys": [], "by_source": {}}
+    empty = {
+        "count": 0,
+        "keys": [],
+        "by_source": {},
+        "excluded_videos": [],
+        "excluded_video_posters": [],
+        "excluded_other": [],
+    }
     if not html:
         return empty
 
@@ -438,33 +619,40 @@ def analyze_product_gallery_images(
     found: list[str] = []
     seen: set[str] = set()
     by_source: dict[str, list[str]] = {}
+    excluded: dict[str, list[str]] = {
+        "excluded_videos": [],
+        "excluded_video_posters": [],
+        "excluded_other": [],
+    }
 
-    # 1) Shopify Product JSON for this handle — canonical gallery source
+    # 1) Shopify Product JSON for this handle — preferred gallery source
     for script in soup.find_all("script"):
         text = script.string or script.get_text() or ""
         if not text or len(text) < 20:
             continue
-        stype = (script.get("type") or "").lower()
-        sid = (script.get("id") or "").lower()
-        sclass = " ".join(script.get("class") or []).lower()
-        if not (
-            stype == "application/json"
-            or "productjson" in sid
-            or "product-json" in sid
-            or "product-json" in sclass
-            or (stype == "application/json" and "product" in sid)
-        ):
-            # Also accept application/json without id when handle appears in text
-            if not (stype == "application/json" and handle and handle in text.lower()):
-                if "productjson" not in sid and "ProductJson" not in (script.get("id") or ""):
-                    continue
-        try:
-            data = json.loads(text)
-        except Exception:
+        if not _script_looks_like_product_json(script, text, handle):
             continue
-        for product in _iter_shopify_product_objects(data, handle):
-            for u in _urls_from_shopify_product(product):
-                _add_canonical_image(u, seen, found, by_source, "shopify_product_json")
+        try:
+            data = json.loads(text.strip())
+        except Exception:
+            # Some themes wrap JSON in HTML comments or trailing commas — skip quietly
+            continue
+        products = _iter_shopify_product_objects(data, handle)
+        # Sole product-like object in a handle-mentioning script
+        if not products and handle and handle in text.lower():
+            products = _iter_shopify_product_objects(data, handle=None)
+            if len(products) > 1:
+                products = []
+        _merge_product_json_urls(products, seen, found, by_source, excluded)
+
+    # 1b) data-product / data-product-json attributes (common on product-info)
+    _merge_product_json_urls(
+        _extract_product_json_from_data_attrs(soup, handle),
+        seen,
+        found,
+        by_source,
+        excluded,
+    )
 
     # 2) JSON-LD Product (optionally URL/handle scoped)
     for script in soup.find_all("script", attrs={"type": re.compile(r"ld\+json", re.I)}):
@@ -495,19 +683,18 @@ def analyze_product_gallery_images(
             for img in images:
                 if isinstance(img, dict):
                     img = img.get("url") or img.get("@id") or ""
-                _add_canonical_image(str(img), seen, found, by_source, "json_ld")
+                _add_canonical_image(str(img), seen, found, by_source, "json_ld", excluded)
 
-    # 3) DOM gallery — only primary product media, never related/upsell blocks
+    # 3) DOM gallery — only primary product media, never related/upsell/video posters
     candidate_roots: list = []
     for sel_kwargs in (
         {"name": "media-gallery"},
         {"class_": re.compile(r"product__media-list|product-media-list|media-gallery__list", re.I)},
         {"class_": re.compile(r"product__media|product-gallery|product-images", re.I)},
-        {"id": re.compile(r"^(?:ProductMedia|product-photos|MediaGallery)", re.I)},
+        {"id": re.compile(r"^(?:ProductMedia|product-photos|MediaGallery|ProductJSON)", re.I)},
     ):
         candidate_roots.extend(soup.find_all(**sel_kwargs))
 
-    # Fallback: first product-info / main-product media region (still exclude related)
     if not candidate_roots:
         host = (
             soup.find("product-info")
@@ -518,12 +705,10 @@ def analyze_product_gallery_images(
             candidate_roots.append(host)
 
     roots = [r for r in candidate_roots if r is not None and not _element_in_excluded_section(r)]
-    # De-dupe nested roots: keep outermost only
     filtered_roots = []
     for root in roots:
         if any(root is other or (hasattr(root, "parents") and other in root.parents) for other in filtered_roots):
             continue
-        # drop root if it is inside an already-selected root
         if any(hasattr(root, "parents") and sel in root.parents for sel in filtered_roots):
             continue
         filtered_roots.append(root)
@@ -531,6 +716,21 @@ def analyze_product_gallery_images(
     for root in filtered_roots:
         for el in root.find_all(["img", "source"]):
             if _element_in_excluded_section(el):
+                continue
+            # Video / deferred-media poster UI is never a gallery photograph
+            if _element_is_video_context(el):
+                for attr in _GALLERY_ATTRS:
+                    val = el.get(attr)
+                    if val:
+                        _add_canonical_image(
+                            val,
+                            seen,
+                            found,
+                            by_source,
+                            "gallery_dom",
+                            excluded,
+                            force_kind="video_poster",
+                        )
                 continue
             for attr in _GALLERY_ATTRS:
                 val = el.get(attr)
@@ -544,15 +744,67 @@ def analyze_product_gallery_images(
                     source = "picture"
                 else:
                     source = "gallery_dom"
-                _add_canonical_image(val, seen, found, by_source, source)
+                _add_canonical_image(val, seen, found, by_source, source, excluded)
+        for el in root.find_all("video"):
+            poster = el.get("poster")
+            if poster:
+                _add_canonical_image(
+                    poster,
+                    seen,
+                    found,
+                    by_source,
+                    "gallery_dom",
+                    excluded,
+                    force_kind="video_poster",
+                )
+            for attr in ("src",):
+                val = el.get(attr)
+                if val:
+                    _add_canonical_image(
+                        val,
+                        seen,
+                        found,
+                        by_source,
+                        "gallery_dom",
+                        excluded,
+                        force_kind="video",
+                    )
+            for src_el in el.find_all("source"):
+                val = src_el.get("src") or src_el.get("srcset")
+                if val:
+                    _add_canonical_image(
+                        val,
+                        seen,
+                        found,
+                        by_source,
+                        "gallery_dom",
+                        excluded,
+                        force_kind="video",
+                    )
         for el in root.find_all(style=re.compile(r"background-image", re.I)):
             if _element_in_excluded_section(el):
                 continue
+            force = "video_poster" if _element_is_video_context(el) else None
             style = el.get("style") or ""
             for m in re.finditer(r"url\(['\"]?([^'\")]+)['\"]?\)", style, re.I):
-                _add_canonical_image(m.group(1), seen, found, by_source, "background")
+                _add_canonical_image(
+                    m.group(1),
+                    seen,
+                    found,
+                    by_source,
+                    "background",
+                    excluded,
+                    force_kind=force,
+                )
 
-    return {"count": len(found), "keys": found, "by_source": by_source}
+    return {
+        "count": len(found),
+        "keys": found,
+        "by_source": by_source,
+        "excluded_videos": excluded["excluded_videos"],
+        "excluded_video_posters": excluded["excluded_video_posters"],
+        "excluded_other": excluded["excluded_other"],
+    }
 
 
 def extract_product_gallery_image_urls(
@@ -563,15 +815,67 @@ def extract_product_gallery_image_urls(
     return analyze_product_gallery_images(html, product_url=product_url)["keys"]
 
 
+def _product_js_url(product_url: str | None) -> str | None:
+    """Build the public Shopify /products/{handle}.js endpoint for a PDP URL."""
+    if not product_url:
+        return None
+    handle = product_handle_from_url(product_url)
+    if not handle:
+        return None
+    parsed = urlparse(html_unescape_url(product_url))
+    if not parsed.netloc:
+        return None
+    scheme = parsed.scheme or "https"
+    return f"{scheme}://{parsed.netloc}/products/{handle}.js"
+
+
+def _fetch_shopify_product_js(page, product_url: str | None) -> dict | None:
+    """
+    Load handle-scoped product JSON via Shopify's public product.js API.
+
+    Many modern themes omit embedded ProductJson and rely on this endpoint
+    (or hydrate from it). Same-origin fetch preserves cookies/session.
+    """
+    js_url = _product_js_url(product_url)
+    if not js_url:
+        return None
+    try:
+        data = page.evaluate(
+            """async (url) => {
+                try {
+                    const r = await fetch(url, {
+                        credentials: 'same-origin',
+                        headers: { 'Accept': 'application/json' },
+                    });
+                    if (!r.ok) return null;
+                    return await r.json();
+                } catch (e) {
+                    return null;
+                }
+            }""",
+            js_url,
+        )
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
 def count_product_gallery_images(page, product_url: str | None = None) -> int:
     """
     Count unique logical images in the audited product's own gallery.
 
-    Prefers handle-scoped Shopify product JSON + scoped gallery DOM. Never uses
-    bare <main> / related-product carousels as the gallery root.
+    Prefers handle-scoped Shopify product JSON (embedded or product.js) +
+    scoped gallery DOM. Never uses bare <main> / related-product carousels.
     """
     handle = product_handle_from_url(product_url)
-    analysis: dict[str, Any] = {"count": 0, "keys": [], "by_source": {}}
+    analysis: dict[str, Any] = {
+        "count": 0,
+        "keys": [],
+        "by_source": {},
+        "excluded_videos": [],
+        "excluded_video_posters": [],
+        "excluded_other": [],
+    }
     try:
         html = page.content()
         analysis = analyze_product_gallery_images(html, product_url=product_url)
@@ -582,17 +886,36 @@ def count_product_gallery_images(page, product_url: str | None = None) -> int:
     by_source: dict[str, list[str]] = {
         k: list(v) for k, v in (analysis.get("by_source") or {}).items()
     }
+    excluded: dict[str, list[str]] = {
+        "excluded_videos": list(analysis.get("excluded_videos") or []),
+        "excluded_video_posters": list(analysis.get("excluded_video_posters") or []),
+        "excluded_other": list(analysis.get("excluded_other") or []),
+    }
 
-    # Live DOM: only primary media-gallery roots, excluding related sections
+    # Prefer Shopify product.js when HTML did not expose usable product JSON
+    if "shopify_product_json" not in by_source:
+        product_js = _fetch_shopify_product_js(page, product_url)
+        if isinstance(product_js, dict):
+            products = _iter_shopify_product_objects(product_js, handle)
+            if not products and _looks_like_product_dict(product_js):
+                products = [product_js]
+            found_list = list(urls)
+            _merge_product_json_urls(
+                products, urls, found_list, by_source, excluded, "shopify_product_json"
+            )
+            urls = set(found_list)
+
+    # Live DOM: only primary media-gallery roots, excluding related + video UI
     try:
         live = page.evaluate(
             """() => {
                 const out = [];
                 const junk = /logo|icon|sprite|payment|badge|flag|avatar|emoji|spacer|1x1|pixel|blank|placeholder|favicon/i;
                 const excludeRe = /related|recommend|upsell|cross-?sell|complementary|recently|you-?may|similar|also-like|product-recommendations|featured-collection|cart-drawer/i;
-                const add = (u, source) => {
-                    if (!u || u.startsWith('data:') || junk.test(u)) return;
-                    out.push({url: u, source});
+                const videoCtxRe = /deferred-media__poster|poster-button|product__media-item--video|media-item--video|video-section|(?:^|\\s)deferred-media(?:\\s|$)/i;
+                const add = (u, source, kind) => {
+                    if (!u || u.startsWith('data:')) return;
+                    out.push({url: u, source, kind: kind || 'candidate'});
                 };
                 const inExcluded = (el) => {
                     let cur = el;
@@ -600,6 +923,19 @@ def count_product_gallery_images(page, product_url: str | None = None) -> int:
                         const cls = (cur.className && cur.className.toString) ? cur.className.toString() : '';
                         const id = cur.id || '';
                         if (excludeRe.test(cls + ' ' + id)) return true;
+                        cur = cur.parentElement;
+                    }
+                    return false;
+                };
+                const inVideoCtx = (el) => {
+                    const tag = (el.tagName || '').toLowerCase();
+                    if (tag === 'video') return true;
+                    if (tag === 'source' && el.parentElement && el.parentElement.tagName.toLowerCase() === 'video') return true;
+                    let cur = el;
+                    while (cur && cur !== document.body) {
+                        const cls = (cur.className && cur.className.toString) ? cur.className.toString() : '';
+                        const name = (cur.tagName || '').toLowerCase();
+                        if (name === 'video' || name === 'deferred-media' || videoCtxRe.test(cls)) return true;
                         cur = cur.parentElement;
                     }
                     return false;
@@ -618,26 +954,35 @@ def count_product_gallery_images(page, product_url: str | None = None) -> int:
                 ].join(',');
                 let roots = Array.from(document.querySelectorAll(rootSel))
                     .filter(r => !inExcluded(r));
-                // If still empty, do NOT fall back to <main> — return no live URLs
                 const seenNodes = new Set();
                 for (const root of roots) {
-                    const nodes = root.querySelectorAll('img, source');
+                    const nodes = root.querySelectorAll('img, source, video');
                     for (const el of nodes) {
                         if (seenNodes.has(el) || inExcluded(el)) continue;
                         seenNodes.add(el);
                         const tag = (el.tagName || '').toLowerCase();
-                        add(el.currentSrc || '', tag === 'source' ? 'picture' : 'gallery_dom');
-                        for (const a of ['src','data-src','data-original','data-lazy-src','data-zoom','data-image']) {
+                        const videoCtx = inVideoCtx(el);
+                        if (tag === 'video') {
+                            add(el.getAttribute('poster') || '', 'gallery_dom', 'video_poster');
+                            add(el.currentSrc || el.getAttribute('src') || '', 'gallery_dom', 'video');
+                            for (const s of el.querySelectorAll('source')) {
+                                add(s.getAttribute('src') || '', 'gallery_dom', 'video');
+                            }
+                            continue;
+                        }
+                        const kind = videoCtx ? 'video_poster' : 'candidate';
+                        add(el.currentSrc || '', tag === 'source' ? 'picture' : 'gallery_dom', kind);
+                        for (const a of ['src','data-src','data-original','data-lazy-src','data-zoom','data-image','poster']) {
                             const v = el.getAttribute(a) || '';
                             let source = 'gallery_dom';
                             if (a.startsWith('data-') && a !== 'data-zoom' && a !== 'data-image') source = 'lazy';
                             if (tag === 'source') source = 'picture';
-                            add(v, source);
+                            add(v, source, a === 'poster' ? 'video_poster' : kind);
                         }
                         for (const a of ['srcset','data-srcset','data-bgset']) {
                             const v = el.getAttribute(a) || '';
                             for (const part of v.split(',')) {
-                                add((part.trim().split(/\\s+/)[0]) || '', 'srcset');
+                                add((part.trim().split(/\\s+/)[0]) || '', 'srcset', kind);
                             }
                         }
                     }
@@ -648,10 +993,19 @@ def count_product_gallery_images(page, product_url: str | None = None) -> int:
         if isinstance(live, list):
             for item in live:
                 if isinstance(item, dict):
-                    u, source = item.get("url"), item.get("source") or "gallery_dom"
+                    u = item.get("url")
+                    source = item.get("source") or "gallery_dom"
+                    kind_hint = item.get("kind") or "candidate"
                 else:
-                    u, source = item, "gallery_dom"
-                if not u or not _is_productish_image_url(str(u)):
+                    u, source, kind_hint = item, "gallery_dom", "candidate"
+                if not u:
+                    continue
+                force = None
+                if kind_hint in ("video", "video_poster"):
+                    force = kind_hint
+                kind = force or classify_gallery_asset(str(u))
+                if kind != "image":
+                    _track_excluded(excluded, kind, str(u))
                     continue
                 key = canonical_product_image_key(str(u))
                 if not key or key in urls:
@@ -665,9 +1019,16 @@ def count_product_gallery_images(page, product_url: str | None = None) -> int:
     count_product_gallery_images.last_analysis = {  # type: ignore[attr-defined]
         "count": len(urls),
         "keys": sorted(urls),
+        "accepted_unique_images": sorted(urls),
         "by_source": by_source,
+        "excluded_videos": excluded["excluded_videos"],
+        "excluded_video_posters": excluded["excluded_video_posters"],
+        "excluded_other": excluded["excluded_other"],
         "handle": handle,
         "source_summary": ", ".join(parts) if parts else "none",
+        "source_counts": {k: len(v) for k, v in by_source.items()},
+        "excluded_video_count": len(excluded["excluded_videos"]),
+        "excluded_video_poster_count": len(excluded["excluded_video_posters"]),
     }
     return len(urls)
 
@@ -1197,12 +1558,31 @@ def run_playwright_audit(
                     progress,
                     "      Gallery image sources: "
                     f"{analysis.get('source_summary', 'none')} "
-                    f"(unique={analysis.get('count', 0)}, handle={analysis.get('handle')})",
+                    f"(unique={analysis.get('count', 0)}, handle={analysis.get('handle')}, "
+                    f"excluded_videos={analysis.get('excluded_video_count', 0)}, "
+                    f"excluded_posters={analysis.get('excluded_video_poster_count', 0)})",
                 )
-                findings["product_image_keys_sample"] = (analysis.get("keys") or [])[:20]
-                findings["product_image_sources"] = {
-                    k: len(v) for k, v in (analysis.get("by_source") or {}).items()
-                }
+                findings["product_image_keys_sample"] = (
+                    analysis.get("accepted_unique_images") or analysis.get("keys") or []
+                )[:20]
+                findings["product_image_sources"] = dict(
+                    analysis.get("source_counts")
+                    or {
+                        k: len(v) for k, v in (analysis.get("by_source") or {}).items()
+                    }
+                )
+                findings["product_image_excluded_videos_sample"] = (
+                    analysis.get("excluded_videos") or []
+                )[:10]
+                findings["product_image_excluded_video_posters_sample"] = (
+                    analysis.get("excluded_video_posters") or []
+                )[:10]
+                findings["product_image_excluded_video_count"] = int(
+                    analysis.get("excluded_video_count") or 0
+                )
+                findings["product_image_excluded_video_poster_count"] = int(
+                    analysis.get("excluded_video_poster_count") or 0
+                )
 
             price = page.query_selector(
                 "[class*='price']:not([class*='compare']):not([class*='compare-at'])"

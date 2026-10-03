@@ -447,6 +447,191 @@ def test_files_and_products_path_forms_dedupe_same_stem():
     assert a == b == c == "shopify:bamboo-hero"
 
 
+def test_mp4_and_video_media_not_counted_as_gallery_images():
+    """Video files must not inflate Product Image Count."""
+    from app.core.store_auditor import (
+        analyze_product_gallery_images,
+        classify_gallery_asset,
+    )
+
+    assert classify_gallery_asset(
+        "https://cdn.shopify.com/videos/c/vp/abc/clip.mp4"
+    ) == "video"
+    assert classify_gallery_asset(
+        "https://cdn.shopify.com/s/files/1/1/files/demo.webm?v=1"
+    ) == "video"
+
+    html = """
+    <html><body>
+      <media-gallery class="product__media-list">
+        <img src="https://cdn.shopify.com/s/files/1/1/products/front.jpg?width=800" />
+        <img src="https://cdn.shopify.com/s/files/1/1/products/back.jpg?width=800" />
+        <video controls>
+          <source src="https://cdn.shopify.com/videos/c/vp/abc/hero.mp4" type="video/mp4" />
+        </video>
+        <img src="https://cdn.shopify.com/s/files/1/1/files/clip.mp4" />
+      </media-gallery>
+      <script type="application/json" id="ProductJson-main">
+      {
+        "id": 9,
+        "handle": "demo-tee",
+        "images": [
+          "https://cdn.shopify.com/s/files/1/1/products/front.jpg",
+          "https://cdn.shopify.com/s/files/1/1/products/back.jpg"
+        ],
+        "media": [
+          {"media_type":"image","src":"https://cdn.shopify.com/s/files/1/1/products/front.jpg"},
+          {"media_type":"video","src":"https://cdn.shopify.com/videos/c/vp/abc/hero.mp4",
+           "preview_image":{"src":"https://cdn.shopify.com/s/files/1/1/files/hero.thumbnail.0000000000.jpg"}},
+          {"media_type":"external_video","preview_image":{"src":"https://cdn.shopify.com/s/files/1/1/files/yt-poster.jpg"}}
+        ]
+      }
+      </script>
+    </body></html>
+    """
+    result = analyze_product_gallery_images(
+        html, product_url="https://shop.example/products/demo-tee"
+    )
+    assert result["count"] == 2
+    joined = " ".join(result["keys"])
+    assert "front" in joined and "back" in joined
+    assert ".mp4" not in joined
+    assert result["excluded_videos"]
+    assert "shopify_product_json" in result["by_source"]
+
+
+def test_video_thumbnail_poster_not_counted_as_gallery_image():
+    """Shopify *.thumbnail.NNNN and deferred-media posters are not gallery photos."""
+    from app.core.store_auditor import (
+        analyze_product_gallery_images,
+        classify_gallery_asset,
+    )
+
+    assert classify_gallery_asset(
+        "https://cdn.shopify.com/s/files/1/1/files/hero.thumbnail.0000000000.jpg"
+    ) == "video_poster"
+    assert classify_gallery_asset(
+        "https://cdn.shopify.com/videos/c/vp/abc/frame.jpg"
+    ) == "video_poster"
+
+    html = """
+    <html><body>
+      <media-gallery class="product__media-list">
+        <div class="product__media-item">
+          <img src="https://cdn.shopify.com/s/files/1/1/products/photo-a.jpg?width=600" />
+        </div>
+        <div class="product__media-item product__media-item--video">
+          <deferred-media class="deferred-media">
+            <button class="deferred-media__poster">
+              <img src="https://cdn.shopify.com/s/files/1/1/files/reel.thumbnail.0000000000.jpg" />
+            </button>
+            <template>
+              <video src="https://cdn.shopify.com/videos/c/vp/abc/reel.mp4"></video>
+            </template>
+          </deferred-media>
+        </div>
+        <video poster="https://cdn.shopify.com/s/files/1/1/files/custom-poster.jpg">
+          <source src="https://cdn.shopify.com/videos/c/vp/abc/clip.mp4" type="video/mp4" />
+        </video>
+      </media-gallery>
+    </body></html>
+    """
+    result = analyze_product_gallery_images(
+        html, product_url="https://shop.example/products/demo-tee"
+    )
+    assert result["count"] == 1
+    assert any("photo-a" in k for k in result["keys"])
+    assert not any("thumbnail" in k for k in result["keys"])
+    assert result["excluded_video_posters"]
+    assert result["excluded_videos"]
+
+
+def test_genuine_gallery_images_and_variants_remain_counted():
+    """Distinct product photographs across colors stay separate; format variants dedupe."""
+    from app.core.store_auditor import analyze_product_gallery_images
+
+    html = """
+    <html><body>
+      <media-gallery class="product__media-list">
+        <img src="https://cdn.shopify.com/s/files/1/1/products/tee-black-front.jpg?width=200"
+             srcset="https://cdn.shopify.com/s/files/1/1/products/tee-black-front.jpg?width=800 800w" />
+        <img data-src="https://cdn.shopify.com/s/files/1/1/products/tee-black-back.webp?width=800" />
+        <img src="https://cdn.shopify.com/s/files/1/1/products/tee-white-front.jpg?width=400" />
+        <picture>
+          <source srcset="https://shop.myshopify.com/cdn/shop/files/tee-black-front.webp?width=600" />
+          <img src="https://cdn.shopify.com/s/files/1/1/files/tee-black-front_800x.jpg" />
+        </picture>
+      </media-gallery>
+      <section class="product-recommendations">
+        <div class="product__media">
+          <img src="https://cdn.shopify.com/s/files/1/1/products/related-hoodie.jpg" />
+        </div>
+      </section>
+      <script type="application/json" id="ProductJSON-template">
+      {
+        "id": 1,
+        "handle": "classic-tee",
+        "images": [
+          "https://cdn.shopify.com/s/files/1/1/products/tee-black-front.jpg",
+          "https://cdn.shopify.com/s/files/1/1/products/tee-black-back.jpg",
+          "https://cdn.shopify.com/s/files/1/1/products/tee-white-front.jpg"
+        ],
+        "media": [
+          {"media_type":"image","src":"https://cdn.shopify.com/s/files/1/1/products/tee-black-front.jpg"},
+          {"media_type":"image","src":"https://cdn.shopify.com/s/files/1/1/products/tee-black-back.jpg"},
+          {"media_type":"image","src":"https://cdn.shopify.com/s/files/1/1/products/tee-white-front.jpg"}
+        ]
+      }
+      </script>
+    </body></html>
+    """
+    result = analyze_product_gallery_images(
+        html, product_url="https://shop.example/products/classic-tee"
+    )
+    assert result["count"] == 3
+    assert "related-hoodie" not in " ".join(result["keys"])
+    assert "shopify_product_json" in result["by_source"]
+
+
+def test_section_product_json_and_data_product_attr_detected():
+    """Alternate Shopify embeddings (section product + data-product) must be preferred."""
+    from app.core.store_auditor import analyze_product_gallery_images
+
+    html = """
+    <html><body>
+      <product-info data-product='{"id":3,"handle":"linen-sheet","images":["https://cdn.shopify.com/s/files/1/1/products/sheet-1.jpg","https://cdn.shopify.com/s/files/1/1/products/sheet-2.jpg"],"media":[{"media_type":"image","src":"https://cdn.shopify.com/s/files/1/1/products/sheet-1.jpg"}],"variants":[{"id":1}]}'>
+        <div class="product__media-list">
+          <img src="https://cdn.shopify.com/s/files/1/1/products/sheet-1.jpg?width=100" />
+        </div>
+      </product-info>
+      <script type="application/json" id="shopify-section-main">
+      {
+        "id": "main",
+        "product": {
+          "id": 3,
+          "handle": "linen-sheet",
+          "images": [
+            "https://cdn.shopify.com/s/files/1/1/products/sheet-1.jpg",
+            "https://cdn.shopify.com/s/files/1/1/products/sheet-2.jpg"
+          ],
+          "media": [
+            {"media_type":"image","src":"https://cdn.shopify.com/s/files/1/1/products/sheet-1.jpg"},
+            {"media_type":"image","src":"https://cdn.shopify.com/s/files/1/1/products/sheet-2.jpg"}
+          ],
+          "variants": [{"id": 1}]
+        }
+      }
+      </script>
+    </body></html>
+    """
+    result = analyze_product_gallery_images(
+        html, product_url="https://shop.example/products/linen-sheet"
+    )
+    assert result["count"] == 2
+    assert "shopify_product_json" in result["by_source"]
+    assert result["by_source"]["shopify_product_json"]
+
+
 def test_passing_checks_use_canonical_email_and_nav_counts():
     from app.core.audit_report import format_passing_message
     from app.core.store_auditor import _finding
@@ -490,5 +675,9 @@ if __name__ == "__main__":
     test_logo_and_icon_assets_excluded_from_gallery_count()
     test_related_product_cards_do_not_inflate_gallery_count()
     test_files_and_products_path_forms_dedupe_same_stem()
+    test_mp4_and_video_media_not_counted_as_gallery_images()
+    test_video_thumbnail_poster_not_counted_as_gallery_image()
+    test_genuine_gallery_images_and_variants_remain_counted()
+    test_section_product_json_and_data_product_attr_detected()
     test_passing_checks_use_canonical_email_and_nav_counts()
     print("OK")
