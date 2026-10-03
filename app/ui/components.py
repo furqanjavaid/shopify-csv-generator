@@ -751,12 +751,12 @@ class LogBox(ctk.CTkFrame):
 
 
 class StatusBar(ctk.CTkFrame):
-    """Slim bottom status strip: page bg, hairline top divider, minimal padding."""
+    """Slim navy status strip — continuation of the sidebar/app shell."""
 
     def __init__(self, master, **kwargs):
         c = current_colors()
         opts = {
-            "fg_color": c["BG_PRIMARY"],  # #F0EDE8 — matches page, not a thick footer band
+            "fg_color": c["SIDEBAR_BG"],  # #0D1B4B — matches navy shell
             "height": 22,  # ~28px after CTk 1.25x scaling
             "corner_radius": 0,
             "border_width": 0,
@@ -767,31 +767,26 @@ class StatusBar(ctk.CTkFrame):
         self.grid_propagate(False)
         self.grid_columnconfigure(0, weight=1)
 
-        # Hairline top divider (#D8D5D0)
-        ctk.CTkFrame(self, height=1, fg_color=c["BORDER"], corner_radius=0).grid(
-            row=0, column=0, columnspan=2, sticky="ew"
-        )
-
         self.left = ctk.CTkLabel(
             self,
             text="Ready",
             font=T.font(11),
-            text_color=c["TEXT_SECONDARY"],
+            text_color=c["SIDEBAR_TEXT"],  # #F0EDE8
             anchor="w",
             height=18,
             fg_color="transparent",
         )
-        self.left.grid(row=1, column=0, sticky="w", padx=12, pady=(2, 3))
+        self.left.grid(row=0, column=0, sticky="w", padx=12, pady=(2, 3))
         self.right = ctk.CTkLabel(
             self,
             text="",
             font=T.font(11),
-            text_color=c["TEXT_MUTED"],
+            text_color=c["SIDEBAR_MUTED"],
             anchor="e",
             height=18,
             fg_color="transparent",
         )
-        self.right.grid(row=1, column=1, sticky="e", padx=12, pady=(2, 3))
+        self.right.grid(row=0, column=1, sticky="e", padx=12, pady=(2, 3))
 
     def set_left(self, text: str) -> None:
         self.left.configure(text=text)
