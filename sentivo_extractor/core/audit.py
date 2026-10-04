@@ -382,7 +382,7 @@ class DomainAuditor:
             "product_url",
             "platform_detected",
         ]
-        with path.open("w", newline="", encoding="utf-8") as f:
+        with path.open("w", newline="", encoding="utf-8-sig") as f:
             writer = csv.DictWriter(f, fieldnames=fields)
             writer.writeheader()
             for row in rows:
@@ -430,7 +430,7 @@ class DomainAuditor:
             wb.save(path)
         except Exception:
             csv_path = path.with_suffix(".csv")
-            with csv_path.open("w", newline="", encoding="utf-8") as f:
+            with csv_path.open("w", newline="", encoding="utf-8-sig") as f:
                 writer = csv.DictWriter(f, fieldnames=fields)
                 writer.writeheader()
                 for row in rows:

@@ -120,7 +120,7 @@ def test_validator_and_csv_export():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "shopify_import.csv"
         export_shopify_csv([product], out)
-        text = out.read_text(encoding="utf-8")
+        text = out.read_text(encoding="utf-8-sig")
         assert "classic-tee" in text
         assert "CT-S-BLK" in text
 

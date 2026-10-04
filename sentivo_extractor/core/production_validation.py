@@ -208,7 +208,7 @@ def write_final_validation_report(
             encoding="utf-8",
         )
         csv_path = path.with_suffix(".csv")
-        with csv_path.open("w", newline="", encoding="utf-8") as f:
+        with csv_path.open("w", newline="", encoding="utf-8-sig") as f:
             writer = csv.DictWriter(f, fieldnames=REPORT_COLUMNS, extrasaction="ignore")
             writer.writeheader()
             for row in rows:

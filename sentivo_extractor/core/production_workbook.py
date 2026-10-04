@@ -73,7 +73,7 @@ def write_production_summary_workbook(
         )
         cov_csv = path.with_name("coverage.csv")
         if coverage:
-            with cov_csv.open("w", newline="", encoding="utf-8") as f:
+            with cov_csv.open("w", newline="", encoding="utf-8-sig") as f:
                 writer = csv.DictWriter(f, fieldnames=list(coverage[0].keys()))
                 writer.writeheader()
                 writer.writerows(coverage)

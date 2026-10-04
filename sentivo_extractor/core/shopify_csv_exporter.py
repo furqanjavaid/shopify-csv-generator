@@ -131,7 +131,7 @@ def product_to_rows(product: dict[str, Any]) -> list[dict[str, str]]:
 
 def export_shopify_csv(products: list[dict[str, Any]], path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as f:
+    with path.open("w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(f, fieldnames=SHOPIFY_COLUMNS)
         writer.writeheader()
         for product in products:
@@ -150,7 +150,7 @@ def export_failed_csv(products: list[dict[str, Any]], path: Path) -> Path:
         "confidence_score",
         "reason",
     ]
-    with path.open("w", newline="", encoding="utf-8") as f:
+    with path.open("w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         for p in products:
@@ -183,7 +183,7 @@ def export_validation_report(issues: list[dict[str, Any]], path: Path) -> Path:
     except Exception:
         # Fallback CSV if openpyxl unavailable
         csv_path = path.with_suffix(".csv")
-        with csv_path.open("w", newline="", encoding="utf-8") as f:
+        with csv_path.open("w", newline="", encoding="utf-8-sig") as f:
             writer = csv.DictWriter(
                 f,
                 fieldnames=["severity", "code", "handle", "title", "source_url", "message"],
@@ -206,7 +206,7 @@ def export_images_manifest(manifest_rows: list[dict[str, Any]], path: Path) -> P
         "converted_from",
         "status",
     ]
-    with path.open("w", newline="", encoding="utf-8") as f:
+    with path.open("w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         for row in manifest_rows:

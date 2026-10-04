@@ -332,7 +332,7 @@ def _write_health_xlsx(
         import csv
 
         csv_path = path.with_suffix(".csv")
-        with csv_path.open("w", newline="", encoding="utf-8") as f:
+        with csv_path.open("w", newline="", encoding="utf-8-sig") as f:
             writer = csv.DictWriter(f, fieldnames=HEALTH_COLUMNS, extrasaction="ignore")
             writer.writeheader()
             for row in rows:
@@ -369,7 +369,7 @@ def _load_audit_domain_rows(audit_dir: Path) -> list[dict[str, Any]]:
     if csv_path.exists():
         import csv
 
-        with csv_path.open(newline="", encoding="utf-8") as f:
+        with csv_path.open(newline="", encoding="utf-8-sig") as f:
             return list(csv.DictReader(f))
     return []
 

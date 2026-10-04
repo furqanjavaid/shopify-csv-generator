@@ -81,11 +81,11 @@ def test_shopify_pre_import_validator(tmp_path: Path | None = None):
         assert result["summary"]["errors"] == 0
 
         # Break compare-at
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8-sig")
         # inject bad compare on first data line via rewrite
-        rows = list(csv.DictReader(path.open(encoding="utf-8")))
+        rows = list(csv.DictReader(path.open(encoding="utf-8-sig")))
         rows[0]["Variant Compare At Price"] = "5.00"
-        with path.open("w", newline="", encoding="utf-8") as f:
+        with path.open("w", newline="", encoding="utf-8-sig") as f:
             writer = csv.DictWriter(f, fieldnames=SHOPIFY_COLUMNS)
             writer.writeheader()
             writer.writerows(rows)

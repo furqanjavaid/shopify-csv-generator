@@ -121,7 +121,7 @@ def validate_shopify_csv(
             "summary": {"errors": 1, "warnings": 0, "rows": 0},
         }
 
-    with path.open(newline="", encoding="utf-8") as f:
+    with path.open(newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         headers = reader.fieldnames or []
         rows = list(reader)
@@ -370,7 +370,7 @@ def write_preimport_validation_report(result: dict[str, Any], path: Path) -> Pat
         import csv as csvlib
 
         csv_path = path.with_suffix(".csv")
-        with csv_path.open("w", newline="", encoding="utf-8") as f:
+        with csv_path.open("w", newline="", encoding="utf-8-sig") as f:
             writer = csvlib.DictWriter(f, fieldnames=fields)
             writer.writeheader()
             for issue in result.get("issues") or []:

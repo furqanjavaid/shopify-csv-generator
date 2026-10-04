@@ -342,7 +342,7 @@ def write_bug_report_xlsx(
         import csv
 
         csv_path = path.with_suffix(".csv")
-        with csv_path.open("w", newline="", encoding="utf-8") as f:
+        with csv_path.open("w", newline="", encoding="utf-8-sig") as f:
             writer = csv.DictWriter(
                 f,
                 fieldnames=[
