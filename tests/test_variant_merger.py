@@ -281,3 +281,109 @@ def test_split_products_with_more_than_99_variants():
     assert parts[0]["variant_merge"]["part"] == 1
     assert parts[0]["variant_merge"]["part_count"] == 2
     assert parts[1]["handle"] != parts[0]["handle"]
+
+
+def test_strip_sample_size_color_title():
+    from sentivo_extractor.post_processors.variant_merger import (
+        strip_sample_size_color_title,
+    )
+
+    assert (
+        strip_sample_size_color_title("20mm Sample Acetal Black Rod")
+        == "Acetal Black Rod"
+    )
+    assert (
+        strip_sample_size_color_title("20mm Sample Acetal Black Rod", strip_color=True)
+        == "Acetal Rod"
+    )
+
+
+def test_title_fallback_category_when_url_slug_guess_fails():
+    from sentivo_extractor.post_processors.variant_merger import merge_products_by_base_title
+
+    rich = (
+        "<h2>Product Information</h2>"
+        + ("<p>Rich category copy for acetal machining plastic. </p>" * 20)
+    )
+
+    class _Http:
+        def get_text(self, url: str) -> str:
+            # Only the cleaned-title slug works (no size segment in source URLs).
+            if url.endswith("/acetal-black-rod") or url.endswith("/acetal-rod"):
+                return (
+                    f'<html><body><div class="category-description">{rich}</div>'
+                    "</body></html>"
+                )
+            raise RuntimeError(f"unexpected {url}")
+
+    products = [
+        _simple(
+            "Acetal Black Rod 6mm dia x 500mm",
+            "A1",
+            "1.00",
+            "https://www.directplastics.co.uk/samples/acetal-a",
+        ),
+        _simple(
+            "Acetal Black Rod 8mm dia x 500mm",
+            "A2",
+            "2.00",
+            "https://www.directplastics.co.uk/samples/acetal-b",
+        ),
+    ]
+    for p in products:
+        p["description_html"] = "<p>Short meta only.</p>"
+
+    merged = merge_products_by_base_title(products, http=_Http())
+    acetal = next(p for p in merged if p["title"] == "Acetal Black Rod")
+    assert "Product Information" in acetal["description_html"]
+    assert acetal.get("category_description_url", "").endswith(
+        ("/acetal-black-rod", "/acetal-rod")
+    )
+
+
+def test_inherit_description_from_sibling_for_sample_product():
+    from sentivo_extractor.post_processors.variant_merger import (
+        MIN_RICH_DESCRIPTION_LEN,
+        merge_products_by_base_title,
+    )
+
+    rich = (
+        "<h2>Product Information</h2>"
+        + ("<p>Full acetal rod properties and applications text. </p>" * 25)
+    )
+    assert len(rich) >= MIN_RICH_DESCRIPTION_LEN
+
+    # Merged parent with rich description
+    parent_members = [
+        _simple(
+            "Acetal Black Rod 6mm dia x 500mm",
+            "A1",
+            "1.00",
+            "https://www.directplastics.co.uk/acetal-black-rod-6mm-dia-x-500mm",
+        ),
+        _simple(
+            "Acetal Black Rod 8mm dia x 500mm",
+            "A2",
+            "2.00",
+            "https://www.directplastics.co.uk/acetal-black-rod-8mm-dia-x-500mm",
+        ),
+    ]
+    for p in parent_members:
+        p["description_html"] = rich
+
+    # Sample product stays as its own (short) listing
+    sample = _simple(
+        "20mm Sample Acetal Black Rod",
+        "SAMP20",
+        "3.00",
+        "https://www.directplastics.co.uk/20mm-sample-acetal-black-rod",
+    )
+    sample["description_html"] = "<p>Short sample blurb only.</p>"
+
+    # No HTTP → category fetch skipped; inheritance should still copy from sibling.
+    merged = merge_products_by_base_title(parent_members + [sample], http=None)
+    sample_out = next(p for p in merged if "Sample" in p["title"])
+    parent_out = next(p for p in merged if p["title"] == "Acetal Black Rod")
+    assert "Product Information" in parent_out["description_html"]
+    assert sample_out["description_html"] == parent_out["description_html"]
+    assert sample_out.get("description_inherited_from") == "Acetal Black Rod"

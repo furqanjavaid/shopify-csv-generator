@@ -21,6 +21,36 @@ logger = logging.getLogger(__name__)
 # Shopify hard limit is 100 variants; keep a 1-slot buffer.
 MAX_VARIANTS_PER_PRODUCT = 99
 
+# Prefer this plain-text length before inheriting a sibling description.
+MIN_RICH_DESCRIPTION_LEN = 500
+
+_COLOR_WORDS = frozenset(
+    {
+        "black",
+        "white",
+        "natural",
+        "clear",
+        "blue",
+        "green",
+        "red",
+        "yellow",
+        "orange",
+        "brown",
+        "grey",
+        "gray",
+        "beige",
+        "ivory",
+        "transparent",
+    }
+)
+
+_PART_SUFFIX_RE = re.compile(r"\s*\(Part\s+\d+\)\s*$", re.I)
+_SAMPLE_WORD_RE = re.compile(r"\bsamples?\b", re.I)
+_LEADING_SIZE_RE = re.compile(
+    r"^\d+(?:\.\d+)?\s*(?:mm|cm|m)\b\s*",
+    re.I,
+)
+
 # Multi-part dimensions: 6mm dia x 500mm | 6mm × 500mm | 250 x 250 x 2mm
 _MULTI_DIM_RE = re.compile(
     r"""
@@ -226,9 +256,62 @@ def category_slug_candidates(url: str) -> list[str]:
     return candidates
 
 
-def _category_url_candidates(source_urls: list[str]) -> list[str]:
+def _slugify_title(title: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", (title or "").lower())
+    return slug.strip("-")
+
+
+def strip_sample_size_color_title(title: str, *, strip_color: bool = False) -> str:
+    """
+    Clean a title for category/sibling matching.
+
+    '20mm Sample Acetal Black Rod' → 'Acetal Black Rod'
+    (with strip_color=True → 'Acetal Rod')
+    """
+    text = _PART_SUFFIX_RE.sub("", title or "").strip()
+    text = extract_base_title(text) or text
+    text = _SAMPLE_WORD_RE.sub(" ", text)
+    text = _LEADING_SIZE_RE.sub("", text.strip())
+    text = _MULTI_DIM_RE.sub(" ", text)
+    text = _SINGLE_DIM_RE.sub(" ", text)
+    if strip_color:
+        words = [
+            w
+            for w in _WS_RE.split(text.strip())
+            if w and w.lower() not in _COLOR_WORDS
+        ]
+        text = " ".join(words)
+    text = _WS_RE.sub(" ", text).strip(" -–—|,;")
+    return text
+
+
+def _title_category_slugs(title: str) -> list[str]:
+    """Slug candidates from a cleaned product title."""
     seen: set[str] = set()
     out: list[str] = []
+    for cleaned in (
+        strip_sample_size_color_title(title, strip_color=False),
+        strip_sample_size_color_title(title, strip_color=True),
+    ):
+        if not cleaned:
+            continue
+        slug = _slugify_title(cleaned)
+        if not slug or slug in seen:
+            continue
+        seen.add(slug)
+        out.append(slug)
+    return out
+
+
+def _category_url_candidates(
+    source_urls: list[str],
+    *,
+    title: str = "",
+    include_title_fallback: bool = True,
+) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    origin = ""
     for raw in source_urls:
         url = str(raw or "").strip()
         if not url:
@@ -236,6 +319,8 @@ def _category_url_candidates(source_urls: list[str]) -> list[str]:
         parsed = urlparse(url)
         if not parsed.scheme or not parsed.netloc:
             continue
+        if not origin:
+            origin = f"{parsed.scheme}://{parsed.netloc}"
         base = f"{parsed.scheme}://{parsed.netloc}"
         for slug in category_slug_candidates(url):
             candidate = f"{base}/{slug}"
@@ -243,7 +328,33 @@ def _category_url_candidates(source_urls: list[str]) -> list[str]:
                 continue
             seen.add(candidate)
             out.append(candidate)
+
+    # When URL slug guesses are empty (or as extra fallback), derive from title.
+    if include_title_fallback and origin and title:
+        if not out:
+            for slug in _title_category_slugs(title):
+                candidate = f"{origin}/{slug}"
+                if candidate in seen:
+                    continue
+                seen.add(candidate)
+                out.append(candidate)
+        else:
+            # Keep URL-based first; append title-based only if those fail later.
+            pass
     return out
+
+
+def _title_fallback_category_urls(source_urls: list[str], title: str) -> list[str]:
+    """Category URLs derived only from cleaned title (Sample/size/color stripped)."""
+    origin = ""
+    for raw in source_urls:
+        parsed = urlparse(str(raw or "").strip())
+        if parsed.scheme and parsed.netloc:
+            origin = f"{parsed.scheme}://{parsed.netloc}"
+            break
+    if not origin or not title:
+        return []
+    return [f"{origin}/{slug}" for slug in _title_category_slugs(title)]
 
 
 def _extract_category_description(html: str) -> str:
@@ -263,33 +374,17 @@ def _extract_category_description(html: str) -> str:
     return content if _plain_text_length(content) > 0 else ""
 
 
-def _enrich_description_from_category(
+def _try_category_urls(
     parent: dict[str, Any],
+    candidates: list[str],
     *,
-    http: Any | None,
+    http: Any,
     log: logging.Logger,
-    cache: dict[str, str | None] | None = None,
-) -> None:
-    """
-    Fetch category/parent page and replace description when .category-description
-    is longer than the current (usually short meta) body.
-    """
-    if http is None or not hasattr(http, "get_text"):
-        return
-
-    urls = list(parent.get("merged_from_urls") or [])
-    if not urls:
-        src = str(parent.get("source_url") or "")
-        if src:
-            urls = [src]
-    candidates = _category_url_candidates(urls)
-    if not candidates:
-        return
-
+    fetch_cache: dict[str, str | None],
+) -> bool:
+    """Apply first longer category description from candidates. True if updated."""
     current = str(parent.get("description_html") or "")
     current_len = _plain_text_length(current)
-    fetch_cache = cache if cache is not None else {}
-
     for cat_url in candidates:
         if cat_url in fetch_cache:
             desc = fetch_cache[cat_url]
@@ -315,7 +410,163 @@ def _enrich_description_from_category(
                 current_len,
                 desc_len,
             )
-            return
+            return True
+    return False
+
+
+def _enrich_description_from_category(
+    parent: dict[str, Any],
+    *,
+    http: Any | None,
+    log: logging.Logger,
+    cache: dict[str, str | None] | None = None,
+) -> None:
+    """
+    Fetch category/parent page and replace description when .category-description
+    is longer than the current (usually short meta) body.
+
+    If URL slug guesses fail completely, retry using a cleaned title
+    (Sample / size prefixes / color words stripped).
+    """
+    if http is None or not hasattr(http, "get_text"):
+        return
+
+    urls = list(parent.get("merged_from_urls") or [])
+    if not urls:
+        src = str(parent.get("source_url") or "")
+        if src:
+            urls = [src]
+    title = str(parent.get("title") or "")
+    base_title = str(
+        (parent.get("variant_merge") or {}).get("base_title") or title
+    )
+    fetch_cache = cache if cache is not None else {}
+
+    url_candidates = _category_url_candidates(
+        urls, title=title, include_title_fallback=False
+    )
+    applied = False
+    if url_candidates:
+        applied = _try_category_urls(
+            parent, url_candidates, http=http, log=log, fetch_cache=fetch_cache
+        )
+
+    # URL guess empty or produced no usable description → cleaned-title retry.
+    if not applied and _plain_text_length(
+        str(parent.get("description_html") or "")
+    ) < MIN_RICH_DESCRIPTION_LEN:
+        title_candidates = _title_fallback_category_urls(urls, base_title or title)
+        # Avoid re-trying URLs already attempted.
+        title_candidates = [u for u in title_candidates if u not in url_candidates]
+        if title_candidates:
+            log.debug(
+                "Category URL guess failed for '%s'; retrying cleaned title slugs: %s",
+                title,
+                title_candidates,
+            )
+            _try_category_urls(
+                parent,
+                title_candidates,
+                http=http,
+                log=log,
+                fetch_cache=fetch_cache,
+            )
+
+
+def _related_title_keys(title: str) -> list[str]:
+    """Normalized keys used to find sibling products with richer descriptions."""
+    keys: list[str] = []
+    seen: set[str] = set()
+    for cleaned in (
+        strip_sample_size_color_title(title, strip_color=False),
+        strip_sample_size_color_title(title, strip_color=True),
+    ):
+        key = _WS_RE.sub(" ", cleaned).strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        keys.append(key)
+    return keys
+
+
+def _inherit_descriptions_from_siblings(
+    products: list[dict[str, Any]],
+    *,
+    log: logging.Logger,
+) -> None:
+    """
+    For products still under MIN_RICH_DESCRIPTION_LEN chars, copy description
+    from a related sibling (same domain) that already has a rich body.
+
+    Example: '20mm Sample Acetal Black Rod' ← 'Acetal Black Rod'
+    """
+    if len(products) < 2:
+        return
+
+    # Index rich products by related title keys.
+    rich_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    for product in products:
+        if not isinstance(product, dict):
+            continue
+        desc = str(product.get("description_html") or "")
+        desc_len = _plain_text_length(desc)
+        if desc_len < MIN_RICH_DESCRIPTION_LEN:
+            continue
+        domain = _domain_key(str(product.get("source_url") or ""))
+        titles = [
+            str(product.get("title") or ""),
+            str((product.get("variant_merge") or {}).get("base_title") or ""),
+        ]
+        for title in titles:
+            for key in _related_title_keys(title):
+                index_key = (domain, key)
+                existing = rich_by_key.get(index_key)
+                if existing is None or desc_len > _plain_text_length(
+                    str(existing.get("description_html") or "")
+                ):
+                    rich_by_key[index_key] = product
+
+    if not rich_by_key:
+        return
+
+    for product in products:
+        if not isinstance(product, dict):
+            continue
+        current = str(product.get("description_html") or "")
+        current_len = _plain_text_length(current)
+        if current_len >= MIN_RICH_DESCRIPTION_LEN:
+            continue
+        domain = _domain_key(str(product.get("source_url") or ""))
+        titles = [
+            str(product.get("title") or ""),
+            str((product.get("variant_merge") or {}).get("base_title") or ""),
+        ]
+        donor: dict[str, Any] | None = None
+        for title in titles:
+            for key in _related_title_keys(title):
+                candidate = rich_by_key.get((domain, key))
+                if candidate is None or candidate is product:
+                    continue
+                # Prefer exact cleaned-title match (keeps color) over color-stripped.
+                donor = candidate
+                break
+            if donor is not None:
+                break
+        if donor is None:
+            continue
+        donor_desc = str(donor.get("description_html") or "")
+        donor_len = _plain_text_length(donor_desc)
+        if donor_len <= current_len:
+            continue
+        product["description_html"] = donor_desc
+        product["description_inherited_from"] = str(donor.get("title") or "")
+        log.info(
+            "Inherited description for '%s' from sibling '%s' (%s → %s chars)",
+            product.get("title"),
+            donor.get("title"),
+            current_len,
+            donor_len,
+        )
 
 
 def _split_over_variant_limit(product: dict[str, Any]) -> list[dict[str, Any]]:
@@ -442,11 +693,12 @@ def merge_products_by_base_title(
     Shopify product with Option1=Size variants.
 
     After merge, optionally enrich description from the category/parent page
-    (``.category-description``). Products with more than 99 variants are split
-    into ``(Part N)`` groups.
+    (``.category-description``). If still short, inherit from a related sibling
+    product. Products with more than 99 variants are split into ``(Part N)`` groups.
 
     Products that already have multiple variants, or that do not share a base
-    title with another simple product on the same domain, are left unchanged.
+    title with another simple product on the same domain, are left unchanged
+    (but may still receive category/sibling description enrichment).
     """
     log = log or logger
     if not products:
@@ -504,19 +756,34 @@ def merge_products_by_base_title(
         )
 
     if merge_count == 0:
-        return list(products)
+        result = list(products)
+    else:
+        result = []
+        emitted: set[tuple[str, str]] = set()
+        for product in products:
+            key = mergeable_ids.get(id(product))
+            if key is None:
+                result.append(product)
+                continue
+            if key in emitted:
+                continue
+            emitted.add(key)
+            result.extend(parents[key])
 
-    result: list[dict[str, Any]] = []
-    emitted: set[tuple[str, str]] = set()
-    for product in products:
-        key = mergeable_ids.get(id(product))
-        if key is None:
-            result.append(product)
+    # Unmerged / sample products: try category fetch (incl. cleaned-title fallback).
+    for product in result:
+        if not isinstance(product, dict):
             continue
-        if key in emitted:
+        if _plain_text_length(str(product.get("description_html") or "")) >= (
+            MIN_RICH_DESCRIPTION_LEN
+        ):
             continue
-        emitted.add(key)
-        result.extend(parents[key])
+        # Skip parents already enriched during merge (has category URL) unless still short.
+        _enrich_description_from_category(
+            product, http=http, log=log, cache=category_cache
+        )
+
+    _inherit_descriptions_from_siblings(result, log=log)
 
     log.info(
         "Variant merger complete: %s parent group(s) formed%s; output count %s → %s",
