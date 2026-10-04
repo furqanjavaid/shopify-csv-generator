@@ -12,9 +12,14 @@ from copy import deepcopy
 from typing import Any
 from urllib.parse import urlparse
 
+from bs4 import BeautifulSoup
+
 from sentivo_extractor.core.utils import stable_handle
 
 logger = logging.getLogger(__name__)
+
+# Shopify hard limit is 100 variants; keep a 1-slot buffer.
+MAX_VARIANTS_PER_PRODUCT = 99
 
 # Multi-part dimensions: 6mm dia x 500mm | 6mm × 500mm | 250 x 250 x 2mm
 _MULTI_DIM_RE = re.compile(
@@ -34,7 +39,24 @@ _SINGLE_DIM_RE = re.compile(
     re.I,
 )
 
+# Trailing size segment on URL slugs:
+# acetal-black-rod-6mm-dia-x-500mm → acetal-black-rod
+_SLUG_DIM_TAIL_RE = re.compile(
+    r"""
+    -(?:
+        \d+(?:\.\d+)?(?:mm|cm|m)
+        (?:-dia(?:meter)?)?
+        (?:-x-\d+(?:\.\d+)?(?:mm|cm|m)(?:-dia(?:meter)?)?)+
+      |
+        \d+(?:\.\d+)?(?:mm|cm|m)
+    )
+    (?:-.*)?$
+    """,
+    re.I | re.X,
+)
+
 _WS_RE = re.compile(r"\s+")
+_TAG_RE = re.compile(r"<[^>]+>")
 
 
 def extract_size_value(title: str) -> str:
@@ -170,6 +192,176 @@ def _longest_description(products: list[dict[str, Any]]) -> str:
     return best
 
 
+def _plain_text_length(html_or_text: str) -> int:
+    text = html_or_text or ""
+    try:
+        plain = BeautifulSoup(text, "lxml").get_text(" ", strip=True)
+    except Exception:
+        plain = _TAG_RE.sub(" ", text)
+    return len(_WS_RE.sub(" ", plain).strip())
+
+
+def category_slug_candidates(url: str) -> list[str]:
+    """
+    Derive category-page slug candidates from a size PDP URL.
+
+    '…/acetal-black-rod-6mm-dia-x-500mm' → ['acetal-black-rod', 'acetal-rod']
+    """
+    path = urlparse(url or "").path.rstrip("/")
+    if not path:
+        return []
+    slug = path.rsplit("/", 1)[-1].strip().lower()
+    if not slug:
+        return []
+
+    candidates: list[str] = []
+    stripped = _SLUG_DIM_TAIL_RE.sub("", slug).strip("-")
+    if stripped and stripped != slug:
+        candidates.append(stripped)
+        parts = [p for p in stripped.split("-") if p]
+        if len(parts) >= 3:
+            short = f"{parts[0]}-{parts[-1]}"
+            if short not in candidates:
+                candidates.append(short)
+    return candidates
+
+
+def _category_url_candidates(source_urls: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in source_urls:
+        url = str(raw or "").strip()
+        if not url:
+            continue
+        parsed = urlparse(url)
+        if not parsed.scheme or not parsed.netloc:
+            continue
+        base = f"{parsed.scheme}://{parsed.netloc}"
+        for slug in category_slug_candidates(url):
+            candidate = f"{base}/{slug}"
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            out.append(candidate)
+    return out
+
+
+def _extract_category_description(html: str) -> str:
+    if not html:
+        return ""
+    try:
+        soup = BeautifulSoup(html, "lxml")
+    except Exception:
+        return ""
+    el = soup.select_one(".category-description")
+    if not el:
+        return ""
+    try:
+        content = str(el.decode_contents()).strip()
+    except Exception:
+        content = el.get_text(" ", strip=True)
+    return content if _plain_text_length(content) > 0 else ""
+
+
+def _enrich_description_from_category(
+    parent: dict[str, Any],
+    *,
+    http: Any | None,
+    log: logging.Logger,
+    cache: dict[str, str | None] | None = None,
+) -> None:
+    """
+    Fetch category/parent page and replace description when .category-description
+    is longer than the current (usually short meta) body.
+    """
+    if http is None or not hasattr(http, "get_text"):
+        return
+
+    urls = list(parent.get("merged_from_urls") or [])
+    if not urls:
+        src = str(parent.get("source_url") or "")
+        if src:
+            urls = [src]
+    candidates = _category_url_candidates(urls)
+    if not candidates:
+        return
+
+    current = str(parent.get("description_html") or "")
+    current_len = _plain_text_length(current)
+    fetch_cache = cache if cache is not None else {}
+
+    for cat_url in candidates:
+        if cat_url in fetch_cache:
+            desc = fetch_cache[cat_url]
+        else:
+            try:
+                html = http.get_text(cat_url)
+                desc = _extract_category_description(html)
+            except Exception as exc:  # noqa: BLE001
+                log.debug("Category description fetch failed for %s: %s", cat_url, exc)
+                desc = None
+            fetch_cache[cat_url] = desc
+
+        if not desc:
+            continue
+        desc_len = _plain_text_length(desc)
+        if desc_len > current_len:
+            parent["description_html"] = desc
+            parent["category_description_url"] = cat_url
+            log.info(
+                "Category description applied for '%s' from %s (%s → %s chars)",
+                parent.get("title"),
+                cat_url,
+                current_len,
+                desc_len,
+            )
+            return
+
+
+def _split_over_variant_limit(product: dict[str, Any]) -> list[dict[str, Any]]:
+    """
+    Shopify allows at most 100 variants. Split into Part 1 / Part 2 / …
+    with at most MAX_VARIANTS_PER_PRODUCT (99) each.
+    """
+    variants = [v for v in (product.get("variants") or []) if isinstance(v, dict)]
+    if len(variants) <= MAX_VARIANTS_PER_PRODUCT:
+        return [product]
+
+    base_title = str(
+        (product.get("variant_merge") or {}).get("base_title") or product.get("title") or ""
+    ).strip() or str(product.get("title") or "Product").strip()
+    source_url = str(product.get("source_url") or "")
+    total_parts = (len(variants) + MAX_VARIANTS_PER_PRODUCT - 1) // MAX_VARIANTS_PER_PRODUCT
+    parts: list[dict[str, Any]] = []
+
+    for part_idx in range(total_parts):
+        start = part_idx * MAX_VARIANTS_PER_PRODUCT
+        chunk_variants = deepcopy(
+            variants[start : start + MAX_VARIANTS_PER_PRODUCT]
+        )
+        size_values = [str(v.get("option1") or "") for v in chunk_variants]
+        part_num = part_idx + 1
+        part = deepcopy(product)
+        part_title = f"{base_title} (Part {part_num})"
+        part["title"] = part_title
+        part["handle"] = stable_handle(part_title, source_url or base_title)
+        part["variants"] = chunk_variants
+        part["options"] = [{"name": "Size", "values": size_values}]
+        merge_meta = dict(part.get("variant_merge") or {})
+        merge_meta.update(
+            {
+                "base_title": base_title,
+                "variant_count": len(chunk_variants),
+                "part": part_num,
+                "part_count": total_parts,
+            }
+        )
+        part["variant_merge"] = merge_meta
+        parts.append(part)
+
+    return parts
+
+
 def _merge_group(
     base_title: str,
     members: list[dict[str, Any]],
@@ -243,10 +435,15 @@ def merge_products_by_base_title(
     products: list[dict[str, Any]],
     *,
     log: logging.Logger | None = None,
+    http: Any | None = None,
 ) -> list[dict[str, Any]]:
     """
     Group simple products that share a dimension-stripped base title into one
     Shopify product with Option1=Size variants.
+
+    After merge, optionally enrich description from the category/parent page
+    (``.category-description``). Products with more than 99 variants are split
+    into ``(Part N)`` groups.
 
     Products that already have multiple variants, or that do not share a base
     title with another simple product on the same domain, are left unchanged.
@@ -270,15 +467,30 @@ def merge_products_by_base_title(
         groups.setdefault((domain, base.lower()), []).append(product)
 
     mergeable_ids: dict[int, tuple[str, str]] = {}
-    parents: dict[tuple[str, str], dict[str, Any]] = {}
+    parents: dict[tuple[str, str], list[dict[str, Any]]] = {}
     merge_count = 0
+    split_extra = 0
+    category_cache: dict[str, str | None] = {}
 
     for key, members in groups.items():
         if len(members) < 2:
             continue
         base_title = extract_base_title(str(members[0].get("title") or ""))
         parent = _merge_group(base_title, members)
-        parents[key] = parent
+        _enrich_description_from_category(
+            parent, http=http, log=log, cache=category_cache
+        )
+        parts = _split_over_variant_limit(parent)
+        if len(parts) > 1:
+            split_extra += len(parts) - 1
+            log.info(
+                "Variant split: '%s' → %s parts (%s variants total, max %s/part)",
+                base_title,
+                len(parts),
+                len(parent.get("variants") or []),
+                MAX_VARIANTS_PER_PRODUCT,
+            )
+        parents[key] = parts
         merge_count += 1
         for m in members:
             mergeable_ids[id(m)] = key
@@ -304,11 +516,12 @@ def merge_products_by_base_title(
         if key in emitted:
             continue
         emitted.add(key)
-        result.append(parents[key])
+        result.extend(parents[key])
 
     log.info(
-        "Variant merger complete: %s parent product(s) formed; output count %s → %s",
+        "Variant merger complete: %s parent group(s) formed%s; output count %s → %s",
         merge_count,
+        f", {split_extra} extra part product(s)" if split_extra else "",
         len(products),
         len(result),
     )

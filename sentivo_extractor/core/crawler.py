@@ -344,7 +344,9 @@ class UniversalCrawler:
 
         # Merge same-base-title simple PDPs into one Shopify product with Size variants
         before_merge = len(products)
-        products = merge_products_by_base_title(products, log=self.logger)
+        products = merge_products_by_base_title(
+            products, log=self.logger, http=self.http
+        )
         if len(products) != before_merge:
             self.logger.info(
                 "Post-process variant merger: %s → %s product(s)",
