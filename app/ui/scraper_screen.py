@@ -171,6 +171,15 @@ class _BoundedCategoryCombo(Combobox):
         if not self._values:
             return
 
+        try:
+            self._build_popup()
+        except Exception:
+            # Never leave a stuck withdrawn menu that blocks later opens.
+            self._close_menu()
+            raise
+
+    def _build_popup(self) -> None:
+        """Create the capped scrollable popup (pack layout — CTk place() rejects w/h)."""
         self.update_idletasks()
         combo_w = max(int(self.winfo_width() or 0), 160)
         combo_h = max(int(self.winfo_height() or 0), T.INPUT_HEIGHT)
@@ -178,8 +187,8 @@ class _BoundedCategoryCombo(Combobox):
         combo_y = int(self.winfo_rooty())
         popup_h = self._popup_height(len(self._values))
         popup_y = self._place_popup(combo_x, combo_y, combo_h, popup_h)
-        scroll_h = max(popup_h - 4, self._ROW_HEIGHT)
-        scroll_w = max(combo_w - 4, 120)
+        scroll_h = max(popup_h - 6, self._ROW_HEIGHT)
+        scroll_w = max(combo_w - 6, 120)
         btn_w = max(scroll_w - 28, 100)
 
         c = T.current_colors()
@@ -204,7 +213,11 @@ class _BoundedCategoryCombo(Combobox):
             width=combo_w,
             height=popup_h,
         )
-        wrap.place(x=0, y=0, width=combo_w, height=popup_h)
+        wrap.pack(fill="both", expand=True)
+        try:
+            wrap.pack_propagate(False)
+        except Exception:
+            pass
 
         scroll = ctk.CTkScrollableFrame(
             wrap,
@@ -213,15 +226,7 @@ class _BoundedCategoryCombo(Combobox):
             height=scroll_h,
             corner_radius=0,
         )
-        # Pack the scrollable's outer frame into a fixed viewport.
-        scroll.place(x=2, y=2, width=scroll_w, height=scroll_h)
-        try:
-            parent_frame = getattr(scroll, "_parent_frame", None)
-            if parent_frame is not None:
-                parent_frame.place(x=2, y=2, width=scroll_w, height=scroll_h)
-                parent_frame.configure(width=scroll_w, height=scroll_h)
-        except Exception:
-            pass
+        scroll.pack(fill="both", expand=True, padx=2, pady=2)
 
         for val in self._values:
             b = ctk.CTkButton(
