@@ -94,6 +94,7 @@ class ScraperScreen(ctk.CTkFrame):
         self._extract_proc: subprocess.Popen | None = None
         self._stop_requested = False
         self._running = False
+        self._reprocessing = False
         self._elapsed_after = None
 
         # Slim status strip first (pack before expanding shell so it stays a hairline footer)
@@ -329,6 +330,13 @@ class ScraperScreen(ctk.CTkFrame):
         self.stop_btn = DangerButton(btn_row, "Stop →", self._stop_scrape, icon="square", width=140)
         self.stop_btn.grid(row=0, column=1, sticky="ew", padx=(8, 0))
         self.stop_btn.set_enabled(False)
+        self.reprocess_btn = T.secondary_button(
+            btn_row,
+            "Reprocess Existing Data →",
+            self._start_reprocess,
+            height=T.BTN_HEIGHT,
+        )
+        self.reprocess_btn.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
 
         # Progress + percentage (always visible; idle = 0%)
         self.progress_section = ctk.CTkFrame(cfg, fg_color="transparent")
@@ -858,6 +866,13 @@ class ScraperScreen(ctk.CTkFrame):
             self.stop_btn.set_enabled(running)
         else:
             self.stop_btn.configure(state="normal" if running else "disabled")
+        if hasattr(self, "reprocess_btn"):
+            try:
+                self.reprocess_btn.configure(
+                    state="disabled" if running else "normal"
+                )
+            except Exception:
+                pass
 
     def _set_running(self, running: bool) -> None:
         """Toggle Run/Stop button states and lock/unlock inputs."""
@@ -866,6 +881,7 @@ class ScraperScreen(ctk.CTkFrame):
             self._snapshot_ui_meta()
             self._start_elapsed_tick()
         else:
+            self._reprocessing = False
             self._extract_proc = None
             store = getattr(self.app, "job_status", None)
             if store is not None:
@@ -1311,6 +1327,184 @@ class ScraperScreen(ctk.CTkFrame):
             self.clear_btn.configure(state="normal")
             return False
         return True
+
+    def _start_reprocess(self) -> None:
+        """Pick a domain output folder and re-run merger/export on raw_json_backup."""
+        if self._running or self._reprocessing:
+            return
+        folder = filedialog.askdirectory(
+            title="Select domain output folder (e.g. directplastics)",
+            initialdir=self._output_folder or str(DEFAULT_OUTPUT_DIR),
+        )
+        if not folder:
+            return
+        input_dir = Path(folder)
+        raw_dir = input_dir / "raw_json_backup"
+        if not raw_dir.is_dir():
+            self.error_label.configure(
+                text=f"raw_json_backup/ not found in: {input_dir}"
+            )
+            return
+
+        if not self._claim_scraper_job():
+            return
+
+        self.error_label.configure(text="")
+        self.scrape_btn.configure(state="disabled")
+        try:
+            self.reprocess_btn.configure(state="disabled")
+        except Exception:
+            pass
+        self._reprocessing = True
+        self._show_progress("Reprocessing existing data…")
+        self._append_log(f"Reprocess input: {input_dir}")
+        self._update_results(
+            output=str(input_dir)[:48],
+            status="Reprocessing",
+            status_color=T.GOLD,
+        )
+        self._set_running(True)
+        self.clear_btn.configure(state="disabled")
+        thread = threading.Thread(
+            target=self._run_reprocess,
+            args=(input_dir,),
+            daemon=True,
+        )
+        thread.start()
+
+    def _run_reprocess(self, input_dir: Path) -> None:
+        try:
+            input_dir = Path(input_dir)
+            cmd = [
+                sys.executable,
+                "-m",
+                "sentivo_extractor.scripts.reprocess",
+                "--input",
+                str(input_dir),
+            ]
+            self._emit_log(f"CMD: {' '.join(cmd)}")
+
+            env = os.environ.copy()
+            env["PYTHONPATH"] = (
+                str(PROJECT_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
+            )
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(PROJECT_ROOT),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
+            )
+            self._extract_proc = proc
+            store = getattr(self.app, "job_status", None)
+            if store is not None:
+                store.set_proc(TOOL_URL_SCRAPER, proc)
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                if self._job_stop_requested():
+                    break
+                text = line.rstrip()
+                if text:
+                    self._emit_log(text)
+                    self._post_to_scraper_ui(
+                        lambda s, m=text: s.loading_label.configure(text=m[:80])
+                    )
+            code = proc.wait()
+            self._extract_proc = None
+            if store is not None:
+                store.set_proc(TOOL_URL_SCRAPER, None)
+            if self._job_stop_requested():
+                self._post_to_scraper_ui(
+                    lambda s: s._finish_stopped_ui(),
+                    fallback=self._store_mark_stopped,
+                )
+                return
+            if code != 0:
+                err = f"Reprocess exited with code {code}. See log."
+                self._post_to_scraper_ui(
+                    lambda s, m=err: s._on_error(m),
+                    fallback=lambda m=err: self._store_mark_error(m),
+                )
+                return
+
+            self._post_to_scraper_ui(
+                lambda s, p=input_dir: s._on_reprocess_success(p),
+                fallback=lambda p=input_dir: self._store_mark_complete(
+                    self._count_reprocess_products(p)
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001
+            if self._job_stop_requested():
+                self._post_to_scraper_ui(
+                    lambda s: s._finish_stopped_ui(),
+                    fallback=self._store_mark_stopped,
+                )
+                return
+            msg = f"Reprocess failed: {exc}"
+            self._post_to_scraper_ui(
+                lambda s, m=msg: s._on_error(m),
+                fallback=lambda m=msg: self._store_mark_error(m),
+            )
+
+    @staticmethod
+    def _count_reprocess_products(input_dir: Path) -> int:
+        reprocessed = Path(input_dir) / "reprocessed"
+        if not reprocessed.is_dir():
+            return 0
+        csvs = sorted(reprocessed.glob("*_shopify_import.csv"))
+        if not csvs:
+            csvs = sorted(reprocessed.glob("shopify_import.csv"))
+        if not csvs:
+            return 0
+        return ScraperScreen._count_products_in_csv(csvs[0])
+
+    def _on_reprocess_success(self, input_dir: Path) -> None:
+        if self._job_stop_requested():
+            self._finish_stopped_ui()
+            return
+        self._hide_progress()
+        self._reprocessing = False
+        self._set_running(False)
+        reprocessed_dir = Path(input_dir) / "reprocessed"
+        self._universal_output_dir = reprocessed_dir
+        self._universal_domain_key = domain_folder_name(input_dir.name)
+
+        product_count = self._count_reprocess_products(input_dir)
+        csvs = sorted(reprocessed_dir.glob("*_shopify_import.csv"))
+        csv_path = (
+            csvs[0]
+            if csvs
+            else reprocessed_dir / "shopify_import.csv"
+        )
+
+        self.output_entry.delete(0, "end")
+        self.output_entry.insert(0, str(input_dir))
+        self._set_status_badge("Reprocess complete")
+        self.strategy_label.configure(
+            text=f"Reprocess complete  ·  {product_count} product(s)  ·  {reprocessed_dir}"
+        )
+        self._update_results(
+            products=str(product_count),
+            output=str(reprocessed_dir)[:48],
+            status="Reprocess complete",
+            status_color=T.SUCCESS,
+        )
+        self._append_log(f"Reprocess complete — {product_count} product(s)")
+        if csv_path.exists():
+            self._append_log(f"{csv_path.name} → {csv_path}")
+        self._rebuild_output_buttons("full")
+        self._show_output_actions()
+        self._enable_actions()
+        self.clear_btn.configure(state="normal")
+
+        store = getattr(self.app, "job_status", None)
+        if store is not None:
+            store.set_complete(
+                product_count, "URL Scraper", tool_id=TOOL_URL_SCRAPER
+            )
 
     def _start_universal(self) -> None:
         urls = self._parse_urls_from_text()
