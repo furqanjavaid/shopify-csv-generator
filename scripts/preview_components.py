@@ -72,11 +72,17 @@ def main() -> None:
     stats.grid(row=1, column=0, sticky="ew", pady=(0, 16))
     for i in range(4):
         stats.grid_columnconfigure(i, weight=1, uniform="s")
-    StatCard(stats, label="Files uploaded", value="5", icon="file").grid(
+    StatCard(stats, label="Files uploaded", value="5", icon="file", layout="horizontal").grid(
         row=0, column=0, sticky="ew", padx=(0, 8)
     )
     StatCard(
-        stats, label="Valid files", value="4", icon="check", icon_color="navy", circle_bg="#E8F8EF"
+        stats,
+        label="Valid files",
+        value="4",
+        icon="check",
+        icon_color="navy",
+        circle_bg="#E8F8EF",
+        layout="horizontal",
     ).grid(row=0, column=1, sticky="ew", padx=8)
     StatCard(
         stats,
@@ -85,9 +91,16 @@ def main() -> None:
         icon="alert-triangle",
         icon_color="burgundy",
         circle_bg="#FEF6E7",
+        layout="horizontal",
     ).grid(row=0, column=2, sticky="ew", padx=8)
     StatCard(
-        stats, label="Total rows", value="24,682", icon="bar-chart", icon_color="gold", circle_bg="#F5EDD8"
+        stats,
+        label="Total rows",
+        value="24,682",
+        icon="bar-chart",
+        icon_color="gold",
+        circle_bg="#F5EDD8",
+        layout="horizontal",
     ).grid(row=0, column=3, sticky="ew", padx=(8, 0))
 
     # Card with circle icon header
@@ -149,7 +162,7 @@ def main() -> None:
     # Access the bar we just made
     for child in root.winfo_children():
         if isinstance(child, StatusBar):
-            child.set_status("Preview mode — Step A components", "v1.0.6")
+            child.set_status("Preview mode — Step A components", "v1.1.0")
             break
 
     root.mainloop()

@@ -1,6 +1,6 @@
 {
-  "version": "1.0.6",
+  "version": "1.1.0",
   "app_name": "Sentivo Tools",
   "publisher": "Sentivo Limited",
-  "release_notes": "Added non-Shopify HTML scraping (WooCommerce + Custom platforms), pagination support, and homepage category auto-detection."
+  "release_notes": "Domain-based outputs, variant merger with 99-variant split, category descriptions, reprocess without re-scraping, rich DOM descriptions, UTF-8 BOM fix, UI and scroll improvements."
 }
