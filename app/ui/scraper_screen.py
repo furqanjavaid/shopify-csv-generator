@@ -236,7 +236,17 @@ class ScraperScreen(ctk.CTkFrame):
         # Seed URLs
         ctk.CTkLabel(
             cfg, text="Seed URLs", font=T.font(12, "bold"), text_color=T.TEXT_MUTED, anchor="w"
-        ).grid(row=1, column=0, sticky="w", pady=(2, 2))
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 2))
+        self.url_text = ctk.CTkTextbox(
+            cfg,
+            height=72,
+            wrap="none",
+            **T.textbox_style(),
+        )
+        self.url_text.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        self._seed_placeholder_active = False
+        self._install_seed_url_placeholder()
+
         self.fetch_categories_btn = T.secondary_button(
             cfg,
             "Fetch Categories →",
@@ -244,48 +254,42 @@ class ScraperScreen(ctk.CTkFrame):
             width=160,
             height=28,
         )
-        self.fetch_categories_btn.grid(row=1, column=1, sticky="e", pady=(2, 2))
-        self.url_text = ctk.CTkTextbox(
-            cfg,
-            height=72,
-            wrap="none",
-            **T.textbox_style(),
-        )
-        self.url_text.grid(row=2, column=0, columnspan=2, sticky="ew")
-        self._seed_placeholder_active = False
-        self._install_seed_url_placeholder()
+        self.fetch_categories_btn.grid(row=3, column=0, sticky="w", pady=(0, 10))
 
         # Category filter (populated by Fetch Categories)
         self._category_options: dict[str, str] = {ALL_CATEGORIES_LABEL: ALL_CATEGORIES_KEY}
         self._fetching_categories = False
         self.category_row = ctk.CTkFrame(cfg, fg_color="transparent")
-        self.category_row.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        self.category_row.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(0, 4))
         self.category_row.grid_columnconfigure(0, weight=1)
+        # Native CTkComboBox so the list draws above Run/Stop (no z-order clash).
+        self.category_menu = ctk.CTkComboBox(
+            self.category_row,
+            values=[ALL_CATEGORIES_LABEL],
+            command=self._on_category_selected,
+            width=420,
+            state="readonly",
+            **T.combo_box_style(),
+        )
+        self.category_menu.grid(row=0, column=0, sticky="ew")
+        self.category_menu.set(ALL_CATEGORIES_LABEL)
         self.category_status = ctk.CTkLabel(
             self.category_row,
             text="",
-            font=T.font_tuple(T.CAPTION),
+            font=T.font(11),
             text_color=T.TEXT_MUTED,
             anchor="w",
         )
-        self.category_status.grid(row=0, column=0, sticky="ew", pady=(0, 2))
-        self.category_menu = Combobox(
-            self.category_row,
-            [ALL_CATEGORIES_LABEL],
-            command=self._on_category_selected,
-            width=420,
-        )
-        self.category_menu.grid(row=1, column=0, sticky="ew")
-        self.category_menu.set(ALL_CATEGORIES_LABEL)
+        self.category_status.grid(row=1, column=0, sticky="ew", pady=(6, 0))
 
         self.platform_label = ctk.CTkLabel(
             cfg, text="", font=T.font_tuple(T.CAPTION), text_color=T.GOLD, anchor="w"
         )
-        self.platform_label.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        self.platform_label.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(2, 0))
 
         # Run / Stop
         btn_row = ctk.CTkFrame(cfg, fg_color="transparent")
-        btn_row.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(8, 4))
+        btn_row.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(14, 4))
         btn_row.grid_columnconfigure((0, 1), weight=1)
         self.scrape_btn = PrimaryButton(
             btn_row, "Run Scraper →", self._start_scrape, icon="play", width=200
@@ -936,12 +940,17 @@ class ScraperScreen(ctk.CTkFrame):
             self.vendor_checkbox,
             self.vendor_entry,
             self.fetch_categories_btn,
-            self.category_menu,
         ):
             try:
                 widget.configure(state=state)
             except Exception:
                 pass
+        try:
+            self.category_menu.configure(
+                state="disabled" if locked else "readonly"
+            )
+        except Exception:
+            pass
 
     def _stop_scrape(self) -> None:
         """Terminate the running extract subprocess and reset the UI."""
@@ -1134,7 +1143,11 @@ class ScraperScreen(ctk.CTkFrame):
             )
         except Exception:
             pass
-        self.category_status.configure(text="Discovering categories…")
+        self.category_status.configure(
+            text="Discovering categories…",
+            text_color=T.TEXT_MUTED,
+            font=T.font(11),
+        )
         self._append_log(f"Fetching categories from: {seed}")
 
         def _worker() -> None:
@@ -1188,19 +1201,19 @@ class ScraperScreen(ctk.CTkFrame):
         count = len(labels) - 1
         if count:
             self.category_status.configure(
-                text=f"{platform} · {count} categories found ({source})"
-            )
-            self.platform_label.configure(
-                text=f"Detected: {platform} · {count} categories"
+                text=f"Detected: {platform} · {count} categories",
+                text_color=T.TEXT_MUTED,
+                font=T.font(11),
             )
             self._append_log(
                 f"Found {count} categories via {source} ({platform})"
             )
         else:
             self.category_status.configure(
-                text=f"{platform} · no categories found — using full site"
+                text=f"Detected: {platform} · no categories found — using full site",
+                text_color=T.TEXT_MUTED,
+                font=T.font(11),
             )
-            self.platform_label.configure(text=f"Detected: {platform}")
             self._append_log(
                 f"No categories found for {seed} ({platform}); defaulting to full site"
             )
@@ -1214,7 +1227,11 @@ class ScraperScreen(ctk.CTkFrame):
             )
         except Exception:
             pass
-        self.category_status.configure(text="Category fetch failed")
+        self.category_status.configure(
+            text="Category fetch failed",
+            text_color=T.TEXT_MUTED,
+            font=T.font(11),
+        )
         self.error_label.configure(text=f"Category fetch failed: {message}")
         self._append_log(f"ERROR: category fetch failed — {message}")
 
