@@ -204,13 +204,22 @@ def run_extract(args: argparse.Namespace) -> int:
         return 2
     print("\n=== Extract complete ===")
     out = Path(options["output"])
-    print(f"CSV: {out / 'shopify_import.csv'}")
-    print(f"QA: {out / 'qa' / 'sample_review.xlsx'}")
-    print(f"Pre-import: {out / 'shopify_pre_import_validation.xlsx'}")
-    print(f"Summary workbook: {out / 'production_summary.xlsx'}")
-    print(f"Summary JSON: {out / 'run_summary.json'}")
-    if options.get("production_validation"):
-        print(f"Validation report: {out / 'final_validation_report.xlsx'}")
+    domain_dirs = summary.get("domain_output_dirs") or {}
+    if domain_dirs:
+        for domain, path in domain_dirs.items():
+            d = Path(path)
+            print(f"[{domain}] dir: {d}")
+            print(f"[{domain}] CSV: {d / f'{domain}_shopify_import.csv'}")
+            print(f"[{domain}] Summary: {d / f'{domain}_production_summary.xlsx'}")
+            print(f"[{domain}] Run JSON: {d / f'{domain}_run_summary.json'}")
+            if options.get("production_validation"):
+                print(
+                    f"[{domain}] Validation: "
+                    f"{d / f'{domain}_final_validation_report.xlsx'}"
+                )
+    else:
+        print(f"Output base: {out}")
+        print("(domain subfolders with prefixed filenames)")
     if summary.get("coverage_enforcement") == "failed":
         return 3
     if options.get("strict"):

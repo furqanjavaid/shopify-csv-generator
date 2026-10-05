@@ -2,7 +2,8 @@
 Reprocess an existing extractor output folder from raw_json_backup/.
 
 Loads saved product JSON, re-runs variant merge (with category description
-fetch), validates, and writes a fresh shopify_import.csv under reprocessed/.
+fetch), validates, and writes a fresh prefixed shopify_import.csv under
+reprocessed/.
 """
 
 from __future__ import annotations
@@ -15,6 +16,11 @@ from pathlib import Path
 from typing import Any
 
 from sentivo_extractor.core.http_client import HttpClient
+from sentivo_extractor.core.output_layout import (
+    domain_folder_name,
+    infer_domain_key_from_dir,
+    prefixed_filename,
+)
 from sentivo_extractor.core.shopify_csv_exporter import export_failed_csv, export_shopify_csv
 from sentivo_extractor.core.utils import DEFAULT_USER_AGENT
 from sentivo_extractor.core.validator import validate_products
@@ -37,6 +43,17 @@ def _load_products(raw_dir: Path) -> list[dict[str, Any]]:
     return products
 
 
+def _resolve_domain_key(input_dir: Path, products: list[dict[str, Any]]) -> str:
+    key = infer_domain_key_from_dir(input_dir)
+    if key and key != "unknown":
+        return key
+    for product in products:
+        src = str(product.get("source_url") or "")
+        if src:
+            return domain_folder_name(src)
+    return key or "unknown"
+
+
 def reprocess(input_dir: Path, *, delay: float = 0.5) -> Path:
     input_dir = input_dir.resolve()
     raw_dir = input_dir / "raw_json_backup"
@@ -55,6 +72,9 @@ def reprocess(input_dir: Path, *, delay: float = 0.5) -> Path:
     print(f"  loaded {len(products)} product(s) from {len(list(raw_dir.glob('*.json')))} file(s)")
     if not products:
         raise RuntimeError("No valid products found in raw_json_backup/")
+
+    domain_key = _resolve_domain_key(input_dir, products)
+    print(f"Domain prefix: {domain_key}_*")
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     log = logging.getLogger("reprocess")
@@ -81,11 +101,12 @@ def reprocess(input_dir: Path, *, delay: float = 0.5) -> Path:
         f"errors={summary.get('errors', '?')} warnings={summary.get('warnings', '?')}"
     )
 
-    csv_path = out_dir / "shopify_import.csv"
+    csv_name = prefixed_filename(domain_key, "shopify_import.csv")
+    csv_path = out_dir / csv_name
     print(f"Exporting {csv_path} (utf-8-sig)…")
     export_shopify_csv(passed, csv_path)
     if failed:
-        failed_path = out_dir / "failed_products.csv"
+        failed_path = out_dir / prefixed_filename(domain_key, "failed_products.csv")
         export_failed_csv(failed, failed_path)
         print(f"  failed products → {failed_path}")
 
@@ -98,13 +119,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Reprocess raw_json_backup/ through variant merger + validation "
-            "and write reprocessed/shopify_import.csv"
+            "and write reprocessed/<domain>_shopify_import.csv"
         )
     )
     parser.add_argument(
         "--input",
         required=True,
-        help="Path to an extractor output folder containing raw_json_backup/",
+        help="Path to a domain output folder containing raw_json_backup/",
     )
     parser.add_argument(
         "--delay",

@@ -11,8 +11,13 @@ from urllib.parse import urlparse
 import yaml
 
 from sentivo_extractor.core.bug_report import BugReportCollector, print_failure_groups
-from sentivo_extractor.core.checkpoint import CheckpointStore
+from sentivo_extractor.core.checkpoint import DomainCheckpointManager
 from sentivo_extractor.core.confidence import confidence_band
+from sentivo_extractor.core.output_layout import (
+    domain_artifact_path,
+    domain_folder_name,
+    ensure_domain_dir,
+)
 from sentivo_extractor.core.coverage import (
     build_coverage_report,
     coverage_enforcement_failed,
@@ -73,9 +78,12 @@ from sentivo_extractor.post_processors.variant_merger import merge_products_by_b
 class UniversalCrawler:
     def __init__(self, options: dict[str, Any]) -> None:
         self.options = options
-        self.output_dir = Path(options.get("output") or "output")
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.logger = setup_logger(log_dir=self.output_dir / "logs")
+        # User-selected base path; per-domain artifacts go under base/<domain>/.
+        self.base_output_dir = Path(options.get("output") or "output")
+        self.base_output_dir.mkdir(parents=True, exist_ok=True)
+        # Back-compat alias used by summaries / older callers.
+        self.output_dir = self.base_output_dir
+        self.logger = setup_logger(log_dir=self.base_output_dir / "logs")
         self.http = HttpClient(
             user_agent=options.get("user_agent") or DEFAULT_USER_AGENT,
             timeout=float(options.get("timeout") or 25),
@@ -87,12 +95,11 @@ class UniversalCrawler:
         self.registry = build_default_registry()
         self.site_rules = self._load_site_rules(options.get("site_rules_dir"))
         self.overwrite = bool(options.get("overwrite"))
-        self.checkpoint = CheckpointStore(
-            self.output_dir / "checkpoint.json",
+        self.checkpoint = DomainCheckpointManager(
+            self.base_output_dir,
             load_existing=not self.overwrite,
+            overwrite=self.overwrite,
         )
-        if self.overwrite:
-            self.checkpoint.reset()
         # Cap discovered PDP URLs per domain. 0 / negative = unlimited.
         raw_max = options.get("max_products_per_domain", 500)
         try:
@@ -132,13 +139,28 @@ class UniversalCrawler:
         run_mode = "pilot" if self.pilot else (
             "validation" if self.production_validation else "full"
         )
-        self.bug_report = BugReportCollector(self.output_dir, run_mode=run_mode)
+        self.bug_report = BugReportCollector(self.base_output_dir, run_mode=run_mode)
         self._crawl_stats: dict[str, int] = {
             "discovered": 0,
             "processed": 0,
             "skipped": 0,
             "failed": 0,
         }
+        self._domain_dirs: dict[str, Path] = {}
+
+    def _domain_dir(self, domain_key: str) -> Path:
+        if domain_key not in self._domain_dirs:
+            self._domain_dirs[domain_key] = ensure_domain_dir(
+                self.base_output_dir, domain_key
+            )
+        return self._domain_dirs[domain_key]
+
+    def _artifact(self, domain_key: str, filename: str) -> Path:
+        return domain_artifact_path(self.base_output_dir, domain_key, filename)
+
+    @staticmethod
+    def _product_domain_key(product: dict[str, Any]) -> str:
+        return domain_folder_name(str(product.get("source_url") or ""))
 
     def _load_site_rules(self, rules_dir: str | None) -> dict[str, Any]:
         root = (
@@ -170,24 +192,34 @@ class UniversalCrawler:
     def run(self, input_csv: Path) -> dict[str, Any]:
         seeds = read_seed_csv(input_csv)
 
-        # Pilot overwrite guard
-        csv_out = self.output_dir / "shopify_import.csv"
-        if self.pilot and csv_out.exists() and not self.overwrite:
-            close_logger(self.logger)
-            raise RuntimeError(
-                f"Pilot output exists at {csv_out}. Pass --overwrite true to replace."
-            )
+        # Ensure domain folders exist early; pilot overwrite guard per domain.
+        seed_domains = []
+        for seed in seeds:
+            key = domain_folder_name(str(seed.get("url") or ""))
+            if key not in seed_domains:
+                seed_domains.append(key)
+            self._domain_dir(key)
+        if self.pilot and not self.overwrite:
+            for key in seed_domains:
+                csv_out = self._artifact(key, "shopify_import.csv")
+                if csv_out.exists():
+                    close_logger(self.logger)
+                    raise RuntimeError(
+                        f"Pilot output exists at {csv_out}. "
+                        "Pass --overwrite true to replace."
+                    )
 
         try:
-            return self._run_pipeline(input_csv, seeds, csv_out)
+            return self._run_pipeline(input_csv, seeds)
         finally:
             close_logger(self.logger)
 
     def _run_pipeline(
-        self, input_csv: Path, seeds: list[dict[str, str]], csv_out: Path
+        self, input_csv: Path, seeds: list[dict[str, str]]
     ) -> dict[str, Any]:
         clear_sitemap_failure_cache()
         self.logger.info("Product Discovery Version: Unified")
+        self.logger.info("Output base: %s (domain subfolders + prefixed files)", self.base_output_dir)
 
         # Overwrite: wipe checkpoint before any crawl work; never resume prior state.
         if self.overwrite:
@@ -198,12 +230,12 @@ class UniversalCrawler:
 
         completed_at_start = self.checkpoint.completed_count()
         print(f"Checkpoint: {'enabled' if checkpoint_enabled else 'disabled'}")
-        print(f"Checkpoint file: {self.checkpoint.path}")
+        print(f"Checkpoint base: {self.base_output_dir}")
         print(f"Completed products in checkpoint: {completed_at_start}")
         self.logger.info(
-            "Checkpoint: %s | file=%s | completed=%s",
+            "Checkpoint: %s | base=%s | completed=%s",
             "enabled" if checkpoint_enabled else "disabled",
-            self.checkpoint.path,
+            self.base_output_dir,
             completed_at_start,
         )
 
@@ -228,8 +260,6 @@ class UniversalCrawler:
         resuming = checkpoint_enabled and completed_at_start > 0
 
         manifest_rows: list[dict[str, Any]] = []
-        raw_dir = self.output_dir / "raw_json_backup"
-        raw_dir.mkdir(parents=True, exist_ok=True)
 
         for url in product_urls:
             if url in seen_in_run:
@@ -282,16 +312,22 @@ class UniversalCrawler:
                     from sentivo_extractor.core.confidence import apply_confidence
 
                     product = apply_confidence(product)
+                domain_key = domain_folder_name(url)
+                domain_dir = self._domain_dir(domain_key)
                 rows = process_product_images(
                     product,
                     download=bool(self.options.get("download_images")),
                     convert=True,
-                    images_dir=self.output_dir / "images"
+                    images_dir=domain_dir / "images"
                     if self.options.get("download_images")
                     else None,
                     session=self.http.session,
                 )
+                for row in rows:
+                    row["domain"] = domain_key
                 manifest_rows.extend(rows)
+                raw_dir = domain_dir / "raw_json_backup"
+                raw_dir.mkdir(parents=True, exist_ok=True)
                 write_json(raw_dir / f"{product.get('handle') or 'product'}.json", product)
                 products.append(product)
                 self.checkpoint.mark_done(url, product)
@@ -362,74 +398,9 @@ class UniversalCrawler:
             self.logger.warning(w)
 
         report = validate_products(products)
-        passed = report["passed"]
         failed = list(report["failed"]) + sku_failed + self._extraction_failed
 
-        export_shopify_csv(passed, csv_out)
-        export_failed_csv(failed, self.output_dir / "failed_products.csv")
-        # Mirror failed products to project output/ when run dir is nested
-        root_out = Path(__file__).resolve().parents[2] / "output"
-        if root_out.resolve() != self.output_dir.resolve():
-            try:
-                export_failed_csv(failed, root_out / "failed_products.csv")
-            except Exception:
-                pass
-
-        debug_dir = self.output_dir / "debug"
-        write_pdp_extraction_report(
-            self._pdp_reports, debug_dir / "product_extraction_report.json"
-        )
-        write_retry_queue(self._retry_queue, self.output_dir / "retry_queue.json")
-        try:
-            write_retry_queue(self._retry_queue, root_out / "retry_queue.json")
-        except Exception:
-            pass
-        try:
-            write_pdp_extraction_report(
-                self._pdp_reports,
-                root_out / "debug" / "product_extraction_report.json",
-            )
-        except Exception:
-            pass
-        write_variant_report(
-            self._variant_reports, debug_dir / "variant_report.json"
-        )
-        try:
-            write_variant_report(
-                self._variant_reports, root_out / "debug" / "variant_report.json"
-            )
-        except Exception:
-            pass
-        write_image_report(self._image_reports, debug_dir / "image_report.json")
-        try:
-            write_image_report(
-                self._image_reports, root_out / "debug" / "image_report.json"
-            )
-        except Exception:
-            pass
-
-        export_validation_report(
-            report["issues"], self.output_dir / "validation_report.xlsx"
-        )
-        export_images_manifest(manifest_rows, self.output_dir / "images_manifest.csv")
-
-        # Pre-import validation
-        allow_dup = self.duplicate_sku_policy in ("warn", "suffix", "blank")
-        preimport = validate_shopify_csv(csv_out, allow_duplicate_sku=allow_dup)
-        write_preimport_validation_report(
-            preimport, self.output_dir / "shopify_pre_import_validation.xlsx"
-        )
-
-        # QA sample workbook
-        qa_rows = sample_products_for_qa(
-            products,
-            per_domain=self.qa_sample_size,
-            seed=self.qa_random_seed,
-        )
-        qa_dir = self.output_dir / "qa"
-        write_qa_sample_workbook(qa_rows, qa_dir / "sample_review.xlsx")
-
-        # Image accessibility
+        # Image accessibility (global, then split per domain on export)
         image_issues: list[dict[str, Any]] = []
         if self.check_image_urls:
             image_issues = check_product_images(
@@ -438,7 +409,6 @@ class UniversalCrawler:
                 timeout=float(self.options.get("timeout") or 10),
             )
 
-        # Coverage
         coverage_rows = build_coverage_report(
             seeds=seeds,
             discovered_urls=product_urls,
@@ -446,64 +416,7 @@ class UniversalCrawler:
             min_coverage_percent=self.min_coverage_percent,
         )
 
-        summary = self._build_production_summary(
-            seeds=seeds,
-            discovered=product_urls,
-            products=products,
-            report=report,
-            coverage_rows=coverage_rows,
-            preimport=preimport,
-            image_issues=image_issues,
-            sku_warnings=sku_warnings,
-        )
-
-        # Production workbook
-        yellow_items = [
-            {
-                "handle": p.get("handle"),
-                "title": p.get("title"),
-                "source_url": p.get("source_url"),
-                "confidence_score": p.get("confidence_score"),
-            }
-            for p in products
-            if confidence_band(float(p.get("confidence_score") or 0)) == "yellow"
-        ]
-        red_items = [
-            {
-                "handle": p.get("handle"),
-                "title": p.get("title"),
-                "source_url": p.get("source_url"),
-                "confidence_score": p.get("confidence_score"),
-            }
-            for p in products
-            if confidence_band(float(p.get("confidence_score") or 0)) == "red"
-        ]
-        domain_summary = self._domain_summary_rows(products, product_urls, coverage_rows)
-        extraction_errors = [
-            {"url": u, "domain": domain_from_url(u), "error": e}
-            for u, e in self._failed_reasons
-        ]
-        validation_errors = [
-            i for i in (report.get("issues") or []) if i.get("severity") == "error"
-        ] + [
-            i for i in (preimport.get("issues") or []) if i.get("severity") == "error"
-        ]
-
-        write_production_summary_workbook(
-            self.output_dir / "production_summary.xlsx",
-            overview=summary,
-            domain_summary=domain_summary,
-            extraction_errors=extraction_errors,
-            validation_errors=validation_errors,
-            yellow_items=yellow_items,
-            red_items=red_items,
-            image_issues=image_issues,
-            coverage=coverage_rows,
-        )
-
-        write_json(self.output_dir / "run_summary.json", summary)
-
-        # Bug report (failures only — no auto-fix)
+        # Bug report rows (written per-domain below)
         for p in report.get("failed") or []:
             src = str(p.get("source_url") or "")
             if not src:
@@ -522,39 +435,21 @@ class UniversalCrawler:
                     stage="Validation",
                 )
         self.bug_report.extend_from_retry_queue(self._retry_queue)
-        bug_path = self.bug_report.write(
-            self.output_dir / "bug_report.xlsx",
-            retry_queue=self._retry_queue,
+
+        summary = self._export_domain_outputs(
+            seeds=seeds,
+            product_urls=product_urls,
+            products=products,
+            report=report,
+            failed=failed,
+            sku_failed=sku_failed,
+            sku_warnings=sku_warnings,
+            manifest_rows=manifest_rows,
+            image_issues=image_issues,
+            coverage_rows=coverage_rows,
         )
-        try:
-            self.bug_report.write(
-                root_out / "bug_report.xlsx",
-                retry_queue=self._retry_queue,
-            )
-        except Exception:
-            pass
+
         print_failure_groups(self.bug_report.records)
-        self.logger.info("Bug report: %s (%s failures)", bug_path, len(self.bug_report.records))
-        summary["bug_report"] = str(bug_path)
-        summary["bug_failures"] = len(self.bug_report.records)
-
-        if self.production_validation and self._validation_rows:
-            val_summary = build_validation_summary(self._validation_rows)
-            write_final_validation_report(
-                self.output_dir / "final_validation_report.xlsx",
-                self._validation_rows,
-                val_summary,
-            )
-            try:
-                write_final_validation_report(
-                    root_out / "final_validation_report.xlsx",
-                    self._validation_rows,
-                    val_summary,
-                )
-            except Exception:
-                pass
-            summary["production_validation"] = val_summary
-
         self._print_summary(summary)
 
         if coverage_enforcement_failed(
@@ -902,6 +797,313 @@ class UniversalCrawler:
                 best[handle] = p
         return list(best.values())
 
+    def _export_domain_outputs(
+        self,
+        *,
+        seeds: list[dict[str, str]],
+        product_urls: list[str],
+        products: list[dict[str, Any]],
+        report: dict[str, Any],
+        failed: list[dict[str, Any]],
+        sku_failed: list[dict[str, Any]],
+        sku_warnings: list[str],
+        manifest_rows: list[dict[str, Any]],
+        image_issues: list[dict[str, Any]],
+        coverage_rows: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Write all prefixed artifacts into per-domain subfolders."""
+        passed = list(report.get("passed") or [])
+
+        domain_keys: list[str] = []
+        for seed in seeds:
+            key = domain_folder_name(str(seed.get("url") or ""))
+            if key not in domain_keys:
+                domain_keys.append(key)
+        for url in product_urls:
+            key = domain_folder_name(url)
+            if key not in domain_keys:
+                domain_keys.append(key)
+        for product in products + failed:
+            key = self._product_domain_key(product)
+            if key not in domain_keys:
+                domain_keys.append(key)
+        if not domain_keys:
+            domain_keys = ["unknown"]
+
+        allow_dup = self.duplicate_sku_policy in ("warn", "suffix", "blank")
+        root_out = Path(__file__).resolve().parents[2] / "output"
+        domain_summaries: dict[str, Any] = {}
+        primary_summary: dict[str, Any] = {}
+        bug_paths: list[str] = []
+
+        for key in domain_keys:
+            domain_dir = self._domain_dir(key)
+            self.logger.info("Writing domain outputs → %s", domain_dir)
+            print(f"Writing outputs → {domain_dir}")
+
+            def _in_domain_url(url: str, k: str = key) -> bool:
+                return domain_folder_name(url) == k
+
+            def _in_domain_product(p: dict[str, Any], k: str = key) -> bool:
+                return self._product_domain_key(p) == k
+
+            d_passed = [p for p in passed if _in_domain_product(p)]
+            d_failed = [p for p in failed if _in_domain_product(p)]
+            d_products = [p for p in products if _in_domain_product(p)]
+            d_urls = [u for u in product_urls if _in_domain_url(u)]
+            d_seeds = [
+                s for s in seeds if domain_folder_name(str(s.get("url") or "")) == key
+            ]
+            d_issues = [
+                i
+                for i in (report.get("issues") or [])
+                if _in_domain_url(str(i.get("source_url") or ""))
+            ]
+            d_manifest = [
+                r
+                for r in manifest_rows
+                if str(r.get("domain") or "") == key
+                or _in_domain_url(str(r.get("source_url") or ""))
+                or (
+                    not r.get("domain")
+                    and not r.get("source_url")
+                    and len(domain_keys) == 1
+                )
+            ]
+            d_pdp = [
+                r
+                for r in self._pdp_reports
+                if _in_domain_url(str(r.get("url") or r.get("source_url") or ""))
+            ]
+            d_retry = [
+                r
+                for r in self._retry_queue
+                if _in_domain_url(str(r.get("url") or ""))
+            ]
+            d_variant = [
+                r
+                for r in self._variant_reports
+                if _in_domain_url(str(r.get("url") or r.get("source_url") or ""))
+            ]
+            d_image_rep = [
+                r
+                for r in self._image_reports
+                if _in_domain_url(str(r.get("url") or r.get("source_url") or ""))
+            ]
+            d_image_issues = [
+                i
+                for i in image_issues
+                if _in_domain_url(str(i.get("source_url") or i.get("url") or ""))
+            ]
+            d_coverage = [
+                row
+                for row in coverage_rows
+                if domain_folder_name(str(row.get("domain") or row.get("seed_url") or ""))
+                == key
+                or str(row.get("domain") or "").endswith(
+                    domain_from_url(d_seeds[0]["url"]) if d_seeds else "__none__"
+                )
+                or (
+                    len(domain_keys) == 1
+                    and not row.get("domain")
+                )
+            ]
+            # Coverage rows typically use full host in "domain" — match folder label too.
+            if not d_coverage:
+                d_coverage = [
+                    row
+                    for row in coverage_rows
+                    if domain_folder_name(str(row.get("domain") or "")) == key
+                ]
+            d_failed_reasons = [
+                (u, e) for u, e in self._failed_reasons if _in_domain_url(u)
+            ]
+            d_validation_rows = [
+                r
+                for r in self._validation_rows
+                if _in_domain_url(str(r.get("URL") or r.get("url") or ""))
+            ]
+
+            csv_out = self._artifact(key, "shopify_import.csv")
+            export_shopify_csv(d_passed, csv_out)
+            export_failed_csv(d_failed, self._artifact(key, "failed_products.csv"))
+
+            debug_dir = domain_dir / "debug"
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            write_pdp_extraction_report(
+                d_pdp, debug_dir / "product_extraction_report.json"
+            )
+            write_retry_queue(d_retry, self._artifact(key, "retry_queue.json"))
+            write_variant_report(d_variant, debug_dir / "variant_report.json")
+            write_image_report(d_image_rep, debug_dir / "image_report.json")
+
+            export_validation_report(
+                d_issues, self._artifact(key, "validation_report.xlsx")
+            )
+            export_images_manifest(
+                d_manifest, self._artifact(key, "images_manifest.csv")
+            )
+
+            preimport = validate_shopify_csv(csv_out, allow_duplicate_sku=allow_dup)
+            write_preimport_validation_report(
+                preimport,
+                self._artifact(key, "shopify_pre_import_validation.xlsx"),
+            )
+
+            qa_rows = sample_products_for_qa(
+                d_products,
+                per_domain=self.qa_sample_size,
+                seed=self.qa_random_seed,
+            )
+            qa_dir = domain_dir / "qa"
+            write_qa_sample_workbook(qa_rows, qa_dir / "sample_review.xlsx")
+
+            d_report = {
+                "passed": d_passed,
+                "failed": [p for p in (report.get("failed") or []) if _in_domain_product(p)],
+                "issues": d_issues,
+                "summary": {
+                    "errors": sum(
+                        1 for i in d_issues if i.get("severity") == "error"
+                    ),
+                    "warnings": sum(
+                        1 for i in d_issues if i.get("severity") == "warning"
+                    ),
+                },
+            }
+            # Temporarily scope failed reasons for summary helper
+            saved_reasons = self._failed_reasons
+            saved_stats = dict(self._crawl_stats)
+            self._failed_reasons = d_failed_reasons
+            self._crawl_stats = {
+                "discovered": len(d_urls),
+                "processed": len(d_products),
+                "skipped": saved_stats.get("skipped", 0),
+                "failed": len(d_failed_reasons),
+            }
+            d_summary = self._build_production_summary(
+                seeds=d_seeds or seeds,
+                discovered=d_urls,
+                products=d_products,
+                report=d_report,
+                coverage_rows=d_coverage,
+                preimport=preimport,
+                image_issues=d_image_issues,
+                sku_warnings=sku_warnings,
+            )
+            self._failed_reasons = saved_reasons
+            self._crawl_stats = saved_stats
+            d_summary["domain"] = key
+            d_summary["output_dir"] = str(domain_dir)
+            d_summary["shopify_import_csv"] = str(csv_out)
+
+            yellow_items = [
+                {
+                    "handle": p.get("handle"),
+                    "title": p.get("title"),
+                    "source_url": p.get("source_url"),
+                    "confidence_score": p.get("confidence_score"),
+                }
+                for p in d_products
+                if confidence_band(float(p.get("confidence_score") or 0)) == "yellow"
+            ]
+            red_items = [
+                {
+                    "handle": p.get("handle"),
+                    "title": p.get("title"),
+                    "source_url": p.get("source_url"),
+                    "confidence_score": p.get("confidence_score"),
+                }
+                for p in d_products
+                if confidence_band(float(p.get("confidence_score") or 0)) == "red"
+            ]
+            domain_summary_rows = self._domain_summary_rows(
+                d_products, d_urls, d_coverage
+            )
+            extraction_errors = [
+                {"url": u, "domain": domain_from_url(u), "error": e}
+                for u, e in d_failed_reasons
+            ]
+            validation_errors = [
+                i for i in d_issues if i.get("severity") == "error"
+            ] + [
+                i
+                for i in (preimport.get("issues") or [])
+                if i.get("severity") == "error"
+            ]
+
+            write_production_summary_workbook(
+                self._artifact(key, "production_summary.xlsx"),
+                overview=d_summary,
+                domain_summary=domain_summary_rows,
+                extraction_errors=extraction_errors,
+                validation_errors=validation_errors,
+                yellow_items=yellow_items,
+                red_items=red_items,
+                image_issues=d_image_issues,
+                coverage=d_coverage,
+            )
+            write_json(self._artifact(key, "run_summary.json"), d_summary)
+
+            if self.production_validation and d_validation_rows:
+                val_summary = build_validation_summary(d_validation_rows)
+                write_final_validation_report(
+                    self._artifact(key, "final_validation_report.xlsx"),
+                    d_validation_rows,
+                    val_summary,
+                )
+                d_summary["production_validation"] = val_summary
+
+            # Optional mirror under project output/<domain>/
+            if root_out.resolve() != self.base_output_dir.resolve():
+                try:
+                    mirror = ensure_domain_dir(root_out, key)
+                    export_failed_csv(
+                        d_failed,
+                        domain_artifact_path(root_out, key, "failed_products.csv"),
+                    )
+                    write_retry_queue(
+                        d_retry,
+                        domain_artifact_path(root_out, key, "retry_queue.json"),
+                    )
+                    del mirror
+                except Exception:
+                    pass
+
+            domain_summaries[key] = d_summary
+            if not primary_summary:
+                primary_summary = d_summary
+
+        bug_written = self.bug_report.write_by_domain(
+            retry_queue=self._retry_queue,
+            domain_keys=domain_keys,
+        )
+        bug_paths = [str(p) for p in bug_written]
+        for path in bug_written:
+            self.logger.info("Bug report: %s", path)
+
+        summary = dict(primary_summary) if primary_summary else {}
+        summary["output_dir"] = str(self.base_output_dir)
+        summary["domain_output_dirs"] = {
+            k: str(self._domain_dir(k)) for k in domain_keys
+        }
+        summary["domain_summaries"] = domain_summaries
+        summary["bug_report"] = bug_paths[0] if bug_paths else ""
+        summary["bug_reports"] = bug_paths
+        summary["bug_failures"] = len(self.bug_report.records)
+        summary["total_input_urls"] = len(seeds)
+        summary["total_discovered_product_urls"] = len(product_urls)
+        summary["total_extracted_products"] = len(products)
+        summary["products_discovered"] = self._crawl_stats.get("discovered", 0)
+        summary["products_processed"] = self._crawl_stats.get("processed", 0)
+        summary["products_skipped"] = self._crawl_stats.get("skipped", 0)
+        summary["products_failed_crawl"] = self._crawl_stats.get("failed", 0)
+        if self.production_validation and self._validation_rows:
+            summary["production_validation"] = build_validation_summary(
+                self._validation_rows
+            )
+        return summary
+
     def _build_production_summary(
         self,
         *,
@@ -951,7 +1153,7 @@ class UniversalCrawler:
             "coverage": coverage_rows,
             "pilot": self.pilot,
             "top_error_reasons_by_domain": top_errors,
-            "output_dir": str(self.output_dir),
+            "output_dir": str(self.base_output_dir),
             "products_discovered": self._crawl_stats.get("discovered", 0),
             "products_processed": self._crawl_stats.get("processed", 0),
             "products_skipped": self._crawl_stats.get("skipped", 0),

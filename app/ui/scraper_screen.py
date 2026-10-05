@@ -38,6 +38,12 @@ from app.ui.icons import load_icon
 from app.ui.sidebar import attach_sidebar
 from app.utils.helpers import is_valid_url, output_filename_from_url
 from app.utils.job_status import TOOL_URL_SCRAPER
+from sentivo_extractor.core.output_layout import (
+    domain_artifact_path,
+    domain_folder_name,
+    domain_output_dir,
+    ensure_domain_dir,
+)
 
 ALL_CATEGORIES_LABEL = "All Categories"
 ALL_CATEGORIES_KEY = "__ALL__"
@@ -1341,6 +1347,19 @@ class ScraperScreen(ctk.CTkFrame):
         self.source_url = urls[0]
         self.suggested_filename = output_filename_from_url(urls[0])
 
+        # Show domain subfolder path(s) in Output Path field.
+        domain_keys = []
+        for u in urls:
+            key = domain_folder_name(u)
+            if key not in domain_keys:
+                domain_keys.append(key)
+        primary_domain = domain_keys[0] if domain_keys else "unknown"
+        domain_out = domain_output_dir(out_folder, primary_domain)
+        ensure_domain_dir(out_folder, primary_domain)
+        self.output_entry.delete(0, "end")
+        self.output_entry.insert(0, str(domain_out))
+        self._output_folder = str(Path(out_folder))  # keep base for CLI --output
+
         kind = "pilot" if self._is_universal_pilot() else "full"
         if kind == "pilot" and max_products is None:
             max_products = 20
@@ -1353,7 +1372,13 @@ class ScraperScreen(ctk.CTkFrame):
         self._show_progress(f"Universal {label} running…")
         self._append_log(f"Mode: {self.mode_var.get()}")
         self._append_log(f"URLs: {len(urls)}")
-        self._append_log(f"Output: {out_folder}")
+        self._append_log(f"Output base: {out_folder}")
+        self._append_log(f"Domain folder: {domain_out}")
+        if len(domain_keys) > 1:
+            self._append_log(
+                "Additional domain folders: "
+                + ", ".join(str(domain_output_dir(out_folder, k)) for k in domain_keys[1:])
+            )
         if max_products is None:
             self._append_log("Max products per domain: unlimited")
         else:
@@ -1366,7 +1391,14 @@ class ScraperScreen(ctk.CTkFrame):
         self._set_running(True)
         thread = threading.Thread(
             target=self._run_universal_extract,
-            args=(kind, seed_urls, Path(out_folder), max_products, vendor),
+            args=(
+                kind,
+                seed_urls,
+                Path(out_folder),
+                max_products,
+                vendor,
+                primary_domain,
+            ),
             daemon=True,
         )
         thread.start()
@@ -1553,11 +1585,16 @@ class ScraperScreen(ctk.CTkFrame):
         out_dir: Path,
         max_products: int | None,
         vendor: str | None = None,
+        primary_domain: str | None = None,
     ) -> None:
         label = "Pilot" if kind == "pilot" else "Full"
         try:
             out_dir = Path(out_dir)
             out_dir.mkdir(parents=True, exist_ok=True)
+            domain_key = primary_domain or domain_folder_name(
+                str((seed_urls[0] or {}).get("url") or "")
+            )
+            domain_dir = ensure_domain_dir(out_dir, domain_key)
             input_csv = out_dir / "hashim_websites.csv"
 
             with input_csv.open("w", newline="", encoding="utf-8") as f:
@@ -1605,7 +1642,8 @@ class ScraperScreen(ctk.CTkFrame):
 
             self._emit_log(f"Seed CSV: {input_csv}")
             self._emit_log(f"CMD: {' '.join(cmd)}")
-            self._emit_log(f"Output: {out_dir}")
+            self._emit_log(f"Output base: {out_dir}")
+            self._emit_log(f"Domain folder: {domain_dir}")
 
             env = os.environ.copy()
             env["PYTHONPATH"] = (
@@ -1658,12 +1696,17 @@ class ScraperScreen(ctk.CTkFrame):
                 )
                 return
 
-            def _complete_fallback(o=out_dir) -> None:
-                count = self._count_products_in_csv(Path(o) / "shopify_import.csv")
+            def _complete_fallback(o=domain_dir, d=domain_key) -> None:
+                csv_path = domain_artifact_path(o.parent, d, "shopify_import.csv")
+                if not csv_path.exists():
+                    csv_path = Path(o) / "shopify_import.csv"
+                count = self._count_products_in_csv(csv_path)
                 self._store_mark_complete(count)
 
             self._post_to_scraper_ui(
-                lambda s, o=out_dir, k=kind: s._on_universal_success(o, k),
+                lambda s, o=domain_dir, k=kind, d=domain_key: s._on_universal_success(
+                    o, k, d
+                ),
                 fallback=_complete_fallback,
             )
         except Exception as exc:  # noqa: BLE001
@@ -1684,7 +1727,7 @@ class ScraperScreen(ctk.CTkFrame):
         if not csv_path.exists():
             return 0
         try:
-            with csv_path.open(encoding="utf-8", newline="") as f:
+            with csv_path.open(encoding="utf-8-sig", newline="") as f:
                 reader = csv.DictReader(f)
                 fields = reader.fieldnames or []
                 if "Handle" in fields:
@@ -1698,7 +1741,12 @@ class ScraperScreen(ctk.CTkFrame):
         except Exception:
             return 0
 
-    def _on_universal_success(self, out_dir: Path, kind: str = "full") -> None:
+    def _on_universal_success(
+        self,
+        out_dir: Path,
+        kind: str = "full",
+        domain_key: str | None = None,
+    ) -> None:
         if self._job_stop_requested():
             self._finish_stopped_ui()
             return
@@ -1707,9 +1755,23 @@ class ScraperScreen(ctk.CTkFrame):
         self.parsed_data = None  # never feed MappingScreen
         self._universal_output_dir = out_dir
         self._universal_run_kind = kind
+        self._universal_domain_key = domain_key or domain_folder_name(
+            getattr(self, "source_url", "") or out_dir.name
+        )
 
-        csv_path = out_dir / "shopify_import.csv"
+        csv_path = domain_artifact_path(
+            out_dir.parent, self._universal_domain_key, "shopify_import.csv"
+        )
+        if not csv_path.exists():
+            # out_dir is already the domain folder
+            csv_path = out_dir / f"{self._universal_domain_key}_shopify_import.csv"
+        if not csv_path.exists():
+            csv_path = out_dir / "shopify_import.csv"
         product_count = self._count_products_in_csv(csv_path)
+
+        # Keep Output Path field on the domain folder
+        self.output_entry.delete(0, "end")
+        self.output_entry.insert(0, str(out_dir))
 
         mode_name = (
             "Universal Extractor Pilot"
@@ -1737,9 +1799,9 @@ class ScraperScreen(ctk.CTkFrame):
             "Success",
         )
         self._append_log(
-            f"Complete — {product_count} product(s) in shopify_import.csv"
+            f"Complete — {product_count} product(s) in {csv_path.name}"
         )
-        self._append_log(f"shopify_import.csv → {csv_path}")
+        self._append_log(f"{csv_path.name} → {csv_path}")
         self._rebuild_output_buttons(kind)
         self._show_output_actions()
         self._enable_actions()
@@ -1758,22 +1820,34 @@ class ScraperScreen(ctk.CTkFrame):
         if not out:
             self.error_label.configure(text="No universal output folder yet.")
             return
+        domain_key = getattr(self, "_universal_domain_key", None) or out.name
         mapping = {
             "folder": out,
-            "csv": out / "shopify_import.csv",
-            "summary": out / "production_summary.xlsx",
+            "csv": out / f"{domain_key}_shopify_import.csv",
+            "summary": out / f"{domain_key}_production_summary.xlsx",
             "qa": out / "qa" / "sample_review.xlsx",
-            "preimport": out / "shopify_pre_import_validation.xlsx",
-            "validation": out / "validation_report.xlsx",
-            "images": out / "images_manifest.csv",
+            "preimport": out / f"{domain_key}_shopify_pre_import_validation.xlsx",
+            "validation": out / f"{domain_key}_validation_report.xlsx",
+            "images": out / f"{domain_key}_images_manifest.csv",
         }
         target = mapping.get(key)
         if target is None:
             return
         if key != "folder" and not Path(target).exists():
+            # Fall back to unprefixed legacy names inside the domain folder
+            legacy_names = {
+                "csv": "shopify_import.csv",
+                "summary": "production_summary.xlsx",
+                "preimport": "shopify_pre_import_validation.xlsx",
+                "validation": "validation_report.xlsx",
+                "images": "images_manifest.csv",
+            }
+            legacy = out / legacy_names[key] if key in legacy_names else None
             alt = Path(str(target)).with_suffix(".csv")
             alt2 = Path(str(target)).with_suffix(".json")
-            if alt.exists():
+            if legacy is not None and legacy.exists():
+                target = legacy
+            elif alt.exists():
                 target = alt
             elif alt2.exists():
                 target = alt2

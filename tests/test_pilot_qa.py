@@ -244,7 +244,10 @@ def test_pilot_overwrite_guard():
 
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp)
-        (out / "shopify_import.csv").write_text("Handle\nx\n", encoding="utf-8")
+        # Domain-prefixed pilot CSV under example/
+        domain_csv = out / "example" / "example_shopify_import.csv"
+        domain_csv.parent.mkdir(parents=True, exist_ok=True)
+        domain_csv.write_text("Handle\nx\n", encoding="utf-8")
         crawler = UniversalCrawler(
             {
                 "output": str(out),

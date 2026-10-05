@@ -36,13 +36,33 @@ def test_overwrite_does_not_load_existing_checkpoint():
 
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp)
-        ck = out / "checkpoint.json"
-        ck.write_text(
+        # Legacy root checkpoint + new domain-prefixed checkpoint
+        legacy = out / "checkpoint.json"
+        legacy.write_text(
             json.dumps(
                 {
                     "completed_urls": ["https://shop.example/products/old"],
-                    "failed_urls": [{"url": "https://shop.example/products/bad", "error": "x"}],
-                    "products": [{"title": "Old", "source_url": "https://shop.example/products/old"}],
+                    "failed_urls": [
+                        {"url": "https://shop.example/products/bad", "error": "x"}
+                    ],
+                    "products": [
+                        {
+                            "title": "Old",
+                            "source_url": "https://shop.example/products/old",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        domain_ck = out / "shop" / "shop_checkpoint.json"
+        domain_ck.parent.mkdir(parents=True, exist_ok=True)
+        domain_ck.write_text(
+            json.dumps(
+                {
+                    "completed_urls": ["https://shop.example/products/old2"],
+                    "failed_urls": [],
+                    "products": [],
                 }
             ),
             encoding="utf-8",
@@ -59,7 +79,8 @@ def test_overwrite_does_not_load_existing_checkpoint():
         try:
             assert crawler.checkpoint.completed_count() == 0
             assert crawler.checkpoint.products() == []
-            assert not ck.exists()
+            assert not legacy.exists()
+            assert not domain_ck.exists()
         finally:
             close_logger(crawler.logger)
 

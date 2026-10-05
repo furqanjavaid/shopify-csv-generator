@@ -9,6 +9,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from sentivo_extractor.core.output_layout import (
+    domain_artifact_path,
+    domain_folder_name,
+    ensure_domain_dir,
+)
 from sentivo_extractor.core.site_rule_suggester import domain_from_url
 from sentivo_extractor.core.utils import write_json
 
@@ -114,10 +119,11 @@ class BugReportCollector:
     """Collect per-product failure artifacts and write bug_report.xlsx."""
 
     def __init__(self, output_dir: Path, *, run_mode: str = "") -> None:
+        # output_dir is the user-selected base path; artifacts go under domain subfolders.
         self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         self.run_mode = run_mode
-        self.failures_dir = self.output_dir / "bug_failures"
-        self.failures_dir.mkdir(parents=True, exist_ok=True)
+        self.failures_dir = self.output_dir / "bug_failures"  # legacy alias
         self.records: list[FailureRecord] = []
         self._seen: set[tuple[str, str]] = set()
 
@@ -138,6 +144,7 @@ class BugReportCollector:
         reason = str(reason or "unknown_failure")
         stage = stage or infer_stage(reason, run_mode=mode)
         domain = domain_from_url(url)
+        folder = domain_folder_name(url)
         key = (url, reason)
         if key in self._seen:
             # Still allow artifact refresh if missing, but don't duplicate rows
@@ -147,7 +154,7 @@ class BugReportCollector:
         self._seen.add(key)
 
         slug = _safe_slug(url)
-        base = self.failures_dir / domain
+        base = ensure_domain_dir(self.output_dir, folder) / "bug_failures"
         base.mkdir(parents=True, exist_ok=True)
         stem = f"{len(self.records)+1:04d}_{slug}"
 
@@ -233,6 +240,44 @@ class BugReportCollector:
             retry_queue=retry_queue or [],
             summary=self.summary(),
         )
+
+    def write_by_domain(
+        self,
+        *,
+        retry_queue: list[dict[str, Any]] | None = None,
+        domain_keys: list[str] | None = None,
+    ) -> list[Path]:
+        """Write prefixed bug_report.xlsx (+ .json) under each domain folder."""
+        retry_queue = retry_queue or []
+        by_domain: dict[str, list[FailureRecord]] = {}
+        for record in self.records:
+            key = domain_folder_name(record.product_url)
+            by_domain.setdefault(key, []).append(record)
+        keys = list(domain_keys or [])
+        for key in by_domain:
+            if key not in keys:
+                keys.append(key)
+        paths: list[Path] = []
+        for key in keys:
+            recs = by_domain.get(key) or []
+            domain_retries = [
+                item
+                for item in retry_queue
+                if domain_folder_name(str((item or {}).get("url") or "")) == key
+            ]
+            path = domain_artifact_path(self.output_dir, key, "bug_report.xlsx")
+            write_bug_report_xlsx(
+                path,
+                records=recs,
+                retry_queue=domain_retries,
+                summary={
+                    "total_failures": len(recs),
+                    "domain": key,
+                    "run_mode": self.run_mode,
+                },
+            )
+            paths.append(path)
+        return paths
 
 
 def write_bug_report_xlsx(
