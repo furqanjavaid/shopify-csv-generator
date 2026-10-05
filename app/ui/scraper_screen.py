@@ -75,10 +75,11 @@ FULL_OUTPUT_BUTTONS = (
 
 
 class _BoundedCategoryCombo(Combobox):
-    """Mode-styled Combobox with a width-matched, max-10-row scrollable list."""
+    """Mode-styled Combobox with a width-matched, height-capped scrollable list."""
 
-    _MAX_VISIBLE = 10
-    _ROW_HEIGHT = 32
+    _MAX_POPUP_HEIGHT = 300
+    _ROW_HEIGHT = 30
+    _PAD = 8
 
     def __init__(
         self,
@@ -123,6 +124,41 @@ class _BoundedCategoryCombo(Combobox):
     def _close_popup(self) -> None:
         self._close_menu()
 
+    def _popup_height(self, n_items: int) -> int:
+        """Height for N items, capped at 300px (~10 rows)."""
+        content = max(1, n_items) * self._ROW_HEIGHT + self._PAD
+        return min(self._MAX_POPUP_HEIGHT, content)
+
+    def _place_popup(self, combo_x: int, combo_y: int, combo_h: int, popup_h: int) -> int:
+        """Prefer below the field; flip above when there isn't enough room."""
+        gap = 2
+        below_y = combo_y + combo_h + gap
+        screen_h = int(self.winfo_screenheight() or 0)
+        if screen_h and below_y + popup_h > screen_h - 16:
+            return max(8, combo_y - popup_h - gap)
+        return below_y
+
+    def _lock_popup_geometry(
+        self,
+        menu: ctk.CTkToplevel,
+        *,
+        w: int,
+        h: int,
+        x: int,
+        y: int,
+    ) -> None:
+        geo = f"{w}x{h}+{x}+{y}"
+        try:
+            menu.geometry(geo)
+            menu.minsize(w, h)
+            menu.maxsize(w, h)
+            menu.resizable(False, False)
+        except Exception:
+            try:
+                menu.geometry(geo)
+            except Exception:
+                pass
+
     def _open_menu(self) -> None:
         try:
             if str(self._btn.cget("state")) == "disabled":
@@ -136,22 +172,15 @@ class _BoundedCategoryCombo(Combobox):
             return
 
         self.update_idletasks()
-        # Exact pixel width of the combobox field (never grow to content/screen).
         combo_w = max(int(self.winfo_width() or 0), 160)
         combo_h = max(int(self.winfo_height() or 0), T.INPUT_HEIGHT)
         combo_x = int(self.winfo_rootx())
         combo_y = int(self.winfo_rooty())
-        inner_w = max(combo_w - 4, 120)
-
-        visible = min(len(self._values), self._MAX_VISIBLE)
-        popup_h = visible * self._ROW_HEIGHT + 10
-
-        below_y = combo_y + combo_h + 2
-        screen_h = int(self.winfo_screenheight() or 0)
-        if screen_h and below_y + popup_h > screen_h - 24:
-            popup_y = max(8, combo_y - popup_h - 2)
-        else:
-            popup_y = below_y
+        popup_h = self._popup_height(len(self._values))
+        popup_y = self._place_popup(combo_x, combo_y, combo_h, popup_h)
+        scroll_h = max(popup_h - 4, self._ROW_HEIGHT)
+        scroll_w = max(combo_w - 4, 120)
+        btn_w = max(scroll_w - 28, 100)
 
         c = T.current_colors()
         menu = ctk.CTkToplevel(self)
@@ -162,13 +191,9 @@ class _BoundedCategoryCombo(Combobox):
         except Exception:
             pass
         self._menu = menu
-        # Lock toplevel size before children can request a wider layout.
-        menu.geometry(f"{combo_w}x{popup_h}+{combo_x}+{popup_y}")
-        try:
-            menu.minsize(combo_w, popup_h)
-            menu.maxsize(combo_w, popup_h)
-        except Exception:
-            pass
+        self._lock_popup_geometry(
+            menu, w=combo_w, h=popup_h, x=combo_x, y=popup_y
+        )
 
         wrap = ctk.CTkFrame(
             menu,
@@ -179,30 +204,25 @@ class _BoundedCategoryCombo(Combobox):
             width=combo_w,
             height=popup_h,
         )
-        wrap.pack(fill="both", expand=True)
-        try:
-            wrap.pack_propagate(False)
-        except Exception:
-            pass
+        wrap.place(x=0, y=0, width=combo_w, height=popup_h)
 
         scroll = ctk.CTkScrollableFrame(
             wrap,
             fg_color=c["INPUT_BG"],
-            width=inner_w,
-            height=max(popup_h - 8, self._ROW_HEIGHT),
+            width=scroll_w,
+            height=scroll_h,
             corner_radius=0,
         )
-        scroll.pack(fill="both", expand=True, padx=2, pady=2)
-        # Prevent long labels from expanding the scrollable frame/parent.
+        # Pack the scrollable's outer frame into a fixed viewport.
+        scroll.place(x=2, y=2, width=scroll_w, height=scroll_h)
         try:
             parent_frame = getattr(scroll, "_parent_frame", None)
             if parent_frame is not None:
-                parent_frame.configure(width=inner_w)
-                parent_frame.pack_propagate(False)
+                parent_frame.place(x=2, y=2, width=scroll_w, height=scroll_h)
+                parent_frame.configure(width=scroll_w, height=scroll_h)
         except Exception:
             pass
 
-        btn_w = max(inner_w - 28, 100)
         for val in self._values:
             b = ctk.CTkButton(
                 scroll,
@@ -225,10 +245,20 @@ class _BoundedCategoryCombo(Combobox):
         contain_mousewheel(menu)
         contain_mousewheel(scroll)
 
-        # Re-assert exact size after layout (children must not widen the popup).
-        menu.geometry(f"{combo_w}x{popup_h}+{combo_x}+{popup_y}")
+        self._lock_popup_geometry(
+            menu, w=combo_w, h=popup_h, x=combo_x, y=popup_y
+        )
         menu.deiconify()
-        menu.after(0, lambda: menu.geometry(f"{combo_w}x{popup_h}+{combo_x}+{popup_y}"))
+        menu.update_idletasks()
+        self._lock_popup_geometry(
+            menu, w=combo_w, h=popup_h, x=combo_x, y=popup_y
+        )
+        menu.after(
+            0,
+            lambda: self._lock_popup_geometry(
+                menu, w=combo_w, h=popup_h, x=combo_x, y=popup_y
+            ),
+        )
         menu.after(200, lambda m=menu: self._arm_menu_dismiss(m))
 
 
