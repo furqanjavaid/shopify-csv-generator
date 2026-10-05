@@ -44,6 +44,8 @@ from sentivo_extractor.core.output_layout import (
 
 MODE_UNIVERSAL = "Universal Extractor Pilot"
 MODE_UNIVERSAL_FULL = "Universal Extractor Full"
+ALL_CATEGORIES_LABEL = "All Categories (Full Site)"
+ALL_CATEGORIES_KEY = "__ALL__"
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "output" / "gui_extract"
@@ -234,7 +236,15 @@ class ScraperScreen(ctk.CTkFrame):
         # Seed URLs
         ctk.CTkLabel(
             cfg, text="Seed URLs", font=T.font(12, "bold"), text_color=T.TEXT_MUTED, anchor="w"
-        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 2))
+        ).grid(row=1, column=0, sticky="w", pady=(2, 2))
+        self.fetch_categories_btn = T.secondary_button(
+            cfg,
+            "Fetch Categories →",
+            self._fetch_categories,
+            width=160,
+            height=28,
+        )
+        self.fetch_categories_btn.grid(row=1, column=1, sticky="e", pady=(2, 2))
         self.url_text = ctk.CTkTextbox(
             cfg,
             height=72,
@@ -244,6 +254,29 @@ class ScraperScreen(ctk.CTkFrame):
         self.url_text.grid(row=2, column=0, columnspan=2, sticky="ew")
         self._seed_placeholder_active = False
         self._install_seed_url_placeholder()
+
+        # Category filter (populated by Fetch Categories)
+        self._category_options: dict[str, str] = {ALL_CATEGORIES_LABEL: ALL_CATEGORIES_KEY}
+        self._fetching_categories = False
+        self.category_row = ctk.CTkFrame(cfg, fg_color="transparent")
+        self.category_row.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        self.category_row.grid_columnconfigure(0, weight=1)
+        self.category_status = ctk.CTkLabel(
+            self.category_row,
+            text="",
+            font=T.font_tuple(T.CAPTION),
+            text_color=T.TEXT_MUTED,
+            anchor="w",
+        )
+        self.category_status.grid(row=0, column=0, sticky="ew", pady=(0, 2))
+        self.category_menu = Combobox(
+            self.category_row,
+            [ALL_CATEGORIES_LABEL],
+            command=self._on_category_selected,
+            width=420,
+        )
+        self.category_menu.grid(row=1, column=0, sticky="ew")
+        self.category_menu.set(ALL_CATEGORIES_LABEL)
 
         self.platform_label = ctk.CTkLabel(
             cfg, text="", font=T.font_tuple(T.CAPTION), text_color=T.GOLD, anchor="w"
@@ -902,6 +935,8 @@ class ScraperScreen(ctk.CTkFrame):
             self.max_products_entry,
             self.vendor_checkbox,
             self.vendor_entry,
+            self.fetch_categories_btn,
+            self.category_menu,
         ):
             try:
                 widget.configure(state=state)
@@ -1033,6 +1068,7 @@ class ScraperScreen(ctk.CTkFrame):
         self.strategy_label.configure(text="")
         self._set_status_badge("Ready")
         self.platform_label.configure(text="")
+        self._reset_category_filter()
         self._hide_output_actions()
         self.log_box.configure(state="normal")
         try:
@@ -1051,6 +1087,136 @@ class ScraperScreen(ctk.CTkFrame):
         self._set_running(False)
         self._show_seed_placeholder()
         self._on_mode_changed(self.mode_var.get())
+
+    def _reset_category_filter(self) -> None:
+        self._category_options = {ALL_CATEGORIES_LABEL: ALL_CATEGORIES_KEY}
+        try:
+            self.category_menu.configure(values=[ALL_CATEGORIES_LABEL])
+            self.category_menu.set(ALL_CATEGORIES_LABEL)
+        except Exception:
+            pass
+        try:
+            self.category_status.configure(text="")
+        except Exception:
+            pass
+
+    def _on_category_selected(self, _label: str) -> None:
+        self.error_label.configure(text="")
+
+    def _selected_category_url(self) -> str | None:
+        """Return selected category URL, or None for full-site (all categories)."""
+        label = self.category_menu.get()
+        value = self._category_options.get(label)
+        if not value or value == ALL_CATEGORIES_KEY:
+            return None
+        return value
+
+    def _fetch_categories(self) -> None:
+        """Discover categories/collections from the first Seed URL."""
+        if self._running or self._fetching_categories:
+            return
+        urls = self._parse_urls_from_text()
+        if not urls:
+            self.error_label.configure(text="Enter at least one Seed URL before fetching categories.")
+            return
+        seed = urls[0]
+        if not is_valid_url(seed):
+            self.error_label.configure(
+                text="Seed URL must start with http:// or https://"
+            )
+            return
+
+        self.error_label.configure(text="")
+        self._fetching_categories = True
+        try:
+            self.fetch_categories_btn.configure(
+                state="disabled", text="Fetching…"
+            )
+        except Exception:
+            pass
+        self.category_status.configure(text="Discovering categories…")
+        self._append_log(f"Fetching categories from: {seed}")
+
+        def _worker() -> None:
+            try:
+                from sentivo_extractor.core.category_discovery import (
+                    discover_categories,
+                )
+
+                result = discover_categories(seed)
+                self.after(0, lambda: self._on_categories_fetched(result, seed))
+            except Exception as exc:  # noqa: BLE001
+                msg = str(exc)
+                self.after(0, lambda m=msg: self._on_categories_fetch_error(m))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_categories_fetched(self, result: dict, seed: str) -> None:
+        self._fetching_categories = False
+        try:
+            self.fetch_categories_btn.configure(
+                state="disabled" if self._running else "normal",
+                text="Fetch Categories →",
+            )
+        except Exception:
+            pass
+
+        platform = str((result or {}).get("platform") or "Unknown")
+        categories = list((result or {}).get("categories") or [])
+        source = str((result or {}).get("source") or "nav")
+
+        self._category_options = {ALL_CATEGORIES_LABEL: ALL_CATEGORIES_KEY}
+        labels = [ALL_CATEGORIES_LABEL]
+        for cat in categories:
+            label = str(cat.get("label") or "").strip()
+            url = str(cat.get("url") or "").strip()
+            if not label or not url:
+                continue
+            if label == ALL_CATEGORIES_LABEL:
+                label = f"{label} (store)"
+            # Disambiguate duplicate labels
+            base_label = label
+            n = 2
+            while label in self._category_options:
+                label = f"{base_label} ({n})"
+                n += 1
+            self._category_options[label] = url
+            labels.append(label)
+
+        self.category_menu.configure(values=labels)
+        self.category_menu.set(ALL_CATEGORIES_LABEL)
+        count = len(labels) - 1
+        if count:
+            self.category_status.configure(
+                text=f"{platform} · {count} categories found ({source})"
+            )
+            self.platform_label.configure(
+                text=f"Detected: {platform} · {count} categories"
+            )
+            self._append_log(
+                f"Found {count} categories via {source} ({platform})"
+            )
+        else:
+            self.category_status.configure(
+                text=f"{platform} · no categories found — using full site"
+            )
+            self.platform_label.configure(text=f"Detected: {platform}")
+            self._append_log(
+                f"No categories found for {seed} ({platform}); defaulting to full site"
+            )
+
+    def _on_categories_fetch_error(self, message: str) -> None:
+        self._fetching_categories = False
+        try:
+            self.fetch_categories_btn.configure(
+                state="disabled" if self._running else "normal",
+                text="Fetch Categories →",
+            )
+        except Exception:
+            pass
+        self.category_status.configure(text="Category fetch failed")
+        self.error_label.configure(text=f"Category fetch failed: {message}")
+        self._append_log(f"ERROR: category fetch failed — {message}")
 
     def _read_max_products(self) -> int | None:
         """Return max products, or None when unlimited (empty / 0)."""
@@ -1298,6 +1464,12 @@ class ScraperScreen(ctk.CTkFrame):
             self.clear_btn.configure(state="normal")
             return
 
+        # Optional category filter — scrape only the selected collection/category.
+        selected_category = self._selected_category_url()
+        category_label = self.category_menu.get()
+        if selected_category:
+            urls = [selected_category]
+
         out_folder = (self.output_entry.get() or "").strip() or self._output_folder
         if not out_folder:
             self.error_label.configure(text="Select an output folder.")
@@ -1342,6 +1514,11 @@ class ScraperScreen(ctk.CTkFrame):
         label = "Pilot" if kind == "pilot" else "Full"
         self._show_progress(f"Universal {label} running…")
         self._append_log(f"Mode: {self.mode_var.get()}")
+        if selected_category:
+            self._append_log(f"Category filter: {category_label}")
+            self._append_log(f"Category URL: {selected_category}")
+        else:
+            self._append_log(f"Category filter: {ALL_CATEGORIES_LABEL}")
         self._append_log(f"URLs: {len(urls)}")
         self._append_log(f"Output base: {out_folder}")
         self._append_log(f"Domain folder: {domain_out}")
