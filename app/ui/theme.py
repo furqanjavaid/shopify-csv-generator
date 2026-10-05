@@ -136,6 +136,12 @@ def apply_theme(mode: str | None = None) -> str:
         ctk.set_appearance_mode("light")
     except Exception:
         pass
+    try:
+        from app.ui.scroll_fix import install_scroll_fix
+
+        install_scroll_fix()
+    except Exception:
+        pass
     return "light"
 
 
@@ -332,6 +338,12 @@ def styled_textbox(parent, height: int = 100, **kw) -> ctk.CTkTextbox:
 
 def thin_scrollable_frame(parent, **kw) -> ctk.CTkScrollableFrame:
     """CTkScrollableFrame with a thin light scrollbar."""
+    try:
+        from app.ui.scroll_fix import install_scroll_fix
+
+        install_scroll_fix()
+    except Exception:
+        pass
     c = current_colors()
     opts = {
         "fg_color": "transparent",

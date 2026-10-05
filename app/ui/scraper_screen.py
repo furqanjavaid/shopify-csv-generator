@@ -74,34 +74,74 @@ FULL_OUTPUT_BUTTONS = (
 )
 
 
-class _BoundedCategoryCombo(ctk.CTkComboBox):
-    """CTkComboBox whose list is width-matched and capped (avoids native Menu spill)."""
+class _BoundedCategoryCombo(Combobox):
+    """Mode-styled Combobox with a width-matched, max-10-row scrollable list."""
 
     _MAX_VISIBLE = 10
     _ROW_HEIGHT = 32
 
-    def __init__(self, master, **kwargs):
-        super().__init__(master, **kwargs)
-        self._popup: ctk.CTkToplevel | None = None
+    def __init__(
+        self,
+        master,
+        values: list[str],
+        *,
+        command=None,
+        width: int = 220,
+        **kwargs,
+    ):
+        # Ignore CTkComboBox-only kwargs if callers pass theme combo styles.
+        for key in (
+            "state",
+            "fg_color",
+            "border_color",
+            "border_width",
+            "button_color",
+            "button_hover_color",
+            "dropdown_fg_color",
+            "dropdown_hover_color",
+            "dropdown_text_color",
+            "text_color",
+            "font",
+            "height",
+            "corner_radius",
+        ):
+            kwargs.pop(key, None)
+        super().__init__(
+            master,
+            values,
+            command=command,
+            width=width,
+            **kwargs,
+        )
 
-    def _open_dropdown_menu(self) -> None:
-        """Open a scrollable popup aligned to this widget (content panel only)."""
-        if str(self.cget("state")) == "disabled":
+    def configure(self, **kwargs):  # noqa: A003
+        state = kwargs.get("state")
+        if state is not None and str(state) == "readonly":
+            kwargs["state"] = "normal"
+        super().configure(**kwargs)
+
+    def _close_popup(self) -> None:
+        self._close_menu()
+
+    def _open_menu(self) -> None:
+        try:
+            if str(self._btn.cget("state")) == "disabled":
+                return
+        except Exception:
+            pass
+        if self._menu is not None:
+            self._close_menu()
             return
-        if self._popup is not None:
-            self._close_popup()
-            return
-        values = list(getattr(self, "_values", None) or [])
-        if not values:
+        if not self._values:
             return
 
         self.update_idletasks()
         combo_w = max(int(self.winfo_width() or 0), 160)
-        combo_h = max(int(self.winfo_height() or 0), 28)
+        combo_h = max(int(self.winfo_height() or 0), T.INPUT_HEIGHT)
         combo_x = int(self.winfo_rootx())
         combo_y = int(self.winfo_rooty())
 
-        visible = min(len(values), self._MAX_VISIBLE)
+        visible = min(len(self._values), self._MAX_VISIBLE)
         popup_h = visible * self._ROW_HEIGHT + 10
 
         below_y = combo_y + combo_h + 2
@@ -112,17 +152,17 @@ class _BoundedCategoryCombo(ctk.CTkComboBox):
             popup_y = below_y
 
         c = T.current_colors()
-        popup = ctk.CTkToplevel(self)
-        popup.withdraw()
-        popup.overrideredirect(True)
+        menu = ctk.CTkToplevel(self)
+        menu.withdraw()
+        menu.overrideredirect(True)
         try:
-            popup.attributes("-topmost", True)
+            menu.attributes("-topmost", True)
         except Exception:
             pass
-        self._popup = popup
+        self._menu = menu
 
         wrap = ctk.CTkFrame(
-            popup,
+            menu,
             fg_color=c["INPUT_BG"],
             border_width=1,
             border_color=c["BORDER"],
@@ -138,7 +178,7 @@ class _BoundedCategoryCombo(ctk.CTkComboBox):
         )
         scroll.pack(fill="both", expand=True, padx=2, pady=2)
 
-        for val in values:
+        for val in self._values:
             b = ctk.CTkButton(
                 scroll,
                 text=val,
@@ -150,59 +190,18 @@ class _BoundedCategoryCombo(ctk.CTkComboBox):
                 height=self._ROW_HEIGHT - 2,
                 corner_radius=6,
                 border_width=0,
-                command=lambda v=val: self._pick_popup_value(v),
+                command=lambda v=val: self._pick(v),
             )
             b.pack(fill="x", padx=4, pady=1)
 
-        popup.geometry(f"{combo_w}x{popup_h}+{combo_x}+{popup_y}")
-        popup.deiconify()
-        popup.after(180, lambda p=popup: self._arm_popup_dismiss(p))
+        from app.ui.scroll_fix import contain_mousewheel
 
-    def _pick_popup_value(self, value: str) -> None:
-        try:
-            self.set(value)
-        except Exception:
-            pass
-        self._close_popup()
-        cmd = getattr(self, "_command", None)
-        if cmd:
-            cmd(value)
+        contain_mousewheel(menu)
+        contain_mousewheel(scroll)
 
-    def _arm_popup_dismiss(self, popup: ctk.CTkToplevel) -> None:
-        if self._popup is not popup:
-            return
-        try:
-            popup.bind("<FocusOut>", lambda _e: self.after(80, self._close_if_unfocused), add="+")
-            popup.bind("<Escape>", lambda _e: self._close_popup(), add="+")
-            popup.focus_set()
-        except Exception:
-            pass
-
-    def _close_if_unfocused(self) -> None:
-        if self._popup is None:
-            return
-        try:
-            focused = self._popup.focus_get()
-            widget = focused
-            while widget is not None:
-                if widget == self._popup:
-                    return
-                widget = getattr(widget, "master", None)
-        except Exception:
-            pass
-        self._close_popup()
-
-    def _close_popup(self) -> None:
-        if self._popup is not None:
-            try:
-                self._popup.destroy()
-            except Exception:
-                pass
-            self._popup = None
-
-    def destroy(self) -> None:
-        self._close_popup()
-        super().destroy()
+        menu.geometry(f"{combo_w}x{popup_h}+{combo_x}+{popup_y}")
+        menu.deiconify()
+        menu.after(200, lambda m=menu: self._arm_menu_dismiss(m))
 
 
 class ScraperScreen(ctk.CTkFrame):
@@ -393,14 +392,12 @@ class ScraperScreen(ctk.CTkFrame):
         self.category_row = ctk.CTkFrame(cfg, fg_color="transparent")
         self.category_row.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(0, 4))
         self.category_row.grid_columnconfigure(0, weight=1)
-        # Bounded popup: same width as Seed URLs row, max 10 rows + scrollbar.
+        # Same styled Combobox as Mode; bounded scrollable list on open.
         self.category_menu = _BoundedCategoryCombo(
             self.category_row,
-            values=[ALL_CATEGORIES_LABEL],
+            [ALL_CATEGORIES_LABEL],
             command=self._on_category_selected,
             width=400,
-            state="readonly",
-            **T.combo_box_style(),
         )
         self.category_menu.grid(row=0, column=0, sticky="ew")
         self.category_menu.set(ALL_CATEGORIES_LABEL)
@@ -1079,7 +1076,7 @@ class ScraperScreen(ctk.CTkFrame):
                 pass
         try:
             self.category_menu.configure(
-                state="disabled" if locked else "readonly"
+                state="disabled" if locked else "normal"
             )
         except Exception:
             pass

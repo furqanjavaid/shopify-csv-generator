@@ -188,6 +188,12 @@ def main() -> None:
     T.apply_theme("light")
     ctk.set_appearance_mode("light")
     ctk.set_default_color_theme("blue")
+    try:
+        from app.ui.scroll_fix import install_scroll_fix
+
+        install_scroll_fix()
+    except Exception:
+        pass
     app = App()
     try:
         T.apply_thin_scrollbars(app)
