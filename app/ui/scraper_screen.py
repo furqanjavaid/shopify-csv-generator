@@ -3,8 +3,6 @@
 Modes:
   1. Universal Extractor Full (default) — multi-URL extract → shopify_import.csv
   2. Universal Extractor Pilot — capped pilot extract → shopify_import.csv
-  3. Legacy Scraper — crawl() → MappingScreen → ShopifyGenerator
-     Pilot/Full never open MappingScreen / ShopifyGenerator
 """
 
 from __future__ import annotations
@@ -21,7 +19,6 @@ from tkinter import filedialog
 
 import customtkinter as ctk
 
-from app.core.collection_crawler import CollectionCrawlError, crawl
 from app.ui import theme as T
 from app.ui.components import (
     Card,
@@ -45,10 +42,6 @@ from sentivo_extractor.core.output_layout import (
     ensure_domain_dir,
 )
 
-ALL_CATEGORIES_LABEL = "All Categories"
-ALL_CATEGORIES_KEY = "__ALL__"
-
-MODE_LEGACY = "Legacy Scraper"
 MODE_UNIVERSAL = "Universal Extractor Pilot"
 MODE_UNIVERSAL_FULL = "Universal Extractor Full"
 
@@ -80,7 +73,7 @@ FULL_OUTPUT_BUTTONS = (
 
 
 class ScraperScreen(ctk.CTkFrame):
-    """Scrape catalog URLs via Universal Extractor (default) or Legacy crawler."""
+    """Scrape catalog URLs via Universal Extractor (Full or Pilot)."""
 
     def __init__(self, parent, app, **kwargs):
         super().__init__(parent, fg_color=T.BG_PRIMARY, corner_radius=0)
@@ -144,7 +137,7 @@ class ScraperScreen(ctk.CTkFrame):
         # Themed Combobox (white field + navy text + soft burgundy hover) — matches mockup
         self.mode_menu = Combobox(
             left_col,
-            [MODE_UNIVERSAL_FULL, MODE_UNIVERSAL, MODE_LEGACY],
+            [MODE_UNIVERSAL_FULL, MODE_UNIVERSAL],
             variable=self.mode_var,
             command=self._on_mode_changed,
             width=280,
@@ -252,73 +245,10 @@ class ScraperScreen(ctk.CTkFrame):
         self._seed_placeholder_active = False
         self._install_seed_url_placeholder()
 
-        self.url_entry = T.styled_entry(
-            cfg, placeholder="Legacy: paste one collection URL here (optional)"
-        )
-        self.url_entry.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(8, 0))
-        self.url_entry.grid_remove()
-        self.url_entry.bind("<FocusOut>", self._on_url_changed)
-        self.url_entry.bind("<Return>", self._on_url_changed)
-
         self.platform_label = ctk.CTkLabel(
             cfg, text="", font=T.font_tuple(T.CAPTION), text_color=T.GOLD, anchor="w"
         )
         self.platform_label.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(4, 0))
-
-        self._category_options: dict[str, str] = {}
-        self._discovered_categories: list[dict] = []
-        # Category dropdown — between Seed URLs (rows 1–4) and Run/Stop (row 7)
-        self.category_row = ctk.CTkFrame(cfg, fg_color="transparent")
-        self.category_row.grid(row=5, column=0, columnspan=2, sticky="ew")
-        self.category_row.grid_columnconfigure(0, weight=1)
-        self.category_hint = ctk.CTkLabel(
-            self.category_row,
-            text="Homepage detected — select a category to scrape:",
-            font=T.font_tuple(T.CAPTION),
-            text_color=T.TEXT_SECONDARY,
-            anchor="w",
-        )
-        self.category_hint.grid(row=0, column=0, sticky="ew", pady=(0, 4))
-        self.category_hint.grid_remove()
-        self.category_menu = Combobox(
-            self.category_row,
-            ["Select a category…"],
-            command=self._on_category_selected,
-            width=420,
-        )
-        self.category_menu.grid(row=1, column=0, sticky="ew")
-        self.category_menu.set("Select a category…")
-
-        # Legacy checkboxes
-        opts = ctk.CTkFrame(cfg, fg_color="transparent")
-        opts.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(8, 0))
-        self.var_variants = ctk.BooleanVar(value=True)
-        self.var_images = ctk.BooleanVar(value=True)
-        self.var_compare = ctk.BooleanVar(value=True)
-        self.legacy_opts = opts
-        self._option_checkboxes: list[ctk.CTkCheckBox] = []
-        for col, (text, var) in enumerate(
-            (
-                ("Include variants", self.var_variants),
-                ("Include images", self.var_images),
-                ("Include compare-at price", self.var_compare),
-            )
-        ):
-            cb = ctk.CTkCheckBox(
-                opts,
-                text=text,
-                variable=var,
-                font=T.font_tuple(T.LABEL),
-                text_color=T.TEXT_SECONDARY,
-                fg_color=T.ACCENT,
-                hover_color=T.ACCENT_HOVER,
-                border_color=T.BORDER,
-                checkmark_color=T.BTN_ON_ACCENT,
-                corner_radius=T.BORDER_RADIUS,
-            )
-            cb.grid(row=0, column=col, sticky="w", padx=(0, 20))
-            self._option_checkboxes.append(cb)
-        opts.grid_remove()
 
         # Run / Stop
         btn_row = ctk.CTkFrame(cfg, fg_color="transparent")
@@ -458,9 +388,6 @@ class ScraperScreen(ctk.CTkFrame):
 
     # ── Mode ──────────────────────────────────────────────
 
-    def _is_universal_mode(self) -> bool:
-        return self.mode_var.get() in (MODE_UNIVERSAL, MODE_UNIVERSAL_FULL)
-
     def _is_universal_pilot(self) -> bool:
         return self.mode_var.get() == MODE_UNIVERSAL
 
@@ -475,32 +402,17 @@ class ScraperScreen(ctk.CTkFrame):
                 text="Full → shopify_import.csv (no MappingScreen)"
             )
             self._show_universal_opts(show_pilot_hint=False)
-            self._hide_legacy_url_entry()
             self._disable_actions()
             self.clear_btn.configure(state="normal")
-        elif self._is_universal_pilot():
+        else:
             self.scrape_btn.configure(text="Run Pilot →")
             self.next_btn.configure(text="Generate Final CSV →")
             self.mode_hint.configure(
                 text="Pilot → shopify_import.csv (no MappingScreen)"
             )
             self._show_universal_opts(show_pilot_hint=True)
-            self._hide_legacy_url_entry()
             self._disable_actions()
             self.clear_btn.configure(state="normal")
-        else:
-            self.scrape_btn.configure(text="Scrape →")
-            self.next_btn.configure(text="Generate Shopify CSV →")
-            self.mode_hint.configure(
-                text="Legacy → MappingScreen  ·  Pilot/Full → final Shopify CSV"
-            )
-            self._hide_universal_opts()
-            self._show_legacy_url_entry()
-            self._hide_output_actions()
-            if self.parsed_data:
-                self._enable_actions()
-            else:
-                self._disable_actions()
 
     def _show_universal_opts(self, *, show_pilot_hint: bool) -> None:
         try:
@@ -515,26 +427,6 @@ class ScraperScreen(ctk.CTkFrame):
             self.pilot_hint.grid()
         else:
             self.pilot_hint.grid_remove()
-
-    def _hide_universal_opts(self) -> None:
-        try:
-            self._max_host.grid_remove()
-        except Exception:
-            pass
-        try:
-            self._vendor_host.grid_remove()
-        except Exception:
-            pass
-        self.pilot_hint.grid_remove()
-
-    def _show_legacy_url_entry(self) -> None:
-        self.url_entry.grid()
-        self.legacy_opts.grid()
-
-    def _hide_legacy_url_entry(self) -> None:
-        self.url_entry.grid_remove()
-        self._hide_category_picker()
-        self.legacy_opts.grid_remove()
 
     def _on_vendor_toggle(self) -> None:
         """Show/hide custom vendor text field based on checkbox."""
@@ -595,20 +487,10 @@ class ScraperScreen(ctk.CTkFrame):
             self.clear_btn.configure(state="disabled")
 
     def _enable_actions(self) -> None:
-        if self._is_universal_mode():
-            if hasattr(self.next_btn, "set_enabled"):
-                self.next_btn.set_enabled(False)
-            else:
-                self.next_btn.configure(state="disabled")
-            if hasattr(self.clear_btn, "set_enabled"):
-                self.clear_btn.set_enabled(True)
-            else:
-                self.clear_btn.configure(state="normal")
-            return
         if hasattr(self.next_btn, "set_enabled"):
-            self.next_btn.set_enabled(True)
+            self.next_btn.set_enabled(False)
         else:
-            self.next_btn.configure(state="normal", fg_color=T.ACCENT, text_color=T.BG_PRIMARY)
+            self.next_btn.configure(state="disabled")
         if hasattr(self.clear_btn, "set_enabled"):
             self.clear_btn.set_enabled(True)
         else:
@@ -846,7 +728,6 @@ class ScraperScreen(ctk.CTkFrame):
             {
                 "mode": self.mode_var.get(),
                 "urls": self.url_text.get("1.0", "end-1c"),
-                "legacy_url": self.url_entry.get(),
                 "output": self.output_entry.get(),
                 "max_products": self.max_products_entry.get(),
                 "custom_vendor": bool(self.var_custom_vendor.get()),
@@ -963,9 +844,6 @@ class ScraperScreen(ctk.CTkFrame):
                 self.url_text.delete("1.0", "end")
                 self.url_text.insert("1.0", urls)
                 self._seed_placeholder_active = False
-            if meta.get("legacy_url") is not None:
-                self.url_entry.delete(0, "end")
-                self.url_entry.insert(0, str(meta.get("legacy_url") or ""))
             if meta.get("output") is not None:
                 self.output_entry.delete(0, "end")
                 self.output_entry.insert(0, str(meta.get("output") or ""))
@@ -1022,17 +900,11 @@ class ScraperScreen(ctk.CTkFrame):
             self.output_entry,
             self.browse_btn,
             self.max_products_entry,
-            self.url_entry,
             self.vendor_checkbox,
             self.vendor_entry,
         ):
             try:
                 widget.configure(state=state)
-            except Exception:
-                pass
-        for cb in getattr(self, "_option_checkboxes", []) or []:
-            try:
-                cb.configure(state=state)
             except Exception:
                 pass
 
@@ -1083,61 +955,6 @@ class ScraperScreen(ctk.CTkFrame):
         self.clear_btn.configure(state="normal")
         self._set_status_badge("Ready")
         self.loading_label.configure(text="")
-    # ── Category picker (Legacy) ──────────────────────────
-
-    def _hide_category_picker(self) -> None:
-        """Reset category choices; keep the dropdown row visible in layout."""
-        self._category_options = {}
-        self._discovered_categories = []
-        try:
-            self.category_menu.configure(values=["Select a category…"])
-            self.category_menu.set("Select a category…")
-        except Exception:
-            pass
-        try:
-            self.category_hint.grid_remove()
-        except Exception:
-            pass
-        # Ensure the dropdown stays between Seed URLs and Run/Stop.
-        self.category_row.grid(row=5, column=0, columnspan=2, sticky="ew")
-
-    def _show_category_picker(self, categories: list[dict]) -> None:
-        if not categories:
-            self._hide_category_picker()
-            return
-        self._discovered_categories = [
-            c for c in categories if c.get("label") and c.get("url")
-        ]
-        self._category_options = {ALL_CATEGORIES_LABEL: ALL_CATEGORIES_KEY}
-        for c in self._discovered_categories:
-            label = c["label"]
-            if label == ALL_CATEGORIES_LABEL:
-                label = f"{label} (store)"
-            self._category_options[label] = c["url"]
-        labels = list(self._category_options.keys())
-        self.category_menu.configure(values=labels)
-        self.category_menu.set(ALL_CATEGORIES_LABEL)
-        self.error_label.configure(text="")
-        self.category_hint.grid(row=0, column=0, sticky="ew", pady=(0, 4))
-        self.category_row.grid(row=5, column=0, columnspan=2, sticky="ew")
-
-    def _on_category_selected(self, _label: str) -> None:
-        self.error_label.configure(text="")
-
-    def _selected_category_url(self) -> str | None:
-        if not self._category_options:
-            return None
-        label = self.category_menu.get()
-        value = self._category_options.get(label)
-        if value == ALL_CATEGORIES_KEY:
-            return ALL_CATEGORIES_KEY
-        return value
-
-    def _is_all_categories_selected(self) -> bool:
-        return (
-            bool(self._category_options)
-            and self.category_menu.get() == ALL_CATEGORIES_LABEL
-        )
 
     def _install_seed_url_placeholder(self) -> None:
         """Muted gray example text that is not a real seed URL."""
@@ -1212,12 +1029,10 @@ class ScraperScreen(ctk.CTkFrame):
         self.source_url = ""
         self.suggested_filename = "shopify_products.csv"
         self._universal_output_dir = None
-        self.url_entry.delete(0, "end")
         self.error_label.configure(text="")
         self.strategy_label.configure(text="")
         self._set_status_badge("Ready")
         self.platform_label.configure(text="")
-        self._hide_category_picker()
         self._hide_output_actions()
         self.log_box.configure(state="normal")
         try:
@@ -1236,48 +1051,6 @@ class ScraperScreen(ctk.CTkFrame):
         self._set_running(False)
         self._show_seed_placeholder()
         self._on_mode_changed(self.mode_var.get())
-
-    def _on_url_changed(self, _event=None) -> None:
-        """Legacy: detect platform / categories for single URL entry."""
-        if self._is_universal_mode():
-            return
-        url = self.url_entry.get().strip()
-        if not is_valid_url(url):
-            self.platform_label.configure(text="")
-            self._hide_category_picker()
-            return
-        self.platform_label.configure(text="Detecting platform…")
-        self._hide_category_picker()
-
-        def _detect() -> None:
-            try:
-                from app.core.html_catalog_scraper import (
-                    detect_platform,
-                    discover_category_links,
-                    is_homepage_url,
-                )
-
-                platform = detect_platform(url)
-                categories: list[dict] = []
-                if is_homepage_url(url):
-                    categories = discover_category_links(url)
-
-                def _apply() -> None:
-                    self.platform_label.configure(text=f"Detected: {platform}")
-                    if categories:
-                        self._show_category_picker(categories)
-                        self.platform_label.configure(
-                            text=f"Detected: {platform} · {len(categories)} categories found"
-                        )
-                    else:
-                        self._hide_category_picker()
-
-                self.after(0, _apply)
-            except Exception:
-                self.after(0, lambda: self.platform_label.configure(text=""))
-                self.after(0, self._hide_category_picker)
-
-        threading.Thread(target=_detect, daemon=True).start()
 
     def _read_max_products(self) -> int | None:
         """Return max products, or None when unlimited (empty / 0)."""
@@ -1319,10 +1092,7 @@ class ScraperScreen(ctk.CTkFrame):
             self.log_box.delete("1.0", "end")
         self.log_box.configure(state="disabled")
 
-        if self._is_universal_mode():
-            self._start_universal()
-        else:
-            self._start_legacy()
+        self._start_universal()
 
     def _claim_scraper_job(self) -> bool:
         """Reserve the URL Scraper job slot. Shows Already running if busy."""
@@ -1603,179 +1373,6 @@ class ScraperScreen(ctk.CTkFrame):
             daemon=True,
         )
         thread.start()
-
-    def _start_legacy(self) -> None:
-        url = self.url_entry.get().strip()
-        if not url:
-            # Fall back to first line of multi-line box
-            urls = self._parse_urls_from_text()
-            url = urls[0] if urls else ""
-            if url:
-                self.url_entry.delete(0, "end")
-                self.url_entry.insert(0, url)
-
-        if not is_valid_url(url):
-            self.error_label.configure(text="URL must start with http:// or https://")
-            self.clear_btn.configure(state="normal")
-            return
-
-        from app.core.html_catalog_scraper import is_homepage_url
-
-        category_name = ""
-        categories_arg = None
-
-        if is_homepage_url(url):
-            cat_url = self._selected_category_url()
-            if self._category_options:
-                if not cat_url:
-                    self.error_label.configure(
-                        text="Select a category from the dropdown before scraping."
-                    )
-                    self.clear_btn.configure(state="normal")
-                    return
-                if cat_url == ALL_CATEGORIES_KEY or self._is_all_categories_selected():
-                    categories_arg = list(self._discovered_categories)
-                    category_name = ALL_CATEGORIES_LABEL
-                    self._append_log(
-                        f"Using {ALL_CATEGORIES_LABEL} "
-                        f"({len(categories_arg)} categories)"
-                    )
-                else:
-                    url = cat_url
-                    category_name = self.category_menu.get()
-                    self._append_log(f"Using category: {category_name}")
-            elif not self.category_row.winfo_ismapped():
-                self.error_label.configure(
-                    text="This looks like a homepage. Wait for categories to load, or paste a category URL."
-                )
-                self.clear_btn.configure(state="normal")
-                self._on_url_changed()
-                return
-
-        self.source_url = url
-        self.suggested_filename = output_filename_from_url(url)
-
-        if not self._claim_scraper_job():
-            return
-
-        self.scrape_btn.configure(state="disabled")
-        self._show_progress("Scraping...")
-        self._append_log("Mode: Legacy Scraper")
-        self._append_log(f"Starting crawl: {url}")
-        self._stop_requested = False
-        self._set_running(True)
-        thread = threading.Thread(
-            target=self._run_scrape,
-            args=(url, category_name, categories_arg),
-            daemon=True,
-        )
-        thread.start()
-
-    def _on_progress(self, message: str) -> None:
-        self._emit_log(message)
-        self._post_to_scraper_ui(
-            lambda s, m=message: s.loading_label.configure(text=m[:80])
-        )
-        store = getattr(self.app, "job_status", None)
-        if store is not None:
-            meta = dict(store.get(TOOL_URL_SCRAPER).ui_meta or {})
-            meta["loading"] = message[:80]
-            store.set_ui_meta(TOOL_URL_SCRAPER, meta)
-
-    # ── Legacy scrape ─────────────────────────────────────
-
-    def _run_scrape(
-        self,
-        url: str,
-        category_name: str = "",
-        categories: list | None = None,
-    ) -> None:
-        try:
-            if self._job_stop_requested():
-                self._post_to_scraper_ui(
-                    lambda s: s._finish_stopped_ui(),
-                    fallback=self._store_mark_stopped,
-                )
-                return
-            data = crawl(
-                url,
-                progress=self._on_progress,
-                category_name=category_name,
-                categories=categories,
-            )
-            if self._job_stop_requested():
-                self._post_to_scraper_ui(
-                    lambda s: s._finish_stopped_ui(),
-                    fallback=self._store_mark_stopped,
-                )
-                return
-            self._post_to_scraper_ui(
-                lambda s, d=data: s._on_success(d),
-                fallback=lambda d=data: self._store_mark_complete(
-                    int(d.get("row_count") or 0)
-                ),
-            )
-        except CollectionCrawlError as exc:
-            if self._job_stop_requested():
-                self._post_to_scraper_ui(
-                    lambda s: s._finish_stopped_ui(),
-                    fallback=self._store_mark_stopped,
-                )
-                return
-            msg = str(exc)
-            self._post_to_scraper_ui(
-                lambda s, m=msg: s._on_error(m),
-                fallback=lambda m=msg: self._store_mark_error(m),
-            )
-        except Exception as exc:  # noqa: BLE001
-            if self._job_stop_requested():
-                self._post_to_scraper_ui(
-                    lambda s: s._finish_stopped_ui(),
-                    fallback=self._store_mark_stopped,
-                )
-                return
-            msg = f"Unexpected error: {exc}"
-            self._post_to_scraper_ui(
-                lambda s, m=msg: s._on_error(m),
-                fallback=lambda m=msg: self._store_mark_error(m),
-            )
-
-    def _on_success(self, data: dict) -> None:
-        self._hide_progress()
-        self._set_running(False)
-        self.parsed_data = data
-
-        count = data.get("row_count", 0)
-        errors = data.get("errors") or []
-        extra = f"  ·  {len(errors)} error(s)" if errors else ""
-        self.suggested_filename = output_filename_from_url(self.source_url)
-        platform = data.get("platform") or ""
-        strategy = data.get("strategy_used", "")
-        if platform:
-            self.platform_label.configure(text=f"Detected: {platform}")
-        self.strategy_label.configure(
-            text=f"{strategy}  ·  → {self.suggested_filename}{extra}"
-        )
-        from app.utils.task_history import save_task
-
-        save_task("Scrape", self.suggested_filename, "Success")
-        self._append_log(f"Done — {count} rows ready")
-        self._render_preview()
-        self._enable_actions()
-        self._set_status_badge(f"Complete — {int(count or 0)} products")
-        out = self._output_folder or "—"
-        self._update_results(
-            products=str(int(count or 0)),
-            output=str(out)[:48],
-            status="Complete",
-            status_color=T.SUCCESS,
-        )
-        store = getattr(self.app, "job_status", None)
-        if store is not None:
-            store.set_complete(int(count or 0), "URL Scraper", tool_id=TOOL_URL_SCRAPER)
-        from app.utils.job_status import notify_extraction_complete
-
-        notify_extraction_complete(int(count or 0), parent=self)
 
     # ── Universal extract (subprocess CLI) ────────────────
 
@@ -2092,71 +1689,7 @@ class ScraperScreen(ctk.CTkFrame):
         for child in self.preview_frame.winfo_children():
             child.destroy()
 
-    def _render_preview(self) -> None:
-        self._clear_preview()
-        if not self.parsed_data:
-            return
-
-        headers = self.parsed_data["headers"]
-        priority = [
-            "Title",
-            "Vendor",
-            "Variant Price",
-            "Variant SKU",
-            "Image Src",
-            "Option1 Name",
-            "Option1 Value",
-            "Price",
-            "SKU",
-            "Product image URL",
-            "Option1 name",
-            "Option1 value",
-        ]
-        preview_headers = [h for h in priority if h in headers]
-        if not preview_headers:
-            preview_headers = headers[:8]
-
-        rows = self.parsed_data["rows"][:5]
-
-        for col_idx, header in enumerate(preview_headers):
-            col = ctk.CTkFrame(self.preview_frame, fg_color="transparent")
-            col.grid(row=0, column=col_idx, padx=4, sticky="nw")
-
-            ctk.CTkLabel(
-                col,
-                text=header,
-                font=T.font(11, "bold"),
-                text_color=T.ACCENT,
-                width=130,
-                anchor="w",
-            ).grid(row=0, column=0, sticky="w", pady=(0, 4))
-
-            for i, row in enumerate(rows):
-                value = str(row.get(header, ""))[:45]
-                bg = T.BG_SURFACE_A if i % 2 == 0 else T.BG_SURFACE_B
-                ctk.CTkLabel(
-                    col,
-                    text=value or "—",
-                    font=T.font(11),
-                    text_color=T.TEXT_SECONDARY,
-                    width=130,
-                    anchor="w",
-                    fg_color=bg,
-                ).grid(row=i + 1, column=0, sticky="w", ipady=1)
-
     def _go_mapping(self) -> None:
-        """Legacy only — Universal Pilot/Full never uses MappingScreen."""
-        if self._is_universal_mode():
-            self.error_label.configure(
-                text="Universal Extractor already produced shopify_import.csv — open it from the buttons above."
-            )
-            return
-        if not self.parsed_data:
-            return
-        from app.ui.mapping_screen import MappingScreen
-
-        self.app.show_screen(
-            MappingScreen,
-            parsed_data=self.parsed_data,
-            suggested_filename=self.suggested_filename,
+        self.error_label.configure(
+            text="Universal Extractor already produced shopify_import.csv — open it from the buttons above."
         )
