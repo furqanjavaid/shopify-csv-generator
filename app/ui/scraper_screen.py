@@ -270,6 +270,7 @@ class ScraperScreen(ctk.CTkFrame):
         self.category_row = ctk.CTkFrame(cfg, fg_color="transparent")
         self.category_row.grid(row=5, column=0, columnspan=2, sticky="ew")
         self.category_row.grid_columnconfigure(0, weight=1)
+        # Hidden in Universal modes; shown again for Legacy via _show_legacy_url_entry.
         self.category_row.grid_remove()
         self.category_hint = ctk.CTkLabel(
             self.category_row,
@@ -529,6 +530,8 @@ class ScraperScreen(ctk.CTkFrame):
     def _show_legacy_url_entry(self) -> None:
         self.url_entry.grid()
         self.legacy_opts.grid()
+        # Restore category dropdown between Seed URLs / legacy URL and Run Scraper.
+        self.category_row.grid(row=5, column=0, columnspan=2, sticky="ew")
 
     def _hide_legacy_url_entry(self) -> None:
         self.url_entry.grid_remove()
@@ -1092,8 +1095,12 @@ class ScraperScreen(ctk.CTkFrame):
             self.category_menu.set("Select a category…")
         except Exception:
             pass
-        if self.category_row.winfo_ismapped():
-            self.category_row.grid_remove()
+        # Universal modes: hide the row. Legacy: keep the dropdown slot visible.
+        if self._is_universal_mode():
+            if self.category_row.winfo_ismapped():
+                self.category_row.grid_remove()
+        else:
+            self.category_row.grid(row=5, column=0, columnspan=2, sticky="ew")
 
     def _show_category_picker(self, categories: list[dict]) -> None:
         if not categories:
@@ -1112,7 +1119,8 @@ class ScraperScreen(ctk.CTkFrame):
         self.category_menu.configure(values=labels)
         self.category_menu.set(ALL_CATEGORIES_LABEL)
         self.error_label.configure(text="")
-        self.category_row.grid()
+        # Explicit row so the picker stays between Seed URLs and Run Scraper.
+        self.category_row.grid(row=5, column=0, columnspan=2, sticky="ew")
 
     def _on_category_selected(self, _label: str) -> None:
         self.error_label.configure(text="")
