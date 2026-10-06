@@ -13,12 +13,13 @@ from app.utils.helpers import resource_path
 
 ICONS_DIR = Path(resource_path("assets/icons"))
 
-# White outlines for navy sidebar; dark/navy for light content surfaces.
-_COLOR_WHITE = (240, 237, 232, 255)  # near #F0EDE8
-_COLOR_NAVY = (13, 27, 75, 255)  # #0D1B4B
-_COLOR_MUTED = (107, 114, 128, 255)  # #6B7280
-_COLOR_BURGUNDY = (107, 18, 40, 255)  # #6B1228
-_COLOR_GOLD = (201, 168, 76, 255)  # #C9A84C
+# White outlines for charcoal sidebar; charcoal/orange for light content surfaces.
+_COLOR_WHITE = (255, 255, 255, 255)
+_COLOR_NAVY = (28, 28, 30, 255)  # charcoal #1C1C1E (legacy "navy" token)
+_COLOR_MUTED = (156, 163, 175, 255)  # #9CA3AF
+_COLOR_BURGUNDY = (232, 89, 12, 255)  # orange #E8590C (legacy accent token)
+_COLOR_GOLD = (232, 89, 12, 255)
+_COLOR_ORANGE = (232, 89, 12, 255)
 
 
 def _recolor(img: Image.Image, rgba: tuple[int, int, int, int]) -> Image.Image:
@@ -59,9 +60,11 @@ def load_icon(
     palette = {
         "white": _COLOR_WHITE,
         "navy": _COLOR_NAVY,
+        "charcoal": _COLOR_NAVY,
         "muted": _COLOR_MUTED,
         "burgundy": _COLOR_BURGUNDY,
         "gold": _COLOR_GOLD,
+        "orange": _COLOR_ORANGE,
     }
     tinted = _recolor(base, palette.get(color, _COLOR_NAVY))
     tinted = tinted.resize((size, size), Image.Resampling.LANCZOS)
