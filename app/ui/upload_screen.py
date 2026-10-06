@@ -11,6 +11,7 @@ import customtkinter as ctk
 
 from app.core.file_parser import FileParser
 from app.ui import theme as T
+from app.ui.icons import load_icon
 from app.ui.sidebar import attach_sidebar
 from app.utils.helpers import output_filename_from_upload
 from app.utils.job_status import TOOL_FILE_UPLOAD
@@ -36,11 +37,11 @@ class UploadScreen(ctk.CTkFrame):
         header = ctk.CTkFrame(body, fg_color="transparent")
         header.grid(row=0, column=0, sticky="ew", pady=(0, 16))
         ctk.CTkLabel(
-            header, text="File Upload", font=T.font_tuple(T.H1), text_color=T.HEADING, anchor="w"
+            header, text="File Upload & CSV Generator", font=T.font_tuple(T.H1), text_color=T.HEADING, anchor="w"
         ).grid(row=0, column=0, sticky="w")
         ctk.CTkLabel(
             header,
-            text="Import your data files (CSV and Excel) to process and extract valuable information.",
+            text="Import CSV or Excel files and generate a Shopify-ready product catalog.",
             font=T.font_tuple(T.BODY),
             text_color=T.TEXT_SECONDARY,
             anchor="w",
@@ -56,10 +57,11 @@ class UploadScreen(ctk.CTkFrame):
         dz.grid_columnconfigure(0, weight=1)
         self.drop_zone = dz
 
-        ctk.CTkLabel(dz, text="📄", font=T.font(32), text_color=T.HEADING).grid(row=0, column=0)
+        self._upload_icon = load_icon("upload", 32, color="orange")
+        ctk.CTkLabel(dz, text="", image=self._upload_icon, font=T.font(32), text_color=T.HEADING).grid(row=0, column=0)
         ctk.CTkLabel(
             dz,
-            text="Drag and drop your files here or click to browse and select files",
+            text="Click to select file or drag & drop",
             font=T.font(15, "bold"),
             text_color=T.HEADING,
             wraplength=560,
