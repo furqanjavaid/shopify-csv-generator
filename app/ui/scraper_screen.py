@@ -34,12 +34,17 @@ from app.ui.components import (
 from app.ui.icons import load_icon
 from app.ui.sidebar import attach_sidebar
 from app.utils.helpers import is_valid_url, output_filename_from_url
-from app.utils.job_status import TOOL_URL_SCRAPER
+from app.utils.job_status import TOOL_URL_SCRAPER, notify_extraction_complete
 from sentivo_extractor.core.output_layout import (
     domain_artifact_path,
     domain_folder_name,
     domain_output_dir,
     ensure_domain_dir,
+)
+from sentivo_extractor.decision_engine.captcha_detector import (
+    CAPTCHA_EXIT_CODE,
+    CAPTCHA_LOG_MARKER,
+    CaptchaDetector,
 )
 
 MODE_UNIVERSAL = "Universal Extractor Pilot"
@@ -89,6 +94,9 @@ class ScraperScreen(ctk.CTkFrame):
         self._running = False
         self._reprocessing = False
         self._elapsed_after = None
+        self._captcha_paused = False
+        self._resume_payload: dict | None = None
+        self._captcha_alerted = False
 
         # Slim status strip first (pack before expanding shell so it stays a hairline footer)
         self.status_bar = StatusBar(self)
@@ -250,24 +258,30 @@ class ScraperScreen(ctk.CTkFrame):
         )
         self.platform_label.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(4, 0))
 
-        # Run / Stop
+        # Run / Stop / Resume
         btn_row = ctk.CTkFrame(cfg, fg_color="transparent")
         btn_row.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(14, 4))
-        btn_row.grid_columnconfigure((0, 1), weight=1)
+        btn_row.grid_columnconfigure((0, 1, 2), weight=1)
         self.scrape_btn = PrimaryButton(
-            btn_row, "Run Scraper →", self._start_scrape, icon="play", width=200
+            btn_row, "Run Scraper →", self._start_scrape, icon="play", width=180
         )
-        self.scrape_btn.grid(row=0, column=0, sticky="ew", padx=(0, 8))
-        self.stop_btn = DangerButton(btn_row, "Stop →", self._stop_scrape, icon="square", width=140)
-        self.stop_btn.grid(row=0, column=1, sticky="ew", padx=(8, 0))
+        self.scrape_btn.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self.stop_btn = DangerButton(btn_row, "Stop →", self._stop_scrape, icon="square", width=120)
+        self.stop_btn.grid(row=0, column=1, sticky="ew", padx=(6, 6))
         self.stop_btn.set_enabled(False)
+        self.resume_btn = PrimaryButton(
+            btn_row, "Resume →", self._resume_scrape, icon="play", width=140
+        )
+        self.resume_btn.grid(row=0, column=2, sticky="ew", padx=(6, 0))
+        self.resume_btn.set_enabled(False)
+        self.resume_btn.grid_remove()
         self.reprocess_btn = T.secondary_button(
             btn_row,
             "Reprocess Existing Data →",
             self._start_reprocess,
             height=T.BTN_HEIGHT,
         )
-        self.reprocess_btn.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        self.reprocess_btn.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(8, 0))
 
         # Progress + percentage (always visible; idle = 0%)
         self.progress_section = ctk.CTkFrame(cfg, fg_color="transparent")
@@ -296,16 +310,45 @@ class ScraperScreen(ctk.CTkFrame):
         )
         self.progress_pct.grid(row=1, column=1, sticky="e")
 
+        # CAPTCHA / block alert (hidden until Decision Engine pauses)
+        self.captcha_card = ctk.CTkFrame(
+            cfg,
+            fg_color="#FDECEC",
+            corner_radius=T.CARD_RADIUS,
+            border_width=2,
+            border_color=T.ERROR,
+        )
+        self.captcha_card.grid(row=9, column=0, columnspan=2, sticky="ew", pady=(8, 4))
+        self.captcha_card.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            self.captcha_card,
+            text="CAPTCHA / Block Detected",
+            font=T.font(14, "bold"),
+            text_color=T.ERROR,
+            anchor="w",
+        ).grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 2))
+        self.captcha_detail = ctk.CTkLabel(
+            self.captcha_card,
+            text="Scraping paused. Solve the challenge in your browser, then click Resume.",
+            font=T.font_tuple(T.CAPTION),
+            text_color=T.ERROR,
+            anchor="w",
+            wraplength=640,
+            justify="left",
+        )
+        self.captcha_detail.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 10))
+        self.captcha_card.grid_remove()
+
         self.error_label = ctk.CTkLabel(
             cfg, text="", font=T.font_tuple(T.CAPTION), text_color=T.ERROR, anchor="w"
         )
-        self.error_label.grid(row=9, column=0, columnspan=2, sticky="ew")
+        self.error_label.grid(row=10, column=0, columnspan=2, sticky="ew")
         self.strategy_label = ctk.CTkLabel(
             cfg, text="", font=T.font_tuple(T.CAPTION), text_color=T.TEXT_SECONDARY, anchor="w"
         )
-        self.strategy_label.grid(row=10, column=0, columnspan=2, sticky="ew")
+        self.strategy_label.grid(row=11, column=0, columnspan=2, sticky="ew")
         self.output_actions = ctk.CTkFrame(cfg, fg_color="transparent")
-        self.output_actions.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        self.output_actions.grid(row=12, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         self.output_actions.grid_remove()
         self._output_buttons: list[ctk.CTkButton] = []
 
@@ -748,6 +791,11 @@ class ScraperScreen(ctk.CTkFrame):
             self.stop_btn.set_enabled(running)
         else:
             self.stop_btn.configure(state="normal" if running else "disabled")
+        if hasattr(self, "resume_btn") and not self._captcha_paused:
+            try:
+                self.resume_btn.set_enabled(False)
+            except Exception:
+                pass
         if hasattr(self, "reprocess_btn"):
             try:
                 self.reprocess_btn.configure(
@@ -755,6 +803,121 @@ class ScraperScreen(ctk.CTkFrame):
                 )
             except Exception:
                 pass
+
+    def _show_captcha_alert(self, detail: str = "") -> None:
+        """Red status card + beep + system notification. Manual Resume only."""
+        if self._captcha_alerted and self._captcha_paused:
+            return
+        self._captcha_paused = True
+        self._captcha_alerted = True
+        msg = (detail or "").strip() or (
+            "Scraping paused. Solve the challenge in your browser, then click Resume."
+        )
+        try:
+            self.captcha_detail.configure(text=msg[:400])
+            self.captcha_card.grid()
+        except Exception:
+            pass
+        try:
+            self.resume_btn.grid()
+            self.resume_btn.set_enabled(True)
+        except Exception:
+            pass
+        try:
+            import winsound
+
+            winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+        except Exception:
+            try:
+                self.bell()
+            except Exception:
+                pass
+        try:
+            from plyer import notification
+
+            notification.notify(
+                title="Sentivo Tools — CAPTCHA / Block",
+                message=msg[:180],
+                app_name="Sentivo Tools",
+                timeout=12,
+            )
+        except Exception:
+            try:
+                messagebox.showwarning(
+                    "CAPTCHA / Block Detected",
+                    msg,
+                    parent=self.app,
+                )
+            except Exception:
+                pass
+        self._append_log(f"CAPTCHA PAUSE: {msg}")
+        try:
+            self.result_labels["status"].configure(text="Paused — CAPTCHA")
+        except Exception:
+            pass
+
+    def _hide_captcha_alert(self) -> None:
+        self._captcha_paused = False
+        self._captcha_alerted = False
+        try:
+            self.captcha_card.grid_remove()
+        except Exception:
+            pass
+        try:
+            self.resume_btn.set_enabled(False)
+            self.resume_btn.grid_remove()
+        except Exception:
+            pass
+
+    def _on_captcha_paused(self, detail: str = "") -> None:
+        self._show_captcha_alert(detail)
+        self._hide_progress()
+        self._set_running(False)
+        store = getattr(self.app, "job_status", None)
+        if store is not None:
+            try:
+                job = store.get(TOOL_URL_SCRAPER)
+                job.state = "idle"
+                job.proc = None
+                job.stop_requested = False
+                job.message = "Paused — CAPTCHA"
+                job.updated_at = time.time()
+                store.message = "Paused — CAPTCHA"
+            except Exception:
+                pass
+
+    def _resume_scrape(self) -> None:
+        """Restart scrape from checkpoint after manual CAPTCHA resolution."""
+        payload = self._resume_payload
+        if not payload:
+            self.error_label.configure(text="Nothing to resume — run a scrape first.")
+            return
+        if self._running:
+            self.error_label.configure(text="Already running")
+            return
+        self._hide_captcha_alert()
+        CaptchaDetector.clear_pause_file(Path(payload["out_folder"]))
+        if not self._claim_scraper_job():
+            return
+        self.error_label.configure(text="")
+        self._append_log("Resuming from checkpoint after CAPTCHA pause…")
+        self._stop_requested = False
+        self._set_running(True)
+        self._show_progress("Resuming scrape from checkpoint…")
+        thread = threading.Thread(
+            target=self._run_universal_extract,
+            args=(
+                payload["kind"],
+                payload["seed_urls"],
+                Path(payload["out_folder"]),
+                payload["max_products"],
+                payload.get("vendor"),
+                payload.get("primary_domain"),
+            ),
+            kwargs={"resume": True},
+            daemon=True,
+        )
+        thread.start()
 
     def _set_running(self, running: bool) -> None:
         """Toggle Run/Stop button states and lock/unlock inputs."""
@@ -1359,6 +1522,15 @@ class ScraperScreen(ctk.CTkFrame):
             self._append_log(f"Custom vendor: {vendor}")
 
         self._stop_requested = False
+        self._hide_captcha_alert()
+        self._resume_payload = {
+            "kind": kind,
+            "seed_urls": seed_urls,
+            "out_folder": str(Path(out_folder)),
+            "max_products": max_products,
+            "vendor": vendor,
+            "primary_domain": primary_domain,
+        }
         self._set_running(True)
         thread = threading.Thread(
             target=self._run_universal_extract,
@@ -1370,6 +1542,7 @@ class ScraperScreen(ctk.CTkFrame):
                 vendor,
                 primary_domain,
             ),
+            kwargs={"resume": False},
             daemon=True,
         )
         thread.start()
@@ -1384,6 +1557,8 @@ class ScraperScreen(ctk.CTkFrame):
         max_products: int | None,
         vendor: str | None = None,
         primary_domain: str | None = None,
+        *,
+        resume: bool = False,
     ) -> None:
         label = "Pilot" if kind == "pilot" else "Full"
         try:
@@ -1419,7 +1594,7 @@ class ScraperScreen(ctk.CTkFrame):
                 "--output",
                 str(out_dir),
                 "--overwrite",
-                "true",
+                "false" if resume else "true",
             ]
             if kind == "pilot":
                 cmd.extend(
@@ -1442,6 +1617,9 @@ class ScraperScreen(ctk.CTkFrame):
             self._emit_log(f"CMD: {' '.join(cmd)}")
             self._emit_log(f"Output base: {out_dir}")
             self._emit_log(f"Domain folder: {domain_dir}")
+            if resume:
+                self._emit_log("Resume mode: checkpoint preserved (overwrite=false)")
+                CaptchaDetector.clear_pause_file(out_dir)
 
             env = os.environ.copy()
             env["PYTHONPATH"] = (
@@ -1463,6 +1641,7 @@ class ScraperScreen(ctk.CTkFrame):
             if store is not None:
                 store.set_proc(TOOL_URL_SCRAPER, proc)
             assert proc.stdout is not None
+            captcha_seen = False
             for line in proc.stdout:
                 if self._job_stop_requested():
                     break
@@ -1476,6 +1655,12 @@ class ScraperScreen(ctk.CTkFrame):
                         meta = dict(store.get(TOOL_URL_SCRAPER).ui_meta or {})
                         meta["loading"] = text[:80]
                         store.set_ui_meta(TOOL_URL_SCRAPER, meta)
+                    if CAPTCHA_LOG_MARKER in text and not captcha_seen:
+                        captcha_seen = True
+                        detail = text.replace(CAPTCHA_LOG_MARKER, "").strip()
+                        self._post_to_scraper_ui(
+                            lambda s, d=detail: s._show_captcha_alert(d)
+                        )
             code = proc.wait()
             self._extract_proc = None
             if store is not None:
@@ -1484,6 +1669,16 @@ class ScraperScreen(ctk.CTkFrame):
                 self._post_to_scraper_ui(
                     lambda s: s._finish_stopped_ui(),
                     fallback=self._store_mark_stopped,
+                )
+                return
+            if code == CAPTCHA_EXIT_CODE or captcha_seen:
+                detail = (
+                    "Scraping paused for CAPTCHA/block. "
+                    "Solve it in your browser, then click Resume."
+                )
+                self._post_to_scraper_ui(
+                    lambda s, d=detail: s._on_captcha_paused(d),
+                    fallback=lambda: self._store_mark_error("CAPTCHA pause"),
                 )
                 return
             if code != 0:

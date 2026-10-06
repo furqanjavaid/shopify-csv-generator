@@ -32,8 +32,14 @@ from sentivo_extractor.core.input_csv import (
     seed_metadata,
 )
 from sentivo_extractor.core.normalizer import normalize_product
+from sentivo_extractor.coordinator import DecisionCoordinator
+from sentivo_extractor.decision_engine.captcha_detector import (
+    CAPTCHA_EXIT_CODE,
+    CAPTCHA_LOG_MARKER,
+    CaptchaBlockedError,
+    CaptchaDetector,
+)
 from sentivo_extractor.core.pdp_pipeline import (
-    PDPExtractionPipeline,
     write_pdp_extraction_report,
     write_retry_queue,
 )
@@ -147,6 +153,8 @@ class UniversalCrawler:
             "failed": 0,
         }
         self._domain_dirs: dict[str, Path] = {}
+        self.captcha_paused = False
+        self.captcha_pause_info: dict[str, Any] = {}
 
     def _domain_dir(self, domain_key: str) -> Path:
         if domain_key not in self._domain_dirs:
@@ -338,6 +346,9 @@ class UniversalCrawler:
                     float(product.get("confidence_score") or 0),
                     product.get("title"),
                 )
+            except CaptchaBlockedError as exc:
+                self._handle_captcha_pause(url, exc)
+                break
             except Exception as exc:  # noqa: BLE001
                 self.logger.error("FAIL %s: %s", url, exc)
                 self.checkpoint.mark_failed(url, str(exc))
@@ -452,6 +463,11 @@ class UniversalCrawler:
         print_failure_groups(self.bug_report.records)
         self._print_summary(summary)
 
+        if self.captcha_paused:
+            summary["captcha_paused"] = True
+            summary["captcha_pause"] = dict(self.captcha_pause_info)
+            summary["exit_hint"] = CAPTCHA_EXIT_CODE
+
         if coverage_enforcement_failed(
             coverage_rows, enforce=self.enforce_expected_count
         ):
@@ -534,6 +550,8 @@ class UniversalCrawler:
             )
             try:
                 return future.result(timeout=timeout_sec)
+            except CaptchaBlockedError:
+                raise
             except FuturesTimeout:
                 reason = f"product_timeout:{int(timeout_sec)}s"
                 self.logger.error(
@@ -563,14 +581,17 @@ class UniversalCrawler:
     def _extract_one_impl(
         self, url: str, *, queue_on_failure: bool = True
     ) -> tuple[dict[str, Any] | None, str]:
-        pipeline = PDPExtractionPipeline(
+        coordinator = DecisionCoordinator(
             http=self.http,
             options=self.options,
             registry=self.registry,
             site_rules=self._rules_for_url(url),
             logger=self.logger,
         )
-        outcome = pipeline.extract(url)
+        try:
+            outcome = coordinator.extract(url)
+        except CaptchaBlockedError:
+            raise
         report = outcome.get("report")
         if report:
             self._pdp_reports.append(report)
@@ -616,6 +637,37 @@ class UniversalCrawler:
             return None, "empty_product"
         return product, ""
 
+    def _handle_captcha_pause(self, url: str, exc: CaptchaBlockedError) -> None:
+        """Pause crawl immediately on CAPTCHA/block — checkpoint already preserved."""
+        self.captcha_paused = True
+        reason = getattr(exc, "reason", None) or str(exc)
+        status_code = getattr(exc, "status_code", None)
+        self.captcha_pause_info = {
+            "url": url,
+            "reason": reason,
+            "status_code": status_code,
+        }
+        pause_path = CaptchaDetector.write_pause_file(
+            self.base_output_dir,
+            url=url,
+            reason=reason,
+            status_code=status_code,
+            extra={"message": str(exc)},
+        )
+        msg = (
+            f"{CAPTCHA_LOG_MARKER} Scraping paused — CAPTCHA or block detected at {url}. "
+            f"Resolve in browser, then Resume from checkpoint. pause_file={pause_path}"
+        )
+        self.logger.error(msg)
+        print(msg, flush=True)
+        self.bug_report.record(
+            url=url,
+            reason=f"captcha_paused:{reason}",
+            stage="CAPTCHA / Block",
+        )
+        # Do not mark URL as permanently failed — leave it for resume.
+
+
     def _extract_and_validate_product(
         self, url: str
     ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
@@ -626,7 +678,10 @@ class UniversalCrawler:
 
         for attempt in range(max_attempts):
             queue_fail = attempt == max_attempts - 1
-            product, reason = self.extract_one(url, queue_on_failure=queue_fail)
+            try:
+                product, reason = self.extract_one(url, queue_on_failure=queue_fail)
+            except CaptchaBlockedError:
+                raise
             if not product:
                 last_reason = reason or last_reason
                 if attempt < max_attempts - 1:

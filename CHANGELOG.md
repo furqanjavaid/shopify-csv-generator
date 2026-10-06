@@ -1,3 +1,12 @@
+## Sentivo Tools v1.2.0
+
+### What's New
+- Decision Engine coordinator over the Universal Extractor pipeline
+- Confidence scoring (title/price/SKU/images/description) with 70% threshold
+- Platform-aware strategy selection with fallback chain and domain memory
+- CAPTCHA / block detection with pause, system notification, and Resume from checkpoint
+- Per-URL retries with exponential backoff (2s → 5s → 10s)
+
 ## Sentivo Tools v1.1.1
 
 ### What's New

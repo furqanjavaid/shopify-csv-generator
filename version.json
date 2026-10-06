@@ -1,6 +1,6 @@
 {
-  "version": "1.1.1",
+  "version": "1.2.0",
   "app_name": "Sentivo Tools",
   "publisher": "Sentivo Limited",
-  "release_notes": "Fix PyInstaller asset bundling so sidebar icons and logo load in the installed app."
+  "release_notes": "Decision Engine coordinator with confidence scoring, strategy selection, CAPTCHA detection, and Resume-from-checkpoint."
 }
