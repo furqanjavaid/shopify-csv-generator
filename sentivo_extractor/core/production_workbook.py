@@ -69,7 +69,7 @@ def write_production_summary_workbook(
                 indent=2,
                 default=str,
             ),
-            encoding="utf-8",
+            encoding="utf-8-sig",
         )
         cov_csv = path.with_name("coverage.csv")
         if coverage:

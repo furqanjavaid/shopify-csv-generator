@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import re
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -42,7 +43,17 @@ OPTION_NAME_ALIASES = {
 }
 
 
+def configure_stdio_utf8() -> None:
+    """Force stdout/stderr to UTF-8 so arrows and other Unicode don't crash cp1252."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def setup_logger(name: str = "sentivo_extractor", log_dir: Path | None = None) -> logging.Logger:
+    configure_stdio_utf8()
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
     fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
@@ -62,7 +73,7 @@ def setup_logger(name: str = "sentivo_extractor", log_dir: Path | None = None) -
                 except Exception:
                     pass
                 logger.removeHandler(h)
-        fh = logging.FileHandler(log_path, encoding="utf-8")
+        fh = logging.FileHandler(log_path, encoding="utf-8-sig")
         fh.setFormatter(fmt)
         logger.addHandler(fh)
     return logger
@@ -282,14 +293,14 @@ def content_hash(data: bytes) -> str:
 
 def write_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8-sig")
 
 
 def read_json(path: Path, default: Any = None) -> Any:
     if not path.exists():
         return default
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception:
         return default
 

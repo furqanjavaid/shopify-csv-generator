@@ -22,7 +22,7 @@ from sentivo_extractor.core.output_layout import (
     prefixed_filename,
 )
 from sentivo_extractor.core.shopify_csv_exporter import export_failed_csv, export_shopify_csv
-from sentivo_extractor.core.utils import DEFAULT_USER_AGENT
+from sentivo_extractor.core.utils import DEFAULT_USER_AGENT, configure_stdio_utf8
 from sentivo_extractor.core.validator import validate_products
 from sentivo_extractor.post_processors.variant_merger import merge_products_by_base_title
 
@@ -32,7 +32,7 @@ def _load_products(raw_dir: Path) -> list[dict[str, Any]]:
     products: list[dict[str, Any]] = []
     for path in files:
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
         except Exception as exc:  # noqa: BLE001
             print(f"  skip {path.name}: {exc}")
             continue
@@ -134,6 +134,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Seconds between category-page HTTP requests (default: 0.5)",
     )
     args = parser.parse_args(argv)
+    configure_stdio_utf8()
 
     try:
         reprocess(Path(args.input), delay=float(args.delay))

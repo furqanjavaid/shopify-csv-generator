@@ -205,7 +205,7 @@ def write_final_validation_report(
         fallback = path.with_suffix(".json")
         fallback.write_text(
             json.dumps({"summary": summary, "products": rows}, indent=2, default=str),
-            encoding="utf-8",
+            encoding="utf-8-sig",
         )
         csv_path = path.with_suffix(".csv")
         with csv_path.open("w", newline="", encoding="utf-8-sig") as f:

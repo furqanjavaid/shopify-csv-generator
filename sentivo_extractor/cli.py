@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from sentivo_extractor.core.utils import DEFAULT_USER_AGENT
+from sentivo_extractor.core.utils import DEFAULT_USER_AGENT, configure_stdio_utf8
 
 
 def _parse_bool(value: str) -> bool:
@@ -261,6 +261,7 @@ def run_audit(args: argparse.Namespace) -> int:
 
 
 def run_cli(argv: list[str] | None = None) -> int:
+    configure_stdio_utf8()
     argv = list(argv if argv is not None else sys.argv[1:])
     command = None
     if argv and argv[0] in ("audit", "extract", "site-health"):

@@ -143,7 +143,7 @@ def write_site_rule_suggestion(
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
     body = yaml.safe_dump(payload, sort_keys=False, allow_unicode=True)
-    output_path.write_text(SUGGESTION_HEADER + body, encoding="utf-8")
+    output_path.write_text(SUGGESTION_HEADER + body, encoding="utf-8-sig")
     return output_path
 
 

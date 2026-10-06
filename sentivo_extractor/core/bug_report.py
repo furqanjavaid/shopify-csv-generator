@@ -161,7 +161,7 @@ class BugReportCollector:
         html_path = ""
         if html:
             hp = base / f"{stem}.html"
-            hp.write_text(html, encoding="utf-8", errors="replace")
+            hp.write_text(html, encoding="utf-8-sig", errors="replace")
             html_path = str(hp)
 
         screenshot_path = ""

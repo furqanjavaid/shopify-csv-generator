@@ -29,7 +29,7 @@ class CheckpointStore:
         if not self.path.exists():
             return
         try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
+            data = json.loads(self.path.read_text(encoding="utf-8-sig"))
             if isinstance(data, dict):
                 self._data.update(data)
                 self._data["completed_urls"] = list(self._data.get("completed_urls") or [])
@@ -55,7 +55,7 @@ class CheckpointStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(
             json.dumps(self._data, indent=2, ensure_ascii=False),
-            encoding="utf-8",
+            encoding="utf-8-sig",
         )
 
     @property
