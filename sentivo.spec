@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('app', 'app'), ('version.json', '.')]
+datas = [('app', 'app'), ('assets', 'assets'), ('version.json', '.')]
 binaries = []
 hiddenimports = ['customtkinter', 'pandas', 'openpyxl', 'bs4', 'lxml', 'PIL', 'PIL.Image', 'docx', 'requests', 'playwright']
 tmp_ret = collect_all('customtkinter')

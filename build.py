@@ -35,6 +35,8 @@ def build():
             "--add-data",
             "app;app",
             "--add-data",
+            "assets;assets",
+            "--add-data",
             "version.json;.",
             "--hidden-import",
             "customtkinter",

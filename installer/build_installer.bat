@@ -22,14 +22,14 @@ if not exist "installer\python-3.11.9-amd64.exe" (
 )
 
 REM Step 3 — Build installer
-echo [3/3] Building SentivoToolsSetup.exe...
+echo [3/3] Building SentivoToolsSetup-v1.1.1.exe...
 "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "installer\sentivo_setup.iss"
 
 if %ERRORLEVEL% == 0 (
     echo.
     echo ========================================
     echo  [OK] SUCCESS!
-    echo  Output: installer\output\SentivoToolsSetup.exe
+    echo  Output: installer\output\SentivoToolsSetup-v1.1.1.exe
     echo ========================================
 ) else (
     echo.

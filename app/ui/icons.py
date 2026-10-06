@@ -9,8 +9,9 @@ import customtkinter as ctk
 from PIL import Image
 
 from app.ui import theme as T
+from app.utils.helpers import resource_path
 
-ICONS_DIR = Path(__file__).resolve().parents[2] / "assets" / "icons"
+ICONS_DIR = Path(resource_path("assets/icons"))
 
 # White outlines for navy sidebar; dark/navy for light content surfaces.
 _COLOR_WHITE = (240, 237, 232, 255)  # near #F0EDE8

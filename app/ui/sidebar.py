@@ -10,10 +10,10 @@ from PIL import Image
 from app.ui import theme as T
 from app.ui.icons import load_icon
 from app.ui.theme import current_colors
+from app.utils.helpers import resource_path
 from app.utils.updater import get_current_version
 
-ASSETS_DIR = Path(__file__).resolve().parents[2] / "assets"
-LOGO_PATH = ASSETS_DIR / "sentivo-tools-logo.png"
+LOGO_PATH = Path(resource_path("assets/sentivo-tools-logo.png"))
 LOGO_MAX_WIDTH = 180
 
 # page_id, label, lucide icon stem

@@ -36,6 +36,7 @@ jobs:
 
       - name: Build exe
         run: python build.py
+        # PyInstaller --add-data "assets;assets" is set in build.py (Windows semicolon separator)
 
       - name: Install Inno Setup
         shell: pwsh
@@ -60,7 +61,7 @@ jobs:
           tag_name: v${{ steps.version.outputs.VERSION }}
           name: Sentivo Tools v${{ steps.version.outputs.VERSION }}
           body_path: CHANGELOG.md
-          files: installer/output/SentivoToolsSetup.exe
+          files: installer/output/SentivoToolsSetup-v${{ steps.version.outputs.VERSION }}.exe
           make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

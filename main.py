@@ -35,12 +35,12 @@ from app.ui import theme as T
 from app.ui.audit_screen import AuditScreen  # noqa: F401
 from app.ui.converter_screen import ConverterScreen  # noqa: F401
 from app.ui.home_screen import HomeScreen
+from app.utils.helpers import resource_path
 from app.utils.updater import check_for_update, download_and_install, get_current_version
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-ASSETS_DIR = PROJECT_ROOT / "assets"
-ICON_ICO = ASSETS_DIR / "icon.ico"
-ICON_PNG = ASSETS_DIR / "sentivo icon.png"
+ICON_ICO = Path(resource_path("assets/icon.ico"))
+ICON_PNG = Path(resource_path("assets/sentivo icon.png"))
 
 
 def _apply_window_icon(app: ctk.CTk) -> None:

@@ -162,7 +162,7 @@ def main() -> None:
     # Access the bar we just made
     for child in root.winfo_children():
         if isinstance(child, StatusBar):
-            child.set_status("Preview mode — Step A components", "v1.1.0")
+            child.set_status("Preview mode — Step A components", "v1.1.1")
             break
 
     root.mainloop()

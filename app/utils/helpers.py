@@ -2,10 +2,24 @@
 
 from __future__ import annotations
 
+import os
 import re
+import sys
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+
+
+def resource_path(relative_path: str) -> str:
+    """Resolve path to resource — works for dev and PyInstaller --onefile."""
+    if getattr(sys, "frozen", False):
+        base = sys._MEIPASS  # type: ignore[attr-defined]
+    else:
+        # helpers.py is in app/utils/ — project root is two levels up from utils/
+        base = os.path.dirname(os.path.abspath(__file__))
+        base = os.path.dirname(base)  # app/
+        base = os.path.dirname(base)  # project root
+    return os.path.normpath(os.path.join(base, relative_path.replace("/", os.sep)))
 
 
 def slugify(text: str) -> str:

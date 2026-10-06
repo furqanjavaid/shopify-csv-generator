@@ -1,5 +1,5 @@
 #define MyAppName "Sentivo Tools"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.1.1"
 #define MyAppPublisher "Sentivo Limited"
 #define MyAppURL "https://sentivo.co"
 #define MyAppExeName "SentivoTools.exe"
@@ -18,7 +18,7 @@ AllowNoIcons=yes
 ; Script lives in installer\ — SourceDir is project root; OutputDir is next to this script
 SourceDir=..
 OutputDir=installer\output
-OutputBaseFilename=SentivoToolsSetup
+OutputBaseFilename=SentivoToolsSetup-v1.1.1
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern

@@ -1,3 +1,8 @@
+## Sentivo Tools v1.1.1
+
+### What's New
+- Fix PyInstaller asset bundling so sidebar icons and logo load in the installed .exe
+
 ## Sentivo Tools v1.1.0
 
 ### What's New
