@@ -16,7 +16,6 @@ from app.core.image_converter import (
     convert_images,
 )
 from app.ui import theme as T
-from app.ui.icons import load_icon
 from app.ui.sidebar import attach_sidebar
 
 
@@ -45,7 +44,7 @@ class ConverterScreen(ctk.CTkFrame):
         ).grid(row=0, column=0, sticky="w")
         ctk.CTkLabel(
             header,
-            text="Convert image batches between formats quickly and easily.",
+            text="Convert image batches between different formats quickly and easily.",
             font=T.font_tuple(T.BODY),
             text_color=T.TEXT_SECONDARY,
             anchor="w",
@@ -84,13 +83,10 @@ class ConverterScreen(ctk.CTkFrame):
         drop.grid_propagate(False)
         drop.grid_columnconfigure(0, weight=1)
         self.drop_zone = drop
-        self._drop_icon = load_icon("image", 28, color="orange")
-        ctk.CTkLabel(drop, text="", image=self._drop_icon, font=T.font(26), text_color=T.HEADING).grid(
-            row=0, column=0, pady=(18, 4)
-        )
+        ctk.CTkLabel(drop, text="🖼", font=T.font(26), text_color=T.HEADING).grid(row=0, column=0, pady=(18, 4))
         ctk.CTkLabel(
             drop,
-            text="Click to select images or drag & drop",
+            text="Drag and drop image files here\nor click to browse",
             font=T.font(12, "bold"),
             text_color=T.HEADING,
             justify="center",

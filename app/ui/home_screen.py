@@ -28,7 +28,7 @@ class HomeScreen(ctk.CTkFrame):
         header.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
             header,
-            text="Home Dashboard",
+            text="Home",
             font=T.font(28, "bold"),
             text_color=T.HEADING,
             anchor="w",
@@ -36,7 +36,7 @@ class HomeScreen(ctk.CTkFrame):
         ).grid(row=0, column=0, sticky="nw")
         ctk.CTkLabel(
             header,
-            text="Welcome back. Here's what's happening with your tools.",
+            text="Welcome to Sentivo Tools. Your all-in-one toolkit for eCommerce data and automation.",
             font=T.font_tuple(T.BODY),
             text_color=T.TEXT_SECONDARY,
             anchor="w",
@@ -44,50 +44,29 @@ class HomeScreen(ctk.CTkFrame):
             wraplength=720,
         ).grid(row=1, column=0, sticky="nw", pady=(4, 0))
 
-        stats = ctk.CTkFrame(body, fg_color="transparent")
-        stats.grid(row=1, column=0, sticky="ew", pady=(0, 16))
-        stats.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="home_stats")
-
-        self._stat_labels = {}
-        for col, (key, title, icon_name) in enumerate(
-            (
-                ("running", "Running Jobs", "play"),
-                ("completed", "Completed", "check"),
-                ("pending", "Pending", "clock"),
-                ("success", "Success Rate", "bar-chart"),
-            )
-        ):
-            card = T.card_frame(stats)
-            card.grid(row=0, column=col, sticky="nsew", padx=(0 if col == 0 else 8, 0))
-            inner = ctk.CTkFrame(card, fg_color="transparent")
-            inner.grid(row=0, column=0, sticky="ew", padx=16, pady=16)
-            inner.grid_columnconfigure(0, weight=1)
-            head = ctk.CTkFrame(inner, fg_color="transparent")
-            head.grid(row=0, column=0, sticky="ew")
-            head.grid_columnconfigure(0, weight=1)
-            ctk.CTkLabel(
-                head,
-                text=title,
-                font=T.font(12, "bold"),
-                text_color=T.TEXT_MUTED,
-                anchor="w",
-            ).grid(row=0, column=0, sticky="w")
-            img = load_icon(icon_name, 18, color="muted")
-            if img is not None:
-                self._icons.append(img)
-            ctk.CTkLabel(head, text="", image=img, width=20).grid(row=0, column=1, sticky="e")
-            val = ctk.CTkLabel(
-                inner, text="—", font=T.font(22, "bold"), text_color=T.HEADING, anchor="w"
-            )
-            val.grid(row=1, column=0, sticky="w", pady=(8, 0))
-            self._stat_labels[key] = val
-
+        # Job Status card
         self.job_card = T.card_frame(body)
-        self.job_card.grid(row=2, column=0, sticky="ew", pady=(0, 16))
+        self.job_card.grid(row=1, column=0, sticky="ew", pady=(0, 16))
         self.job_card.grid_columnconfigure(0, weight=1)
         job_inner = ctk.CTkFrame(self.job_card, fg_color="transparent")
-        job_inner.grid(row=0, column=0, sticky="ew", padx=16, pady=14)
-        job_inner.grid_columnconfigure(0, weight=1)
+        job_inner.grid(row=0, column=0, sticky="ew", padx=20, pady=16)
+        job_inner.grid_columnconfigure((0, 1, 2, 3), weight=1)
+
+        ctk.CTkLabel(
+            job_inner,
+            text="Job Status",
+            font=T.font(16, "bold"),
+            text_color=T.HEADING,
+            anchor="w",
+        ).grid(row=0, column=0, columnspan=3, sticky="w")
+        ctk.CTkLabel(
+            job_inner,
+            text="Overview of your recent and current jobs across all tools.",
+            font=T.font_tuple(T.CAPTION),
+            text_color=T.TEXT_MUTED,
+            anchor="w",
+        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(2, 12))
+
         self.job_status_label = ctk.CTkLabel(
             job_inner,
             text="Ready",
@@ -95,20 +74,47 @@ class HomeScreen(ctk.CTkFrame):
             text_color=T.TEXT_PRIMARY,
             anchor="w",
         )
-        self.job_status_label.grid(row=0, column=0, sticky="w")
+        self.job_status_label.grid(row=2, column=0, columnspan=4, sticky="w", pady=(0, 10))
+
+        self._stat_labels = {}
+        for col, (key, title, icon_name) in enumerate(
+            (
+                ("running", "Running", "play"),
+                ("completed", "Completed", "check"),
+                ("pending", "Pending", "clock"),
+                ("success", "Success Rate", "bar-chart"),
+            )
+        ):
+            box = ctk.CTkFrame(job_inner, fg_color="transparent")
+            box.grid(row=3, column=col, sticky="ew", padx=(0 if col == 0 else 8, 0))
+            head = ctk.CTkFrame(box, fg_color="transparent")
+            head.grid(row=0, column=0, sticky="w")
+            img = load_icon(icon_name, 20, color="navy")
+            if img is not None:
+                self._icons.append(img)
+            ctk.CTkLabel(head, text="", image=img, width=22).grid(row=0, column=0, sticky="w")
+            ctk.CTkLabel(
+                head, text=title, font=T.font(12, "bold"), text_color=T.TEXT_MUTED, anchor="w"
+            ).grid(row=0, column=1, sticky="w", padx=(6, 0))
+            val = ctk.CTkLabel(
+                box, text="—", font=T.font(18, "bold"), text_color=T.HEADING, anchor="w"
+            )
+            val.grid(row=1, column=0, sticky="w", pady=(4, 0))
+            self._stat_labels[key] = val
+
         self.job_progress = ctk.CTkProgressBar(
             job_inner,
-            height=6,
-            progress_color=T.ACCENT,
+            height=10,
+            progress_color=T.GOLD,
             fg_color=T.BORDER,
-            corner_radius=3,
+            corner_radius=6,
         )
-        self.job_progress.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        self.job_progress.grid(row=4, column=0, columnspan=4, sticky="ew", pady=(14, 0))
         self.job_progress.set(0)
 
         # Quick actions
         actions = ctk.CTkFrame(body, fg_color="transparent")
-        actions.grid(row=3, column=0, sticky="ew", pady=(0, 16))
+        actions.grid(row=2, column=0, sticky="ew", pady=(0, 16))
         actions.grid_columnconfigure((0, 1, 2), weight=1, uniform="qa")
         self._action_card(
             actions,
@@ -140,7 +146,7 @@ class HomeScreen(ctk.CTkFrame):
 
         # Bottom: recent + system (scrollable page — no forced expand that clips)
         bottom = ctk.CTkFrame(body, fg_color="transparent")
-        bottom.grid(row=4, column=0, sticky="ew")
+        bottom.grid(row=3, column=0, sticky="ew")
         bottom.grid_columnconfigure(0, weight=7)
         bottom.grid_columnconfigure(1, weight=3)
         self._recent_tasks(bottom)
@@ -165,7 +171,7 @@ class HomeScreen(ctk.CTkFrame):
         )
         circle.grid(row=0, column=0, sticky="w")
         circle.grid_propagate(False)
-        img = load_icon(icon_name, 24, color="orange")
+        img = load_icon(icon_name, 24, color="navy")
         if img is not None:
             self._icons.append(img)
         ctk.CTkLabel(circle, text="", image=img).place(relx=0.5, rely=0.5, anchor="center")
@@ -243,7 +249,7 @@ class HomeScreen(ctk.CTkFrame):
                 prog_wrap,
                 width=80,
                 height=6,
-                progress_color=T.ACCENT,
+                progress_color=T.GOLD,
                 fg_color=T.BORDER,
                 corner_radius=3,
             )
@@ -294,7 +300,7 @@ class HomeScreen(ctk.CTkFrame):
             row = ctk.CTkFrame(inner, fg_color="transparent")
             row.grid(row=i + 2, column=0, sticky="ew", pady=4)
             row.grid_columnconfigure(1, weight=1)
-            img = load_icon(icon_name, 16, color="muted")
+            img = load_icon(icon_name, 16, color="navy")
             if img is not None:
                 self._icons.append(img)
             ctk.CTkLabel(row, text="", image=img, width=18).grid(row=0, column=0, sticky="w")

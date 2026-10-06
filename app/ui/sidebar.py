@@ -43,7 +43,7 @@ def _load_sidebar_logo() -> ctk.CTkImage | None:
 
 
 class Sidebar(ctk.CTkFrame):
-    """Charcoal left nav with orange active state (Stitch desktop shell)."""
+    """Navy left nav with Lucide outline icons and burgundy active state."""
 
     def __init__(self, master, app, active_page: str = "home", **kwargs):
         c = current_colors()
@@ -69,40 +69,30 @@ class Sidebar(ctk.CTkFrame):
         self.configure(fg_color=c["SIDEBAR_BG"])
 
         brand = ctk.CTkFrame(self, fg_color="transparent")
-        brand.grid(row=0, column=0, sticky="ew", padx=16, pady=(20, 12))
-        brand.grid_columnconfigure(1, weight=1)
+        brand.grid(row=0, column=0, sticky="ew", padx=16, pady=(24, 16))
+        brand.grid_columnconfigure(0, weight=1)
 
-        mark = ctk.CTkFrame(
-            brand,
-            width=40,
-            height=40,
-            corner_radius=8,
-            fg_color=c["ACCENT"],
-        )
-        mark.grid(row=0, column=0, rowspan=2, sticky="w")
-        mark.grid_propagate(False)
-        ctk.CTkLabel(
-            mark,
-            text="S",
-            font=T.font(18, "bold"),
-            text_color="#FFFFFF",
-        ).place(relx=0.5, rely=0.5, anchor="center")
-
-        ctk.CTkLabel(
-            brand,
-            text="SENTIVO TOOLS",
-            font=T.font(14, "bold"),
-            text_color=c["SIDEBAR_TEXT"],
-            anchor="w",
-        ).grid(row=0, column=1, sticky="w", padx=(12, 0))
-        version = get_current_version()
-        ctk.CTkLabel(
-            brand,
-            text=f"v{version}",
-            font=T.font(11),
-            text_color=c["SIDEBAR_MUTED"],
-            anchor="w",
-        ).grid(row=1, column=1, sticky="w", padx=(12, 0))
+        self._logo_image = _load_sidebar_logo()
+        if self._logo_image is not None:
+            # Logo PNG already includes wordmark + tagline — do not duplicate text.
+            ctk.CTkLabel(
+                brand, text="", image=self._logo_image, fg_color="transparent", anchor="w"
+            ).grid(row=0, column=0, sticky="w")
+        else:
+            ctk.CTkLabel(
+                brand,
+                text="Sentivo Tools",
+                font=T.font_tuple(T.H2),
+                text_color=c["SIDEBAR_TEXT"],
+                anchor="w",
+            ).grid(row=0, column=0, sticky="w")
+            ctk.CTkLabel(
+                brand,
+                text="by Sentivo Limited",
+                font=T.font(11),
+                text_color=c["GOLD"],
+                anchor="w",
+            ).grid(row=1, column=0, sticky="w", pady=(6, 0))
 
         nav = ctk.CTkFrame(self, fg_color="transparent")
         nav.grid(row=1, column=0, sticky="nsew", padx=8, pady=(8, 0))
@@ -114,21 +104,37 @@ class Sidebar(ctk.CTkFrame):
         foot_wrap = ctk.CTkFrame(self, fg_color="transparent")
         foot_wrap.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 16))
         foot_wrap.grid_columnconfigure(0, weight=1)
+        # Thin divider above footer (mockup) — fixed height so CTk does not collapse it
         divider = ctk.CTkFrame(
-            foot_wrap, height=1, fg_color="#3A3A3C", corner_radius=0, border_width=0
+            foot_wrap, height=2, fg_color="#8A94B8", corner_radius=0, border_width=0
         )
         divider.grid(row=0, column=0, sticky="ew", pady=(0, 12))
         divider.grid_propagate(False)
         foot = ctk.CTkFrame(foot_wrap, fg_color="transparent")
         foot.grid(row=1, column=0, sticky="ew")
         foot.grid_columnconfigure(0, weight=1)
+        version = get_current_version()
         ctk.CTkLabel(
             foot,
-            text="by Sentivo Limited",
-            font=T.font(11),
+            text=f"v{version}",
+            font=T.font_tuple(T.CAPTION),
             text_color=c["SIDEBAR_MUTED"],
             anchor="w",
         ).grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(
+            foot,
+            text="Sentivo Tools",
+            font=T.font(11),
+            text_color=c["SIDEBAR_MUTED"],
+            anchor="w",
+        ).grid(row=1, column=0, sticky="w", pady=(2, 0))
+        ctk.CTkLabel(
+            foot,
+            text="by Sentivo Limited",
+            font=T.font(10),
+            text_color=c["GOLD"],
+            anchor="w",
+        ).grid(row=2, column=0, sticky="w")
     def _nav_item(self, parent, row: int, page_id: str, label: str, icon_name: str) -> None:
         c = current_colors()
         active = page_id == self.active_page
@@ -141,7 +147,7 @@ class Sidebar(ctk.CTkFrame):
             height=T.ROW_HEIGHT,
             corner_radius=8,
         )
-        wrap.grid(row=row, column=0, sticky="ew", pady=3)
+        wrap.grid(row=row, column=0, sticky="ew", pady=2)
         wrap.grid_propagate(False)
         wrap.grid_columnconfigure(0, weight=1)
 
@@ -196,7 +202,7 @@ class Sidebar(ctk.CTkFrame):
 
 def attach_sidebar(parent, app, active_page: str) -> ctk.CTkFrame:
     """
-    Attach fixed charcoal sidebar + return a vertically scrollable main content host.
+    Attach fixed navy sidebar + return a vertically scrollable main content host.
     Sidebar does not scroll; page content scrolls when taller than the viewport.
     """
     c = current_colors()

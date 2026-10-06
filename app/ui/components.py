@@ -89,7 +89,7 @@ class Card(ctk.CTkFrame):
                 )
                 circle.grid(row=0, column=0, rowspan=2, sticky="nw", padx=(0, 10))
                 circle.grid_propagate(False)
-                img = load_icon(icon, size=18, color="orange")
+                img = load_icon(icon, size=18, color="navy")
                 ctk.CTkLabel(
                     circle,
                     text="",

@@ -1,4 +1,4 @@
-"""Design system for Sentivo Tools — charcoal / orange desktop workbench."""
+"""Design system for Sentivo Tools — light mockup navy/burgundy brand."""
 
 from __future__ import annotations
 
@@ -39,51 +39,51 @@ CAPTION = ("Segoe UI", 12, "normal")
 BTN_TEXT = ("Segoe UI", 13, "bold")
 
 # ── SIZES / LAYOUT ──────────────────────────────────────
-SIDEBAR_WIDTH = 256
+SIDEBAR_WIDTH = 220
 PAGE_PADDING = 24
 CARD_PADDING = 16
 GRID_GAP = 16
 BORDER_RADIUS = 8
-CARD_RADIUS = 8
+CARD_RADIUS = 12
 INPUT_HEIGHT = 40
 BTN_HEIGHT = 40
-ROW_HEIGHT = 40
+ROW_HEIGHT = 44
 WINDOW_MIN = (960, 640)
 SCROLLBAR_WIDTH = 8
 
-# Brand tokens — Stitch Sentivo Desktop (charcoal / orange / light canvas)
+# Brand tokens (light mockup — app is light-only for now)
 _LIGHT = {
-    "BG_PRIMARY": "#F5F5F5",
+    "BG_PRIMARY": "#F0EDE8",
     "BG_SURFACE_A": "#FFFFFF",
     "BG_SURFACE_B": "#FFFFFF",
-    "BORDER": "#E5E5E5",
-    "TEXT_PRIMARY": "#1C1C1E",
+    "BORDER": "#D8D5D0",
+    "TEXT_PRIMARY": "#1F2937",
     "TEXT_SECONDARY": "#6B7280",
-    "TEXT_MUTED": "#9CA3AF",
-    "HEADING": "#1C1C1E",
-    "ACCENT": "#E8590C",
-    "ACCENT_HOVER": "#C2410C",
-    "GOLD": "#E8590C",
-    "SUCCESS": "#16A34A",
+    "TEXT_MUTED": "#6B7280",
+    "HEADING": "#0D1B4B",
+    "ACCENT": "#6B1228",
+    "ACCENT_HOVER": "#8A1835",
+    "GOLD": "#C9A84C",
+    "SUCCESS": "#22A55B",
     "WARNING": "#F59E0B",
-    "ERROR": "#DC2626",
+    "ERROR": "#D92D3A",
     "INFO": "#2563EB",
-    "ACCENT_DIM": "#FFF4ED",
-    "AMBER_BG": "#FFF7ED",
-    "BORDER_HOVER": "#D4D4D4",
-    "BTN_ON_ACCENT": "#FFFFFF",
+    "ACCENT_DIM": "#F3E6EA",
+    "AMBER_BG": "#F5EDD8",
+    "BORDER_HOVER": "#C4C0B8",
+    "BTN_ON_ACCENT": "#F0EDE8",
     "INPUT_BG": "#FFFFFF",
-    "INPUT_TEXT": "#1C1C1E",
-    "INPUT_PLACEHOLDER": "#9CA3AF",
-    "DISABLED_BG": "#F3F4F6",
+    "INPUT_TEXT": "#1F2937",
+    "INPUT_PLACEHOLDER": "#6B7280",
+    "DISABLED_BG": "#E8E5E0",
     "DISABLED_TEXT": "#9CA3AF",
-    "CIRCLE_ICON_BG": "#FFF4ED",
-    "SIDEBAR_BG": "#1C1C1E",
-    "SIDEBAR_TEXT": "#FFFFFF",
-    "SIDEBAR_MUTED": "#A1A1AA",
-    "SIDEBAR_HOVER": "#2C2C2E",
-    "SIDEBAR_ACTIVE_BG": "#E8590C",
-    "SIDEBAR_ACTIVE_BORDER": "#E8590C",
+    "CIRCLE_ICON_BG": "#F0EDE8",
+    "SIDEBAR_BG": "#0D1B4B",
+    "SIDEBAR_TEXT": "#F0EDE8",
+    "SIDEBAR_MUTED": "#A8B0C8",
+    "SIDEBAR_HOVER": "#152456",
+    "SIDEBAR_ACTIVE_BG": "#6B1228",
+    "SIDEBAR_ACTIVE_BORDER": "#6B1228",
 }
 
 # Kept for compatibility; appearance is forced to light.
