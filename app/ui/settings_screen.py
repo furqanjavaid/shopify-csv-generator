@@ -5,6 +5,7 @@ from __future__ import annotations
 import customtkinter as ctk
 
 from app.ui import theme as T
+from app.ui.components import Card, PageHeader
 from app.ui.sidebar import attach_sidebar
 from app.ui.theme import current_colors
 from app.utils.updater import get_current_version
@@ -18,65 +19,33 @@ class SettingsScreen(ctk.CTkFrame):
         super().__init__(parent, fg_color=c["BG_PRIMARY"], corner_radius=0)
         self.app = app
         body = attach_sidebar(self, app, "settings")
-        T.page_title(body, "Settings", "App preferences and defaults")
 
-        # Appearance (light only — dark toggle removed)
-        theme_card = T.card_frame(body)
+        PageHeader(
+            body,
+            "Settings",
+            "Manage application preferences and defaults.",
+        ).pack(fill="x", pady=(0, 14))
+
+        theme_card = Card(
+            body,
+            title="Appearance",
+            subtitle="Light theme is active. Dark mode is currently disabled.",
+            icon="eye",
+        )
         theme_card.pack(fill="x", pady=(0, T.GRID_GAP))
-        inner = ctk.CTkFrame(theme_card, fg_color="transparent")
-        inner.pack(fill="x", padx=T.CARD_PADDING, pady=T.CARD_PADDING)
 
-        ctk.CTkLabel(
-            inner,
-            text="Appearance",
-            font=T.font(14, "bold"),
-            text_color=c["HEADING"],
-            anchor="w",
-        ).pack(fill="x")
-        ctk.CTkLabel(
-            inner,
-            text="Light theme (mockup). Dark mode is temporarily disabled.",
-            font=T.font_tuple(T.BODY),
-            text_color=c["TEXT_MUTED"],
-            anchor="w",
-        ).pack(fill="x", pady=(4, 0))
-
-        # Output info
-        out_card = T.card_frame(body)
+        out_card = Card(
+            body,
+            title="Output",
+            subtitle="CSV files save via Save dialog. Audits write to outputs/.",
+            icon="folder",
+        )
         out_card.pack(fill="x", pady=(0, T.GRID_GAP))
-        out_inner = ctk.CTkFrame(out_card, fg_color="transparent")
-        out_inner.pack(fill="x", padx=T.CARD_PADDING, pady=T.CARD_PADDING)
 
-        ctk.CTkLabel(
-            out_inner,
-            text="Output",
-            font=T.font_tuple(T.H3),
-            text_color=c["HEADING"],
-            anchor="w",
-        ).pack(fill="x")
-        ctk.CTkLabel(
-            out_inner,
-            text="CSV files save via Save dialog · Audits write to outputs/",
-            font=T.font_tuple(T.BODY),
-            text_color=c["TEXT_SECONDARY"],
-            anchor="w",
-        ).pack(fill="x", pady=(4, 0))
-
-        ver_card = T.card_frame(body)
+        ver_card = Card(
+            body,
+            title="Version",
+            subtitle=f"v{get_current_version()}  ·  from version.json",
+            icon="info",
+        )
         ver_card.pack(fill="x", pady=(0, T.GRID_GAP))
-        ver_inner = ctk.CTkFrame(ver_card, fg_color="transparent")
-        ver_inner.pack(fill="x", padx=T.CARD_PADDING, pady=T.CARD_PADDING)
-        ctk.CTkLabel(
-            ver_inner,
-            text="Version",
-            font=T.font_tuple(T.H3),
-            text_color=c["HEADING"],
-            anchor="w",
-        ).pack(fill="x")
-        ctk.CTkLabel(
-            ver_inner,
-            text=f"v{get_current_version()}  ·  from version.json",
-            font=T.font_tuple(T.BODY),
-            text_color=c["TEXT_SECONDARY"],
-            anchor="w",
-        ).pack(fill="x", pady=(4, 0))
