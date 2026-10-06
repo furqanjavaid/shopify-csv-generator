@@ -6,7 +6,10 @@ import logging
 import time
 from typing import Any, Callable, TypeVar
 
-from sentivo_extractor.decision_engine.captcha_detector import CaptchaBlockedError
+from sentivo_extractor.decision_engine.captcha_detector import (
+    CaptchaBlockedError,
+    CaptchaTimeoutError,
+)
 
 T = TypeVar("T")
 
@@ -53,7 +56,7 @@ class RetryHandler:
         for attempt in range(1, self.max_attempts + 1):
             try:
                 result = fn()
-            except CaptchaBlockedError:
+            except (CaptchaBlockedError, CaptchaTimeoutError):
                 raise
             except Exception as exc:  # noqa: BLE001
                 last_reason = f"exception:{exc}"

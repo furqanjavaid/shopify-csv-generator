@@ -16,9 +16,11 @@ from sentivo_extractor.core.pdp_pipeline import (
 )
 from sentivo_extractor.core.schema import ensure_product
 from sentivo_extractor.decision_engine.captcha_detector import (
-    CAPTCHA_LOG_MARKER,
+    CAPTCHA_WAIT_MARKER,
     CaptchaBlockedError,
     CaptchaDetector,
+    CaptchaTimeoutError,
+    PlaywrightLiveSession,
 )
 from sentivo_extractor.decision_engine.confidence_scorer import ConfidenceScorer
 from sentivo_extractor.decision_engine.fallback_manager import FallbackManager
@@ -27,6 +29,7 @@ from sentivo_extractor.decision_engine.strategy_selector import StrategySelector
 
 # Shared across crawler instances so domain winners persist for a process run.
 _SHARED_SELECTOR = StrategySelector()
+_SHARED_PW_SESSION: PlaywrightLiveSession | None = None
 
 
 class DecisionCoordinator:
@@ -34,7 +37,7 @@ class DecisionCoordinator:
     Intelligent coordinator over the existing HTTP / Playwright extractors.
 
     Flow per URL:
-      1. Soft-fetch HTML + CAPTCHA/block detection (pause on hit)
+      1. Soft-fetch HTML + CAPTCHA detection (visible browser + poll until solved)
       2. Platform detect → strategy order (domain memory)
       3. Fallback chain (2 attempts each) until confidence ≥ 70%
       4. Finalize via existing PDP pipeline helpers (variants/images/report)
@@ -62,8 +65,28 @@ class DecisionCoordinator:
         self.retry = RetryHandler(logger=self.logger)
         self.fallback = FallbackManager(scorer=self.scorer, logger=self.logger)
 
+    @classmethod
+    def shared_playwright(cls) -> PlaywrightLiveSession | None:
+        return _SHARED_PW_SESSION
+
+    @classmethod
+    def close_shared_session(cls) -> None:
+        global _SHARED_PW_SESSION
+        if _SHARED_PW_SESSION is not None:
+            try:
+                _SHARED_PW_SESSION.close()
+            except Exception:
+                pass
+            _SHARED_PW_SESSION = None
+
+    def _live_session(self) -> PlaywrightLiveSession:
+        global _SHARED_PW_SESSION
+        if _SHARED_PW_SESSION is None or not _SHARED_PW_SESSION.alive:
+            _SHARED_PW_SESSION = PlaywrightLiveSession(logger=self.logger)
+        return _SHARED_PW_SESSION
+
     def extract(self, url: str) -> dict[str, Any]:
-        """Extract one URL with retries. Raises CaptchaBlockedError on block."""
+        """Extract one URL with retries. CaptchaTimeoutError is not retried."""
 
         def _once() -> dict[str, Any]:
             return self._extract_once(url)
@@ -71,7 +94,18 @@ class DecisionCoordinator:
         def _ok(outcome: dict[str, Any]) -> bool:
             return bool(outcome.get("success"))
 
-        result, reason = self.retry.run(url, _once, is_success=_ok)
+        try:
+            result, reason = self.retry.run(url, _once, is_success=_ok)
+        except CaptchaTimeoutError as exc:
+            reason = getattr(exc, "reason", None) or "captcha_timeout_site_blocked"
+            return {
+                "success": False,
+                "product": None,
+                "failed_record": {"source_url": url, "_fail_reason": reason},
+                "reason": reason,
+                "report": None,
+                "decision_engine": {"failed": True, "reason": reason},
+            }
         if result is None:
             return {
                 "success": False,
@@ -122,6 +156,10 @@ class DecisionCoordinator:
             "probe_variants": False,
             "logger": self.logger,
         }
+        live = self.shared_playwright()
+        if live is not None and live.alive:
+            context["playwright_session"] = live
+            context["playwright_headless"] = False
 
         values: dict[str, Any] = {}
         sources: dict[str, str] = {}
@@ -181,7 +219,14 @@ class DecisionCoordinator:
         if pipeline._playwright_bundle and pipeline._playwright_bundle.get("html"):  # noqa: SLF001
             engine_html = pipeline._playwright_bundle["html"]  # noqa: SLF001
             # Re-check CAPTCHA on rendered HTML (Cloudflare interstitial).
-            self.captcha.raise_if_blocked(html=engine_html, url=url)
+            if self.captcha.inspect(html=engine_html, url=url).get("blocked"):
+                engine_html = self._wait_out_captcha(url)
+                if pipeline._playwright_bundle is not None:  # noqa: SLF001
+                    pipeline._playwright_bundle["html"] = engine_html  # noqa: SLF001
+                live2 = self.shared_playwright()
+                if live2 is not None and live2.alive:
+                    context["playwright_session"] = live2
+                    context["playwright_headless"] = False
 
         pipeline._ensure_price(values, sources, confidences, engine_html or html)  # noqa: SLF001
         pipeline._ensure_description(  # noqa: SLF001
@@ -308,21 +353,51 @@ class DecisionCoordinator:
             "decision_engine": de_meta,
         }
 
+    def _wait_out_captcha(self, url: str) -> str:
+        """Open a visible browser, poll until solved, return page HTML."""
+        session = self._live_session()
+        ua = ""
+        try:
+            ua = str(self.http.session.headers.get("User-Agent") or "")
+        except Exception:
+            ua = ""
+        session.ensure_visible(user_agent=ua)
+        snap = self.captcha.wait_until_cleared(session, url, logger=self.logger)
+        session.apply_cookies_to_requests(getattr(self.http, "session", None))
+        return str(snap.get("html") or "")
+
     def _soft_fetch(self, url: str) -> tuple[str, bool]:
-        """Fetch HTML without raising on HTTP errors; detect CAPTCHA/blocks."""
+        """Fetch HTML without raising on HTTP errors; wait out CAPTCHA in-browser."""
         session = getattr(self.http, "session", None)
+        live = self.shared_playwright()
+        if live is not None and live.alive:
+            try:
+                snap = live.render_url(url)
+                html = str(snap.get("html") or "")
+                title = str(snap.get("title") or "")
+                if self.captcha.inspect(html=html, title=title, url=url).get("blocked"):
+                    html = self._wait_out_captcha(url)
+                live.apply_cookies_to_requests(session)
+                return html, False
+            except CaptchaTimeoutError:
+                raise
+            except Exception as exc:
+                self.logger.warning("Live browser fetch failed %s: %s", url, exc)
+
         if session is None:
             try:
                 html = self.http.get_text(url)
-                self.captcha.raise_if_blocked(html=html, url=url)
+                if self.captcha.inspect(html=html, url=url).get("blocked"):
+                    return self._wait_out_captcha(url), False
                 return html, False
-            except CaptchaBlockedError:
+            except CaptchaTimeoutError:
                 raise
+            except CaptchaBlockedError:
+                return self._wait_out_captcha(url), False
             except Exception as exc:
                 self.logger.warning("GET failed %s: %s", url, exc)
                 return "", True
 
-        # Respect robots / rate limit via HttpClient helpers when present.
         robots = getattr(self.http, "robots", None)
         respect = getattr(self.http, "respect_robots", True)
         if robots is not None and not robots.allowed(url, respect):
@@ -335,7 +410,7 @@ class DecisionCoordinator:
         timeout = float(getattr(self.http, "timeout", 25) or 25)
         try:
             resp = session.get(url, timeout=timeout, allow_redirects=True)
-        except CaptchaBlockedError:
+        except CaptchaTimeoutError:
             raise
         except Exception as exc:
             self.logger.warning("GET failed %s: %s", url, exc)
@@ -343,17 +418,15 @@ class DecisionCoordinator:
 
         html = resp.text or ""
         headers = {k: v for k, v in resp.headers.items()}
-        try:
-            self.captcha.raise_if_blocked(
-                status_code=resp.status_code,
-                html=html,
-                url=url,
-                headers=headers,
-            )
-        except CaptchaBlockedError as exc:
-            self.logger.error("%s %s", CAPTCHA_LOG_MARKER, exc)
-            print(f"{CAPTCHA_LOG_MARKER} {exc}", flush=True)
-            raise
+        probe = self.captcha.inspect(
+            status_code=resp.status_code,
+            html=html,
+            url=url,
+            headers=headers,
+        )
+        if probe["blocked"]:
+            self.logger.warning("%s %s", CAPTCHA_WAIT_MARKER, probe["message"])
+            return self._wait_out_captcha(url), False
 
         if resp.status_code >= 400:
             self.logger.warning(

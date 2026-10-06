@@ -220,18 +220,6 @@ def run_extract(args: argparse.Namespace) -> int:
     else:
         print(f"Output base: {out}")
         print("(domain subfolders with prefixed filenames)")
-    if summary.get("captcha_paused"):
-        from sentivo_extractor.decision_engine.captcha_detector import (
-            CAPTCHA_EXIT_CODE,
-            CAPTCHA_LOG_MARKER,
-        )
-
-        pause = summary.get("captcha_pause") or {}
-        print(
-            f"{CAPTCHA_LOG_MARKER} Paused at {pause.get('url')}: {pause.get('reason')}"
-        )
-        print("Resolve the CAPTCHA/block in your browser, then Resume from the UI.")
-        return CAPTCHA_EXIT_CODE
     if summary.get("coverage_enforcement") == "failed":
         return 3
     if options.get("strict"):

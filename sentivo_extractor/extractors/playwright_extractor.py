@@ -245,10 +245,21 @@ class PlaywrightExtractor(BaseExtractor):
             return None
 
         timeout = int(ctx.get("timeout_ms") or 30000)
+        live = ctx.get("playwright_session")
+        if live is not None and getattr(live, "alive", False):
+            try:
+                return live.render_url(url, timeout_ms=timeout)
+            except Exception:
+                return None
         network_json: list[Any] = []
         try:
             with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
+                headless = True if ctx.get("playwright_headless") is None else bool(
+                    ctx.get("playwright_headless")
+                )
+                if live is not None:
+                    headless = False
+                browser = p.chromium.launch(headless=headless)
                 page = browser.new_page(viewport={"width": 1440, "height": 900})
 
                 def on_response(response) -> None:
