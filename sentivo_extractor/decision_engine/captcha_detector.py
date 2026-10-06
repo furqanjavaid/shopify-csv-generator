@@ -16,55 +16,61 @@ CAPTCHA_EXIT_CODE = 75  # unused — scrape no longer exits on CAPTCHA
 
 POLL_INTERVAL_SEC = 2.0
 SOLVE_TIMEOUT_SEC = 300.0  # 5 minutes
+MIN_INDICATORS = 2  # require ≥2 signals — bare "captcha" in JS never counts alone
 
-_CAPTCHA_KEYWORDS = (
-    "captcha",
-    "recaptcha",
-    "hcaptcha",
-    "cf-challenge",
-    "cf-browser-check",
-    "challenge-platform",
-    "attention required",
-    "verify you are human",
-    "verify you are a human",
-    "are you a robot",
-    "i'm not a robot",
-    "security check",
-    "access denied",
-    "just a moment",
-    "checking your browser",
-    "enable javascript and cookies",
-    "ray id",
-    "cloudflare",
-    "ddos protection",
-    "bot detection",
-    "perimeterx",
-    "datadome",
-    "please complete the security check",
-)
-
+# Title-only challenge phrases (do not include bare "captcha" / "cloudflare").
 _TITLE_BLOCKED = (
     "just a moment",
     "attention required",
     "access denied",
-    "verify you are human",
     "security check",
-    "cloudflare",
-    "captcha",
-    "are you a robot",
+    "verify you are human",
+    "verify you are a human",
 )
 
-_BLOCK_STATUS = frozenset({403, 429, 503})
+# Active challenge page markers (NOT "captcha"/"recaptcha"/"hcaptcha" alone —
+# those appear in dormant Google scripts on normal storefronts).
+_ACTIVE_CHALLENGE_MARKERS = (
+    "cf-challenge",
+    "cf-browser-check",
+    "challenge-platform",
+    "just a moment",
+    "attention required",
+    "checking your browser",
+    "enable javascript and cookies",
+    "verify you are human",
+    "verify you are a human",
+    "please complete the security check",
+    "ddos protection by cloudflare",
+)
+
+_VISIBLE_CHALLENGE_SELECTORS = (
+    'iframe[src*="challenges.cloudflare.com"]',
+    'iframe[src*="recaptcha/api2/bframe"]',
+    'iframe[src*="hcaptcha.com/captcha"]',
+    'iframe[title*="challenge" i]',
+    "#challenge-form",
+    "#challenge-stage",
+    ".cf-challenge-running",
+    "#cf-challenge-running",
+    "[data-ray]",
+)
+
+_BLOCK_STATUS = frozenset({403, 429})
 
 _PRODUCT_SIGNALS = (
     "application/ld+json",
-    "og:type",
-    "product",
-    "itemprop",
+    '"@type":"product"',
+    "'@type':'product'",
+    'og:type" content="product',
+    "itemprop=\"price\"",
+    "itemprop='price'",
     "add to cart",
     "add-to-cart",
     "product-title",
     "product_title",
+    "woocommerce-Price-amount",
+    "shopify-section",
 )
 
 
@@ -156,6 +162,33 @@ class PlaywrightLiveSession:
         page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
         return page
 
+    def has_visible_challenge_iframe(self) -> bool:
+        """True only if a challenge iframe/form is visible (not merely present in HTML)."""
+        page = self.page
+        if page is None:
+            return False
+        for sel in _VISIBLE_CHALLENGE_SELECTORS:
+            try:
+                loc = page.locator(sel)
+                if loc.count() < 1:
+                    continue
+                if loc.first.is_visible():
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def has_cf_clearance(self) -> bool:
+        if self.context is None:
+            return False
+        try:
+            for cookie in self.context.cookies():
+                if str(cookie.get("name") or "") == "cf_clearance":
+                    return True
+        except Exception:
+            pass
+        return False
+
     def snapshot(self) -> dict[str, Any]:
         page = self.page
         html = ""
@@ -179,6 +212,8 @@ class PlaywrightLiveSession:
             "network_json": list(self.network_json),
             "screenshot_png": screenshot_png,
             "variant_probe": None,
+            "visible_challenge_iframe": self.has_visible_challenge_iframe(),
+            "cf_clearance": self.has_cf_clearance(),
         }
 
     def render_url(self, url: str, *, timeout_ms: int = 30000) -> dict[str, Any]:
@@ -231,12 +266,45 @@ class PlaywrightLiveSession:
 
 class CaptchaDetector:
     """
-    Detect status 403/429, CAPTCHA keywords, and Cloudflare challenges.
-    On detection, open a visible browser and poll until the user solves it.
+    Detect active CAPTCHA / bot-block pages with a multi-indicator threshold.
+
+    Bare "captcha" / reCAPTCHA script tags on a normal storefront do NOT count.
+    Requires at least MIN_INDICATORS strong signals before pausing for a solve.
     """
 
     poll_interval = POLL_INTERVAL_SEC
     solve_timeout = SOLVE_TIMEOUT_SEC
+    min_indicators = MIN_INDICATORS
+
+    @staticmethod
+    def has_product_content(html: str) -> bool:
+        low = (html or "").lower()
+        if len(low) < 400:
+            return False
+        return any(sig.lower() in low for sig in _PRODUCT_SIGNALS)
+
+    @staticmethod
+    def _active_challenge_markers(html: str) -> list[str]:
+        low = (html or "").lower()
+        return [m for m in _ACTIVE_CHALLENGE_MARKERS if m in low]
+
+    @staticmethod
+    def _cookie_names(cookies: Any) -> set[str]:
+        names: set[str] = set()
+        if not cookies:
+            return names
+        if isinstance(cookies, dict):
+            names.update(str(k) for k in cookies)
+            return names
+        try:
+            for item in cookies:
+                if isinstance(item, dict) and item.get("name"):
+                    names.add(str(item["name"]))
+                else:
+                    names.add(str(getattr(item, "name", "") or item))
+        except Exception:
+            pass
+        return {n for n in names if n}
 
     def inspect(
         self,
@@ -246,71 +314,146 @@ class CaptchaDetector:
         url: str = "",
         headers: dict[str, str] | None = None,
         title: str = "",
+        cookies: Any = None,
+        visible_challenge_iframe: bool = False,
+        cf_clearance: bool | None = None,
+        logger: logging.Logger | None = None,
     ) -> dict[str, Any]:
-        reasons: list[str] = []
+        """
+        Score challenge indicators. ``blocked`` is True only when
+        ``len(indicators) >= min_indicators`` (default 2).
+        """
+        indicators: list[str] = []
+        ignored: list[str] = []
         code = int(status_code) if status_code is not None else None
-        if code in _BLOCK_STATUS:
-            reasons.append(f"http_{code}")
-
-        hdrs = {str(k).lower(): str(v).lower() for k, v in (headers or {}).items()}
-        server = hdrs.get("server", "")
-        if "cloudflare" in server and code in (403, 429, 503):
-            reasons.append("cloudflare_server")
-        if "cf-ray" in hdrs and code in (403, 429, 503):
-            reasons.append("cloudflare_ray")
-
         low = (html or "").lower()
-        hits = [kw for kw in _CAPTCHA_KEYWORDS if kw in low]
-        strong = [
-            h
-            for h in hits
-            if h
-            not in (
-                "cloudflare",
-                "ray id",
+        hdrs = {str(k).lower(): str(v).lower() for k, v in (headers or {}).items()}
+        cookie_names = self._cookie_names(cookies)
+        has_clearance = (
+            bool(cf_clearance)
+            if cf_clearance is not None
+            else ("cf_clearance" in cookie_names)
+        )
+        has_product = self.has_product_content(html)
+        markers = self._active_challenge_markers(html)
+
+        # Ignore dormant captcha/recaptcha/hcaptcha script mentions entirely.
+        if "captcha" in low or "recaptcha" in low or "hcaptcha" in low:
+            ignored.append("dormant_captcha_script_mention")
+
+        # 1) Hard HTTP blocks
+        if code in _BLOCK_STATUS:
+            indicators.append(f"http_status:{code}")
+
+        # 2) Cloudflare challenge page (active markers; cf_clearance missing)
+        cf_html = any(
+            m in low
+            for m in (
+                "cf-challenge",
+                "challenge-platform",
+                "cf-browser-check",
+                "cdn-cgi/challenge",
             )
-        ]
-        if strong:
-            reasons.append("captcha_keywords:" + ",".join(strong[:5]))
-        elif hits and code in _BLOCK_STATUS:
-            reasons.append("block_page_keywords:" + ",".join(hits[:5]))
+        )
+        cf_title = "just a moment" in (title or "").lower()
+        cf_headers = ("cf-ray" in hdrs) or ("cloudflare" in hdrs.get("server", ""))
+        if cf_html or (cf_title and (cf_headers or code in _BLOCK_STATUS)):
+            if not has_clearance:
+                indicators.append("cloudflare_challenge_page")
+            else:
+                ignored.append("cloudflare_markers_but_cf_clearance_present")
 
-        if ("cf-challenge" in low or "challenge-platform" in low) and (
-            code in _BLOCK_STATUS or "just a moment" in low
-        ):
-            if "cloudflare_challenge" not in reasons:
-                reasons.append("cloudflare_challenge")
+        # 3) Visible / interactable challenge iframe (Playwright-confirmed)
+        if visible_challenge_iframe:
+            indicators.append("visible_captcha_iframe")
 
-        tlow = (title or "").lower()
-        if any(tok in tlow for tok in _TITLE_BLOCKED):
-            reasons.append(f"blocked_title:{title[:80]}")
+        # 4) Blocked page title
+        tlow = (title or "").lower().strip()
+        for tok in _TITLE_BLOCKED:
+            if tok in tlow:
+                indicators.append(f"blocked_title:{title[:80] or tok}")
+                break
 
-        blocked = bool(reasons)
+        # 5) No product content AND active challenge markers in body
+        if (not has_product) and markers:
+            indicators.append(
+                "no_product_content+challenge_markers:" + ",".join(markers[:4])
+            )
+
+        # Deduplicate while preserving order
+        seen: set[str] = set()
+        unique: list[str] = []
+        for item in indicators:
+            if item not in seen:
+                seen.add(item)
+                unique.append(item)
+        indicators = unique
+
+        blocked = len(indicators) >= self.min_indicators
+        message = (
+            f"CAPTCHA/block detected ({len(indicators)} indicators: "
+            f"{'; '.join(indicators)})"
+            if blocked
+            else ""
+        )
+
+        log = logger or logging.getLogger(__name__)
+        if blocked:
+            log.warning(
+                "CAPTCHA trigger url=%s indicators=%s ignored=%s",
+                url or "-",
+                indicators,
+                ignored,
+            )
+            print(
+                f"{CAPTCHA_WAIT_MARKER} reason={'; '.join(indicators)} url={url}",
+                flush=True,
+            )
+        elif indicators:
+            log.info(
+                "CAPTCHA soft signals (below threshold %s) url=%s indicators=%s ignored=%s",
+                self.min_indicators,
+                url or "-",
+                indicators,
+                ignored,
+            )
+
         return {
             "blocked": blocked,
-            "reasons": reasons,
+            "reasons": indicators,
+            "indicators": indicators,
+            "indicator_count": len(indicators),
+            "min_indicators": self.min_indicators,
+            "ignored": ignored,
+            "has_product_content": has_product,
             "status_code": code,
             "url": url,
             "title": title,
-            "message": (
-                f"CAPTCHA/block detected ({'; '.join(reasons)})"
-                if blocked
-                else ""
-            ),
+            "message": message,
         }
 
-    def page_is_clear(self, *, html: str = "", title: str = "") -> bool:
-        """True when challenge keywords are gone and the page looks like real content."""
-        probe = self.inspect(html=html, title=title, status_code=None)
+    def page_is_clear(
+        self,
+        *,
+        html: str = "",
+        title: str = "",
+        visible_challenge_iframe: bool = False,
+        cf_clearance: bool | None = None,
+    ) -> bool:
+        """True when the multi-indicator check says we are not on a challenge page."""
+        probe = self.inspect(
+            html=html,
+            title=title,
+            status_code=None,
+            visible_challenge_iframe=visible_challenge_iframe,
+            cf_clearance=cf_clearance,
+        )
         if probe["blocked"]:
             return False
         body = (html or "").lower()
-        if len(body) < 400:
+        if len(body) < 200:
             return False
-        if any(sig in body for sig in _PRODUCT_SIGNALS):
-            return True
-        # Generic storefront / HTML document without challenge markers.
-        return "<html" in body and "just a moment" not in body
+        return True
 
     def raise_if_blocked(
         self,
@@ -320,6 +463,9 @@ class CaptchaDetector:
         url: str = "",
         headers: dict[str, str] | None = None,
         title: str = "",
+        cookies: Any = None,
+        visible_challenge_iframe: bool = False,
+        cf_clearance: bool | None = None,
     ) -> None:
         result = self.inspect(
             status_code=status_code,
@@ -327,6 +473,9 @@ class CaptchaDetector:
             url=url,
             headers=headers,
             title=title,
+            cookies=cookies,
+            visible_challenge_iframe=visible_challenge_iframe,
+            cf_clearance=cf_clearance,
         )
         if result["blocked"]:
             raise CaptchaBlockedError(
@@ -344,6 +493,7 @@ class CaptchaDetector:
         logger: logging.Logger | None = None,
         timeout_sec: float | None = None,
         interval_sec: float | None = None,
+        trigger_reasons: list[str] | None = None,
     ) -> dict[str, Any]:
         """
         Poll the visible page every 2s until the CAPTCHA is gone, or time out.
@@ -354,9 +504,11 @@ class CaptchaDetector:
         timeout_sec = float(self.solve_timeout if timeout_sec is None else timeout_sec)
         interval_sec = float(self.poll_interval if interval_sec is None else interval_sec)
         deadline = time.monotonic() + timeout_sec
+        reason_txt = "; ".join(trigger_reasons or []) or "active_challenge"
 
         msg = (
-            f"{CAPTCHA_WAIT_MARKER} CAPTCHA detected at {url}. "
+            f"{CAPTCHA_WAIT_MARKER} CAPTCHA detected at {url} "
+            f"(reasons: {reason_txt}). "
             "Solve it in the browser window. Scraping will resume automatically."
         )
         log.warning(msg)
@@ -373,10 +525,17 @@ class CaptchaDetector:
             snap = session.snapshot()
             html = str(snap.get("html") or "")
             title = str(snap.get("title") or "")
+            visible = bool(snap.get("visible_challenge_iframe"))
+            clearance = bool(snap.get("cf_clearance"))
             if title and title != last_title:
                 log.info("CAPTCHA poll title=%s", title[:80])
                 last_title = title
-            if self.page_is_clear(html=html, title=title):
+            if self.page_is_clear(
+                html=html,
+                title=title,
+                visible_challenge_iframe=visible,
+                cf_clearance=clearance,
+            ):
                 done = (
                     f"{CAPTCHA_CLEARED_MARKER} CAPTCHA cleared at {url} — resuming scrape."
                 )

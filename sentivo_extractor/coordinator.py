@@ -219,8 +219,26 @@ class DecisionCoordinator:
         if pipeline._playwright_bundle and pipeline._playwright_bundle.get("html"):  # noqa: SLF001
             engine_html = pipeline._playwright_bundle["html"]  # noqa: SLF001
             # Re-check CAPTCHA on rendered HTML (Cloudflare interstitial).
-            if self.captcha.inspect(html=engine_html, url=url).get("blocked"):
-                engine_html = self._wait_out_captcha(url)
+            live_pw = self.shared_playwright()
+            probe_pw = self.captcha.inspect(
+                html=engine_html,
+                url=url,
+                visible_challenge_iframe=(
+                    live_pw.has_visible_challenge_iframe()
+                    if live_pw is not None and live_pw.alive
+                    else False
+                ),
+                cf_clearance=(
+                    live_pw.has_cf_clearance()
+                    if live_pw is not None and live_pw.alive
+                    else None
+                ),
+                logger=self.logger,
+            )
+            if probe_pw.get("blocked"):
+                engine_html = self._wait_out_captcha(
+                    url, reasons=list(probe_pw.get("reasons") or [])
+                )
                 if pipeline._playwright_bundle is not None:  # noqa: SLF001
                     pipeline._playwright_bundle["html"] = engine_html  # noqa: SLF001
                 live2 = self.shared_playwright()
@@ -353,7 +371,9 @@ class DecisionCoordinator:
             "decision_engine": de_meta,
         }
 
-    def _wait_out_captcha(self, url: str) -> str:
+    def _wait_out_captcha(
+        self, url: str, *, reasons: list[str] | None = None
+    ) -> str:
         """Open a visible browser, poll until solved, return page HTML."""
         session = self._live_session()
         ua = ""
@@ -362,7 +382,12 @@ class DecisionCoordinator:
         except Exception:
             ua = ""
         session.ensure_visible(user_agent=ua)
-        snap = self.captcha.wait_until_cleared(session, url, logger=self.logger)
+        snap = self.captcha.wait_until_cleared(
+            session,
+            url,
+            logger=self.logger,
+            trigger_reasons=reasons,
+        )
         session.apply_cookies_to_requests(getattr(self.http, "session", None))
         return str(snap.get("html") or "")
 
@@ -375,8 +400,20 @@ class DecisionCoordinator:
                 snap = live.render_url(url)
                 html = str(snap.get("html") or "")
                 title = str(snap.get("title") or "")
-                if self.captcha.inspect(html=html, title=title, url=url).get("blocked"):
-                    html = self._wait_out_captcha(url)
+                probe = self.captcha.inspect(
+                    html=html,
+                    title=title,
+                    url=url,
+                    visible_challenge_iframe=bool(
+                        snap.get("visible_challenge_iframe")
+                    ),
+                    cf_clearance=bool(snap.get("cf_clearance")),
+                    logger=self.logger,
+                )
+                if probe.get("blocked"):
+                    html = self._wait_out_captcha(
+                        url, reasons=list(probe.get("reasons") or [])
+                    )
                 live.apply_cookies_to_requests(session)
                 return html, False
             except CaptchaTimeoutError:
@@ -387,13 +424,21 @@ class DecisionCoordinator:
         if session is None:
             try:
                 html = self.http.get_text(url)
-                if self.captcha.inspect(html=html, url=url).get("blocked"):
-                    return self._wait_out_captcha(url), False
+                probe = self.captcha.inspect(
+                    html=html, url=url, logger=self.logger
+                )
+                if probe.get("blocked"):
+                    return (
+                        self._wait_out_captcha(
+                            url, reasons=list(probe.get("reasons") or [])
+                        ),
+                        False,
+                    )
                 return html, False
             except CaptchaTimeoutError:
                 raise
-            except CaptchaBlockedError:
-                return self._wait_out_captcha(url), False
+            except CaptchaBlockedError as exc:
+                return self._wait_out_captcha(url, reasons=[str(exc)]), False
             except Exception as exc:
                 self.logger.warning("GET failed %s: %s", url, exc)
                 return "", True
@@ -418,15 +463,25 @@ class DecisionCoordinator:
 
         html = resp.text or ""
         headers = {k: v for k, v in resp.headers.items()}
+        cookie_jar = getattr(session, "cookies", None)
         probe = self.captcha.inspect(
             status_code=resp.status_code,
             html=html,
             url=url,
             headers=headers,
+            cookies=cookie_jar,
+            logger=self.logger,
         )
         if probe["blocked"]:
-            self.logger.warning("%s %s", CAPTCHA_WAIT_MARKER, probe["message"])
-            return self._wait_out_captcha(url), False
+            self.logger.warning(
+                "%s %s", CAPTCHA_WAIT_MARKER, probe["message"] or probe["reasons"]
+            )
+            return (
+                self._wait_out_captcha(
+                    url, reasons=list(probe.get("reasons") or [])
+                ),
+                False,
+            )
 
         if resp.status_code >= 400:
             self.logger.warning(
