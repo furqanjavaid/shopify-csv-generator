@@ -106,14 +106,14 @@ class ScraperScreen(ctk.CTkFrame):
         PageHeader(
             body,
             "URL Scraper",
-            "Scrape products and metadata from ecommerce stores using seed URLs.",
+            "Extract product catalogs from any ecommerce store URL.",
         ).grid(row=0, column=0, sticky="ew", pady=(0, 8))
 
         # ── Scraper Configuration card ────────────────────
         config = Card(
             body,
             title="Scraper Configuration",
-            subtitle="Configure your scraping settings and provide seed URLs to start.",
+            subtitle="Mode, seed URLs, output folder, and run controls.",
             icon="link",
             expand_body=False,
             border_width=1,
