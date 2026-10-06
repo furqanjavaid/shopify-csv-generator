@@ -29,8 +29,8 @@ class ScoreRing(ctk.CTkFrame):
         *,
         size: int = 72,
         thickness: int = 7,
-        color: str = "#C9A84C",
-        track: str = "#E8E5E0",
+        color: str = "#E8590C",
+        track: str = "#E5E5EA",
         bg: str = "#FFFFFF",
         **kwargs,
     ):
@@ -117,7 +117,7 @@ class AuditScreen(ctk.CTkFrame):
         PageHeader(
             body,
             "Store Auditor",
-            "Audit eCommerce stores for issues and opportunities to improve performance, SEO, content and more.",
+            "Run CRO and technical checks on any storefront URL.",
         ).grid(row=0, column=0, sticky="nw", pady=(0, 14))
 
         # ── URL card ──────────────────────────────────────
@@ -140,7 +140,7 @@ class AuditScreen(ctk.CTkFrame):
         )
         link_circle.grid(row=0, column=0, rowspan=2, sticky="nw", padx=(0, 10))
         link_circle.grid_propagate(False)
-        link_img = load_icon("link", size=18, color="navy")
+        link_img = load_icon("link", size=18, color="orange")
         if link_img is not None:
             self._icons.append(link_img)
         ctk.CTkLabel(link_circle, text="", image=link_img, fg_color="transparent").place(
@@ -312,7 +312,7 @@ class AuditScreen(ctk.CTkFrame):
         )
         gold_circle.grid(row=0, column=0, rowspan=2, sticky="nw", padx=(0, 10))
         gold_circle.grid_propagate(False)
-        rec_img = load_icon("check", size=18, color="gold")
+        rec_img = load_icon("check", size=18, color="orange")
         if rec_img is not None:
             self._icons.append(rec_img)
         ctk.CTkLabel(gold_circle, text="", image=rec_img, fg_color="transparent").place(
@@ -408,7 +408,7 @@ class AuditScreen(ctk.CTkFrame):
             size=72,
             thickness=7,
             color=ring_color,
-            track="#E8E5E0",
+            track=T.BORDER,
             bg=T.BG_SURFACE_A,
         )
         ring.grid(row=0, column=0, sticky="w")
@@ -423,7 +423,7 @@ class AuditScreen(ctk.CTkFrame):
         )
         icon_circle.grid(row=0, column=1, sticky="n", padx=(10, 0), pady=(4, 0))
         icon_circle.grid_propagate(False)
-        img = load_icon(icon_name, size=16, color="navy")
+        img = load_icon(icon_name, size=16, color="orange")
         if img is not None:
             self._icons.append(img)
         ctk.CTkLabel(icon_circle, text="", image=img, fg_color="transparent").place(
