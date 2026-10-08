@@ -207,12 +207,9 @@ def _launch_chromium_for_cloudflare(p: Any) -> Any:
     """
     Cloudflare blocks headless Chromium and bare requests (502 / challenge).
     Prefer headed system Chrome; fall back to headed bundled Chromium.
-    Window is placed off-screen so the flash is minimal during detection.
+    Window opens normally on screen so the user can see navigation.
     """
-    args = [
-        "--disable-blink-features=AutomationControlled",
-        "--window-position=-2400,-2400",
-    ]
+    args = ["--disable-blink-features=AutomationControlled"]
     try:
         return p.chromium.launch(channel="chrome", headless=False, args=args)
     except Exception:
