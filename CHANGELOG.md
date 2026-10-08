@@ -1,3 +1,8 @@
+## Sentivo Tools v1.3.3
+
+## What's New
+- Fix packaged build — include PyYAML (`yaml`) in PyInstaller hidden imports
+
 ## Sentivo Tools v1.3.2
 
 ## What's New

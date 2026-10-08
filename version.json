@@ -1,6 +1,6 @@
 {
-  "version": "1.3.2",
+  "version": "1.3.3",
   "app_name": "Sentivo Tools",
   "publisher": "Sentivo Limited",
-  "release_notes": "Fix packaged exe CLI launch (extract without -m); consistent SentivoToolsSetup.exe installer filename."
+  "release_notes": "Fix ModuleNotFoundError for yaml — add PyYAML to PyInstaller hidden imports."
 }
