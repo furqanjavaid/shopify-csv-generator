@@ -1,6 +1,6 @@
 {
-  "version": "1.3.1",
+  "version": "1.3.2",
   "app_name": "Sentivo Tools",
   "publisher": "Sentivo Limited",
-  "release_notes": "Fix clickable Update Now button; ensure installer .exe attaches to GitHub releases."
+  "release_notes": "Fix packaged exe CLI launch (extract without -m); consistent SentivoToolsSetup.exe installer filename."
 }

@@ -1,6 +1,6 @@
 #define MyAppName "Sentivo Tools"
 #ifndef MyAppVersion
-#define MyAppVersion "1.3.1"
+#define MyAppVersion "1.3.2"
 #endif
 #define MyAppPublisher "Sentivo Limited"
 #define MyAppURL "https://sentivo.co"

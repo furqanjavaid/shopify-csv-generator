@@ -1,3 +1,9 @@
+## Sentivo Tools v1.3.2
+
+## What's New
+- Fix GUI launcher CLI for packaged exe — `SentivoTools.exe extract` (no `-m sentivo_extractor`)
+- Fix installer filename — always `SentivoToolsSetup.exe` for CI release uploads
+
 ## Sentivo Tools v1.3.1
 
 ## What's New
