@@ -8,6 +8,8 @@ from typing import Any
 import requests
 
 from sentivo_extractor.core.utils import (
+    BROWSER_HEADERS,
+    BROWSER_USER_AGENT,
     DEFAULT_USER_AGENT,
     RateLimiter,
     RobotsCache,
@@ -25,6 +27,7 @@ class HttpClient:
         retries: int = 3,
         respect_robots: bool = True,
         logger: logging.Logger | None = None,
+        browser_headers: bool = False,
     ) -> None:
         self.user_agent = user_agent
         self.timeout = timeout
@@ -35,6 +38,16 @@ class HttpClient:
         self.session.headers.update({"User-Agent": user_agent})
         self.limiter = RateLimiter(delay_sec)
         self.robots = RobotsCache(user_agent)
+        self._browser_headers = False
+        if browser_headers:
+            self.apply_browser_headers()
+
+    def apply_browser_headers(self) -> None:
+        """Apply Magento-friendly browser headers (avoids 403 on some storefronts)."""
+        self._browser_headers = True
+        self.user_agent = BROWSER_USER_AGENT
+        self.session.headers.update(BROWSER_HEADERS)
+        self.robots = RobotsCache(self.user_agent)
 
     def get(self, url: str, **kwargs: Any) -> requests.Response:
         if not self.robots.allowed(url, self.respect_robots):

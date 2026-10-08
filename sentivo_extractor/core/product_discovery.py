@@ -48,27 +48,16 @@ def infer_discovery_platform(html: str = "", explicit: str | None = None) -> str
     if explicit and str(explicit).strip():
         return str(explicit).strip()
     low = (html or "").lower()
+    if "woocommerce" in low or "wp-content/plugins/woocommerce" in low:
+        return "WooCommerce"
     if any(
-        token in low
-        for token in (
-            "cdn.shopify.com",
-            "shopify-section",
-            "myshopify.com",
-            "shopify.theme",
-            "woocommerce",
-        )
+        t in low
+        for t in ("cdn.shopify.com", "shopify-section", "myshopify.com", "shopify.theme")
     ):
-        if "woocommerce" in low or "wp-content/plugins/woocommerce" in low:
-            return "WooCommerce"
-        if any(
-            t in low
-            for t in ("cdn.shopify.com", "shopify-section", "myshopify.com", "shopify.theme")
-        ):
-            return "Shopify"
-    if any(
-        token in low
-        for token in ("mage/requirejs", "magento_init", "catalog-product-view", "mage-init")
-    ):
+        return "Shopify"
+    from sentivo_extractor.core.platform_detector import detect_magento
+
+    if detect_magento(html):
         return "Magento"
     return "Custom"
 
@@ -745,59 +734,99 @@ def discover_domain_products(
     category_urls: list[str] = []
     try:
         html = get_text(seed_url)
-        category_urls.extend(
-            discover_from_html(
-                html, seed_url, max_links=max_products, card_selector=card_selector
-            )
-        )
         resolved_early = infer_discovery_platform(html, explicit=platform)
-        # Magento category grids often have product IDs without product hrefs.
-        if resolved_early == "Magento" or "product-item" in (html or "").lower():
+
+        # Magento: dedicated nav + ?p= pagination crawler (sheetplastics / Hyva).
+        if resolved_early == "Magento":
+            try:
+                from sentivo_extractor.crawlers.magento_crawler import (
+                    discover_magento_products,
+                )
+
+                mag = discover_magento_products(
+                    seed_url,
+                    get_text,
+                    max_products=max_products,
+                    logger=log,
+                )
+                mag_urls = list(mag.get("product_urls") or [])
+                product_urls.extend(mag_urls)
+                notes.extend(list(mag.get("notes") or []))
+                notes.append(f"magento_crawler_products:{len(mag_urls)}")
+                log.info(
+                    "Magento crawler discovered %s product URL(s) from %s",
+                    len(mag_urls),
+                    seed_url,
+                )
+            except Exception as exc:  # noqa: BLE001
+                notes.append(f"magento_crawler_failed:{exc}")
+                log.warning("Magento crawler failed (%s) — falling back", exc)
+
+        if len(product_urls) < max_products:
             category_urls.extend(
-                discover_magento_from_category_html(
-                    html, seed_url, max_links=max_products
+                discover_from_html(
+                    html, seed_url, max_links=max_products, card_selector=card_selector
                 )
             )
-            category_urls = unique_preserve(category_urls)[:max_products]
-
-        log.info(
-            "Category page product URLs found: %s on %s",
-            len(category_urls),
-            seed_url,
-        )
-        notes.append(f"category_html_products:{len(category_urls)}")
-        product_urls.extend(category_urls)
-
-        pagination_urls = discover_pagination_urls(html, seed_url, max_pages=max_pages)
-        for page_url in pagination_urls:
-            if len(product_urls) >= max_products:
-                break
-            try:
-                page_html = get_text(page_url)
-                page_found = discover_from_html(
-                    page_html,
-                    page_url,
-                    max_links=max_products,
-                    card_selector=card_selector,
-                )
-                if (
-                    resolved_early == "Magento"
-                    or "product-item" in (page_html or "").lower()
-                ):
-                    page_found.extend(
-                        discover_magento_from_category_html(
-                            page_html, page_url, max_links=max_products
-                        )
+            # Magento category grids often have product IDs without product hrefs.
+            if resolved_early == "Magento" or "product-item" in (html or "").lower():
+                category_urls.extend(
+                    discover_magento_from_category_html(
+                        html, seed_url, max_links=max_products
                     )
-                page_found = unique_preserve(page_found)
-                product_urls.extend(page_found)
-                log.info(
-                    "Category page product URLs found: %s on %s",
-                    len(page_found),
-                    page_url,
                 )
-            except Exception as exc:
-                notes.append(f"pagination_failed:{page_url}:{exc}")
+                category_urls = unique_preserve(category_urls)[:max_products]
+
+            log.info(
+                "Category page product URLs found: %s on %s",
+                len(category_urls),
+                seed_url,
+            )
+            notes.append(f"category_html_products:{len(category_urls)}")
+            product_urls.extend(category_urls)
+
+            pagination_urls = discover_pagination_urls(
+                html, seed_url, max_pages=max_pages
+            )
+            # Magento uses ?p=N — pick up next links the generic pager may miss.
+            if resolved_early == "Magento":
+                for a in BeautifulSoup(html or "", "lxml").select(
+                    'a[title="Next"], a.action.next, .pages a[href*="p="]'
+                ):
+                    href = (a.get("href") or "").strip()
+                    if href:
+                        pagination_urls.append(urljoin(seed_url, href))
+                pagination_urls = unique_preserve(pagination_urls)[:max_pages]
+
+            for page_url in pagination_urls:
+                if len(product_urls) >= max_products:
+                    break
+                try:
+                    page_html = get_text(page_url)
+                    page_found = discover_from_html(
+                        page_html,
+                        page_url,
+                        max_links=max_products,
+                        card_selector=card_selector,
+                    )
+                    if (
+                        resolved_early == "Magento"
+                        or "product-item" in (page_html or "").lower()
+                    ):
+                        page_found.extend(
+                            discover_magento_from_category_html(
+                                page_html, page_url, max_links=max_products
+                            )
+                        )
+                    page_found = unique_preserve(page_found)
+                    product_urls.extend(page_found)
+                    log.info(
+                        "Category page product URLs found: %s on %s",
+                        len(page_found),
+                        page_url,
+                    )
+                except Exception as exc:
+                    notes.append(f"pagination_failed:{page_url}:{exc}")
     except Exception as exc:
         notes.append(f"seed_html_failed:{exc}")
 

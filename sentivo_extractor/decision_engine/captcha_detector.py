@@ -125,9 +125,15 @@ class PlaywrightLiveSession:
         self._manager = sync_playwright()
         self._pw = self._manager.start()
         self.browser = self._pw.chromium.launch(headless=False)
-        opts: dict[str, Any] = {"viewport": {"width": 1440, "height": 900}}
-        if user_agent:
-            opts["user_agent"] = user_agent
+        from sentivo_extractor.core.utils import BROWSER_HEADERS, BROWSER_USER_AGENT
+
+        opts: dict[str, Any] = {
+            "viewport": {"width": 1440, "height": 900},
+            "user_agent": user_agent or BROWSER_USER_AGENT,
+            "extra_http_headers": {
+                k: v for k, v in BROWSER_HEADERS.items() if k.lower() != "user-agent"
+            },
+        }
         self.context = self.browser.new_context(**opts)
         self.page = self.context.new_page()
         self.logger.info("Opened visible Playwright window for CAPTCHA / remaining URLs")

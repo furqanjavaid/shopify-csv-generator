@@ -260,7 +260,27 @@ class PlaywrightExtractor(BaseExtractor):
                 if live is not None:
                     headless = False
                 browser = p.chromium.launch(headless=headless)
-                page = browser.new_page(viewport={"width": 1440, "height": 900})
+                browser_ctx = None
+                from sentivo_extractor.core.utils import BROWSER_HEADERS, BROWSER_USER_AGENT
+
+                use_browser_headers = bool(
+                    ctx.get("browser_headers")
+                    or str(ctx.get("platform") or "").lower() == "magento"
+                )
+                if use_browser_headers:
+                    context_opts = {
+                        "viewport": {"width": 1440, "height": 900},
+                        "user_agent": BROWSER_USER_AGENT,
+                        "extra_http_headers": {
+                            k: v
+                            for k, v in BROWSER_HEADERS.items()
+                            if k.lower() != "user-agent"
+                        },
+                    }
+                    browser_ctx = browser.new_context(**context_opts)
+                    page = browser_ctx.new_page()
+                else:
+                    page = browser.new_page(viewport={"width": 1440, "height": 900})
 
                 def on_response(response) -> None:
                     try:
@@ -300,6 +320,11 @@ class PlaywrightExtractor(BaseExtractor):
                         "screenshot_png": screenshot_png,
                     }
                 finally:
+                    try:
+                        if browser_ctx is not None:
+                            browser_ctx.close()
+                    except Exception:
+                        pass
                     browser.close()
         except Exception:
             return None

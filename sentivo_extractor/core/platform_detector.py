@@ -63,17 +63,42 @@ def detect_woocommerce(html: str, base_url: str = "", session: requests.Session 
     return False
 
 
-def detect_magento(html: str) -> bool:
+def detect_magento(html: str = "", url: str = "") -> bool:
+    """
+    Magento 1/2 (incl. Hyva) signals:
+    - meta generator containing Magento
+    - Mage.Cookies / mage-data-role / classic Magento JS markers
+    - URL patterns like /catalog/product/
+    """
+    url_low = (url or "").lower()
+    if "/catalog/product/" in url_low or "/catalogsearch/" in url_low:
+        return True
+
     low = (html or "").lower()
+    if not low:
+        return False
+
+    # meta name="generator" content="Magento ..."
+    if 'name="generator"' in low and "magento" in low:
+        return True
+    if "content=\"magento" in low or "content='magento" in low:
+        return True
+
     return any(
         token in low
         for token in (
+            "mage.cookies",
+            "mage-data-role",
             "mage/requirejs",
             "magento_init",
-            "checkout/cart",
+            "data-mage-init",
             "mage-init",
             "catalog-product-view",
             "magento_theme",
+            "hyva",
+            "x-data=\"mage",
+            "checkout/cart/add",
+            "form_key",
         )
     )
 
@@ -130,7 +155,7 @@ def detect_platform(
         signals.append("woocommerce")
         return {"platform": "WooCommerce", "signals": signals}
 
-    if detect_magento(body):
+    if detect_magento(body, url=url):
         signals.append("magento")
         return {"platform": "Magento", "signals": signals}
 

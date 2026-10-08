@@ -808,13 +808,29 @@ class UniversalCrawler:
                 card_sel = sels["product_card"][0]
 
             try:
+                # Magento storefronts (e.g. sheetplastics) often 403 without browser headers.
+                try:
+                    probe_html = self.http.get_text(url)
+                    plat = detect_platform(
+                        url,
+                        html=probe_html,
+                        session=getattr(self.http, "session", None),
+                    ).get("platform")
+                    if plat == "Magento" and hasattr(self.http, "apply_browser_headers"):
+                        self.http.apply_browser_headers()
+                        self.logger.info(
+                            "Applied Magento browser headers for %s", domain
+                        )
+                except Exception:
+                    plat = None
+
                 disc = discover_domain_products(
                     url,
                     self.http.get_text,
                     max_products=remaining if remaining is not None else 10**9,
                     follow_sitemaps=True,
                     card_selector=card_sel,
-                    platform=None,  # inferred from HTML inside unified discovery
+                    platform=plat,  # inferred above when available
                     logger=self.logger,
                 )
                 found = disc["product_urls"]

@@ -155,7 +155,13 @@ class DecisionCoordinator:
             "capture_network": True,
             "probe_variants": False,
             "logger": self.logger,
+            "browser_headers": platform == "Magento",
         }
+        if platform == "Magento" and hasattr(self.http, "apply_browser_headers"):
+            try:
+                self.http.apply_browser_headers()
+            except Exception:
+                pass
         live = self.shared_playwright()
         if live is not None and live.alive:
             context["playwright_session"] = live

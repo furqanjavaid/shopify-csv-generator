@@ -78,6 +78,30 @@ class MagentoExtractor(BaseExtractor):
         """
         log = (context or {}).get("logger") or logger
         if html:
+            # Hyva / Magento 2 DOM fields first (sheetplastics-style cut-to-size PDPs).
+            try:
+                from sentivo_extractor.extractors.magento_product_extractor import (
+                    MagentoProductExtractor,
+                )
+
+                dom = MagentoProductExtractor().extract(url, html, context=context)
+                if dom and dom.get("title"):
+                    # Prefer DOM when it has useful catalog fields; still allow
+                    # config/selects to win later only if this returned nothing.
+                    has_core = bool(
+                        dom.get("description_html")
+                        or (dom.get("images") or [])
+                        or (dom.get("variants") or [{}])[0].get("sku")
+                        or (dom.get("variants") or [{}])[0].get("price")
+                    )
+                    if has_core:
+                        log.info(
+                            "Magento primary DOM extractor succeeded for %s", url
+                        )
+                        return dom
+            except Exception as exc:  # noqa: BLE001
+                log.debug("MagentoProductExtractor skipped: %s", exc)
+
             for label, fn in (
                 ("Magento Config", self._from_embedded_config),
                 ("Magento selects", self._from_selects),

@@ -28,7 +28,12 @@ DEFAULT_STRATEGY_CHAIN: tuple[str, ...] = (
 # Platform → preferred first strategies (rest follow DEFAULT order, de-duped).
 _PLATFORM_PRIORITY: dict[str, tuple[str, ...]] = {
     "Shopify": (SOURCE_SHOPIFY, SOURCE_JSONLD, SOURCE_OPENGRAPH, SOURCE_PLAYWRIGHT),
-    "Magento": (SOURCE_MAGENTO, SOURCE_JSONLD, SOURCE_OPENGRAPH, SOURCE_PLAYWRIGHT),
+    "Magento": (
+        SOURCE_MAGENTO,
+        SOURCE_JSONLD,
+        SOURCE_OPENGRAPH,
+        SOURCE_PLAYWRIGHT,
+    ),
     "WooCommerce": (SOURCE_WOO, SOURCE_JSONLD, SOURCE_OPENGRAPH, SOURCE_PLAYWRIGHT),
     "Custom": (
         SOURCE_JSONLD,
