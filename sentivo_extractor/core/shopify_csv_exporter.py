@@ -167,6 +167,49 @@ def export_failed_csv(products: list[dict[str, Any]], path: Path) -> Path:
     return path
 
 
+# Re-feedable Magento retry CSV (input-compatible: url column).
+MAGENTO_FAILED_COLUMNS = ["URL", "Fail Reason", "Confidence Score"]
+
+
+def export_magento_failed_csv(rows: list[dict[str, Any]], path: Path) -> Path:
+    """
+    Write {domain}_failed.csv for Magento retry runs.
+
+    Columns match the requested report; ``URL`` lowercases to ``url`` for
+    read_seed_csv re-feed.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=MAGENTO_FAILED_COLUMNS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    "URL": row.get("URL") or row.get("url") or "",
+                    "Fail Reason": row.get("Fail Reason")
+                    or row.get("fail_reason")
+                    or "",
+                    "Confidence Score": row.get("Confidence Score")
+                    if row.get("Confidence Score") is not None
+                    else row.get("confidence_score", ""),
+                }
+            )
+    return path
+
+
+def append_shopify_product_csv(product: dict[str, Any], path: Path) -> Path:
+    """Append one product's Shopify rows to CSV (create + header if missing)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not path.exists() or path.stat().st_size == 0
+    with path.open("a", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=SHOPIFY_COLUMNS)
+        if write_header:
+            writer.writeheader()
+        for row in product_to_rows(product):
+            writer.writerow(row)
+    return path
+
+
 def export_validation_report(issues: list[dict[str, Any]], path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     try:

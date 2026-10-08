@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import logging
+import random
+import re
+import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from collections import Counter, defaultdict
 from pathlib import Path
-import random
-import time
 from typing import Any
 from urllib.parse import urlparse
 
@@ -67,8 +68,10 @@ from sentivo_extractor.core.production_validation import (
 from sentivo_extractor.core.production_workbook import write_production_summary_workbook
 from sentivo_extractor.core.qa_report import sample_products_for_qa, write_qa_sample_workbook
 from sentivo_extractor.core.shopify_csv_exporter import (
+    append_shopify_product_csv,
     export_failed_csv,
     export_images_manifest,
+    export_magento_failed_csv,
     export_shopify_csv,
     export_validation_report,
 )
@@ -160,6 +163,8 @@ class UniversalCrawler:
         self.captcha_pause_info: dict[str, Any] = {}
         self._captcha_blocked_hosts: set[str] = set()
         self._magento_domains: set[str] = set()
+        self._magento_failed_rows: list[dict[str, Any]] = []
+        self._checkpoint_handles: set[str] = set()
         self._extract_pool = ThreadPoolExecutor(max_workers=1)
 
     def _domain_dir(self, domain_key: str) -> Path:
@@ -322,6 +327,7 @@ class UniversalCrawler:
                         self.checkpoint.mark_failed(
                             url, reason or "extraction_failed"
                         )
+                        self._record_magento_failure(url, reason or "extraction_failed")
                         failed_count += 1
                         if reason and "captcha_timeout" in reason:
                             self._captcha_blocked_hosts.add(domain_from_url(url))
@@ -333,6 +339,7 @@ class UniversalCrawler:
                             products.append(product)
                             processed += 1
                             magento_done += 1
+                            self._maybe_checkpoint_save(product)
                             if magento_done % 10 == 0 or magento_done == magento_total:
                                 self.logger.info(
                                     "[Magento] Extracted %s/%s products...",
@@ -340,6 +347,9 @@ class UniversalCrawler:
                                     magento_total,
                                 )
                         else:
+                            self._record_magento_failure(
+                                url, "extraction_failed", product=product
+                            )
                             failed_count += 1
                 except CaptchaTimeoutError as exc:
                     reason = (
@@ -352,11 +362,13 @@ class UniversalCrawler:
                     )
                     self.checkpoint.mark_failed(url, reason)
                     self._failed_reasons.append((url, reason))
+                    self._record_magento_failure(url, reason)
                     failed_count += 1
                 except Exception as exc:  # noqa: BLE001
                     self.logger.error("FAIL %s: %s", url, exc)
                     self.checkpoint.mark_failed(url, str(exc))
                     self._failed_reasons.append((url, str(exc)))
+                    self._record_magento_failure(url, str(exc))
                     failed_count += 1
 
                 # Human-like pacing between products (not after the last one).
@@ -375,6 +387,8 @@ class UniversalCrawler:
                             pause,
                         )
                         time.sleep(pause)
+
+            self._write_magento_failed_report()
 
         for url in pending_other:
             try:
@@ -641,6 +655,150 @@ class UniversalCrawler:
             return True
         pinned = DecisionCoordinator.shared_selector().platform_for(url)
         return pinned == "Magento"
+
+    @staticmethod
+    def _product_has_sku(product: dict[str, Any]) -> bool:
+        if str(product.get("sku") or product.get("variant_sku") or "").strip():
+            return True
+        for v in product.get("variants") or []:
+            if isinstance(v, dict) and str(v.get("sku") or "").strip():
+                return True
+        return False
+
+    @staticmethod
+    def _product_image_count(product: dict[str, Any]) -> int:
+        n = 0
+        for img in product.get("images") or []:
+            if isinstance(img, dict) and str(img.get("src") or "").strip():
+                n += 1
+            elif isinstance(img, str) and img.strip():
+                n += 1
+        return n
+
+    @staticmethod
+    def _normalize_magento_fail_reason(
+        reason: str, *, product: dict[str, Any] | None = None
+    ) -> str:
+        text = (reason or "").strip()
+        low = text.lower()
+        if any(tok in low for tok in ("sucuri", "website firewall", "access denied")):
+            return "Sucuri block"
+        if "502" in low or "bad gateway" in low:
+            return "502 error"
+        if "low_confidence" in low or "low confidence" in low:
+            conf = None
+            if product is not None:
+                try:
+                    conf = float(product.get("confidence_score") or 0)
+                except (TypeError, ValueError):
+                    conf = None
+            if conf is None:
+                m = re.search(r"(\d+(?:\.\d+)?)", text)
+                conf = float(m.group(1)) if m else None
+                if conf is not None and conf > 1:
+                    conf = conf / 100.0
+            if conf is not None:
+                return f"Low confidence: {conf:.2f}"
+            return "Low confidence"
+        if "image" in low:
+            return "No images"
+        if "sku" in low:
+            return "No SKU"
+        if product is not None:
+            try:
+                conf = float(product.get("confidence_score") or 0)
+            except (TypeError, ValueError):
+                conf = 0.0
+            if conf < 0.75:
+                return f"Low confidence: {conf:.2f}"
+            if UniversalCrawler._product_image_count(product) < 1:
+                return "No images"
+            if not UniversalCrawler._product_has_sku(product):
+                return "No SKU"
+        return text[:120] or "extraction_failed"
+
+    def _record_magento_failure(
+        self,
+        url: str,
+        reason: str,
+        *,
+        product: dict[str, Any] | None = None,
+    ) -> None:
+        conf = ""
+        if product is not None:
+            try:
+                conf = f"{float(product.get('confidence_score') or 0):.2f}"
+            except (TypeError, ValueError):
+                conf = ""
+        self._magento_failed_rows.append(
+            {
+                "URL": url,
+                "Fail Reason": self._normalize_magento_fail_reason(
+                    reason, product=product
+                ),
+                "Confidence Score": conf,
+            }
+        )
+
+    def _maybe_checkpoint_save(self, product: dict[str, Any]) -> bool:
+        """
+        Real-time Shopify CSV append when Magento product meets quality gates.
+        """
+        try:
+            conf = float(product.get("confidence_score") or 0)
+        except (TypeError, ValueError):
+            conf = 0.0
+        title = str(product.get("title") or "").strip()
+        title_low = title.lower()
+        if conf < 0.75:
+            return False
+        if not title:
+            return False
+        if any(
+            bad in title_low
+            for bad in ("bad gateway", "access denied", "sucuri")
+        ):
+            return False
+        if self._product_image_count(product) < 1:
+            return False
+        if not self._product_has_sku(product):
+            return False
+
+        handle = str(product.get("handle") or "").strip()
+        if handle and handle in self._checkpoint_handles:
+            return False
+
+        url = str(product.get("source_url") or "")
+        domain_key = domain_folder_name(url)
+        path = self._artifact(domain_key, "shopify_import.csv")
+        try:
+            append_shopify_product_csv(product, path)
+            if handle:
+                self._checkpoint_handles.add(handle)
+            self.logger.info(
+                "[Checkpoint] Saved: %s (conf=%.2f)", title, conf
+            )
+            return True
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning("[Checkpoint] Save failed for %s: %s", title, exc)
+            return False
+
+    def _write_magento_failed_report(self) -> None:
+        if not self._magento_failed_rows:
+            return
+        # Group by domain folder so multi-domain Magento runs stay separated.
+        by_domain: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in self._magento_failed_rows:
+            key = domain_folder_name(str(row.get("URL") or ""))
+            by_domain[key].append(row)
+        for key, rows in by_domain.items():
+            path = self._artifact(key, f"{key}_failed.csv")
+            export_magento_failed_csv(rows, path)
+            self.logger.info(
+                "[Failed] %s products saved to %s",
+                len(rows),
+                path.name,
+            )
 
     def _finalize_extracted_product(
         self,
