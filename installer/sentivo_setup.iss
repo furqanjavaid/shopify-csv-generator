@@ -20,7 +20,7 @@ AllowNoIcons=yes
 ; Script lives in installer\ — SourceDir is project root; OutputDir is next to this script
 SourceDir=..
 OutputDir=installer\output
-OutputBaseFilename=SentivoToolsSetup-v{#MyAppVersion}
+OutputBaseFilename=SentivoToolsSetup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
