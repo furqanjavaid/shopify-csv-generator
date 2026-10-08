@@ -37,7 +37,7 @@ class HttpClient:
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": user_agent})
         self.limiter = RateLimiter(delay_sec)
-        self.robots = RobotsCache(user_agent)
+        self.robots = RobotsCache(user_agent, headers={"User-Agent": user_agent})
         self._browser_headers = False
         if browser_headers:
             self.apply_browser_headers()
@@ -47,7 +47,7 @@ class HttpClient:
         self._browser_headers = True
         self.user_agent = BROWSER_USER_AGENT
         self.session.headers.update(BROWSER_HEADERS)
-        self.robots = RobotsCache(self.user_agent)
+        self.robots = RobotsCache(self.user_agent, headers=dict(BROWSER_HEADERS))
 
     def get(self, url: str, **kwargs: Any) -> requests.Response:
         if not self.robots.allowed(url, self.respect_robots):

@@ -336,9 +336,73 @@ class RateLimiter:
 
 
 class RobotsCache:
-    def __init__(self, user_agent: str = DEFAULT_USER_AGENT) -> None:
+    """
+    robots.txt cache.
+
+    Fetches via requests with the configured User-Agent (not bare urllib) so
+    Cloudflare bot blocks on /robots.txt do not falsely set disallow_all.
+    On 5xx / empty / non-robots bodies: fail open (allow).
+    """
+
+    def __init__(
+        self,
+        user_agent: str = DEFAULT_USER_AGENT,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self.user_agent = user_agent
+        self.headers = dict(headers or {"User-Agent": user_agent})
         self._parsers: dict[str, RobotFileParser | None] = {}
+
+    def _load(self, origin: str) -> RobotFileParser | None:
+        robots_url = f"{origin.rstrip('/')}/robots.txt"
+        if requests is None:
+            return None
+        try:
+            resp = requests.get(
+                robots_url,
+                headers=self.headers,
+                timeout=12,
+                allow_redirects=True,
+            )
+        except Exception:
+            return None  # fail open
+
+        # Transient / gateway / empty → allow crawl (do not mirror urllib's
+        # 403→disallow_all which Cloudflare triggers for bot UAs).
+        if resp.status_code >= 500 or resp.status_code in (408, 429):
+            return None
+        if resp.status_code in (401, 403):
+            body = (resp.text or "").strip().lower()
+            # Cloudflare / WAF challenge pages are not real robots policies.
+            if (
+                not body
+                or "cloudflare" in body
+                or "cf-ray" in body
+                or body.startswith("<!DOCTYPE")
+                or "error code" in body
+                or len(body) < 40
+            ):
+                return None
+            rp = RobotFileParser()
+            rp.disallow_all = True
+            return rp
+        if resp.status_code >= 400:
+            return None
+
+        text = resp.text or ""
+        # HTML error pages served as 200 are not robots.txt.
+        low = text.lstrip()[:200].lower()
+        if low.startswith("<!DOCTYPE") or low.startswith("<html"):
+            return None
+
+        rp = RobotFileParser()
+        rp.set_url(robots_url)
+        try:
+            rp.parse(text.splitlines())
+        except Exception:
+            return None
+        return rp
 
     def allowed(self, url: str, respect: bool = True) -> bool:
         if not respect:
@@ -347,13 +411,7 @@ class RobotsCache:
             parsed = urlparse(url)
             origin = f"{parsed.scheme}://{parsed.netloc}"
             if origin not in self._parsers:
-                rp = RobotFileParser()
-                rp.set_url(f"{origin}/robots.txt")
-                try:
-                    rp.read()
-                    self._parsers[origin] = rp
-                except Exception:
-                    self._parsers[origin] = None
+                self._parsers[origin] = self._load(origin)
             rp = self._parsers.get(origin)
             if rp is None:
                 return True

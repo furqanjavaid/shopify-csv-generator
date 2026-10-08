@@ -101,10 +101,13 @@ class MagentoCategoryCrawler:
 
         notes: list[str] = []
         origin = self._origin(seed)
+        domain = urlparse(origin).netloc.lower().removeprefix("www.")
+        self.logger.info("[Magento] Starting nav-based category crawl for %s", domain)
         try:
             home_html = self.get_text(seed)
         except Exception as exc:  # noqa: BLE001
             notes.append(f"seed_fetch_failed:{exc}")
+            self.logger.error("[Magento] Homepage fetch failed: %s", exc)
             return {
                 "product_urls": [],
                 "category_urls": [],
@@ -119,6 +122,7 @@ class MagentoCategoryCrawler:
             notes.append("nav_empty_using_seed_as_category")
         else:
             notes.append(f"nav_categories:{len(categories)}")
+        self.logger.info("[Magento] Found %s category URLs", len(categories))
 
         product_urls: list[str] = []
         for cat in categories[: self.max_categories]:
@@ -128,7 +132,7 @@ class MagentoCategoryCrawler:
             notes.append(f"category:{cat}:{len(found)}")
             product_urls.extend(found)
             self.logger.info(
-                "Magento category crawl: %s product URL(s) from %s",
+                "[Magento] Category crawl: %s product URL(s) from %s",
                 len(found),
                 cat,
             )
@@ -141,6 +145,7 @@ class MagentoCategoryCrawler:
 
         deduped = unique_preserve(product_urls)[: self.max_products]
         notes.append(f"total_products:{len(deduped)}")
+        self.logger.info("[Magento] Discovered %s product URLs", len(deduped))
         return {
             "product_urls": deduped,
             "category_urls": categories[: self.max_categories],

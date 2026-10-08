@@ -808,31 +808,38 @@ class UniversalCrawler:
                 card_sel = sels["product_card"][0]
 
             try:
-                # Magento storefronts (e.g. sheetplastics) often 403 without browser headers.
-                try:
-                    probe_html = self.http.get_text(url)
-                    plat = detect_platform(
-                        url,
-                        html=probe_html,
-                        session=getattr(self.http, "session", None),
-                    ).get("platform")
-                    if plat == "Magento" and hasattr(self.http, "apply_browser_headers"):
-                        self.http.apply_browser_headers()
-                        self.logger.info(
-                            "Applied Magento browser headers for %s", domain
-                        )
-                except Exception:
-                    plat = None
-
-                disc = discover_domain_products(
+                # Platform detection BEFORE discovery (live Magento fallback included).
+                if hasattr(self.http, "apply_browser_headers"):
+                    # Magento/Hyva storefronts often 403 without browser-like headers.
+                    self.http.apply_browser_headers()
+                detected = detect_platform(
                     url,
-                    self.http.get_text,
-                    max_products=remaining if remaining is not None else 10**9,
-                    follow_sitemaps=True,
-                    card_selector=card_sel,
-                    platform=plat,  # inferred above when available
-                    logger=self.logger,
+                    html="",
+                    session=getattr(self.http, "session", None),
+                    live_fallback=True,
                 )
+                plat = str(detected.get("platform") or "Custom")
+                self.logger.info("Detected platform: %s", plat)
+
+                # Magento: skip sitemap AND robots.txt gates — nav crawl only.
+                prev_robots = getattr(self.http, "respect_robots", True)
+                if plat == "Magento":
+                    self.http.respect_robots = False
+
+                try:
+                    disc = discover_domain_products(
+                        url,
+                        self.http.get_text,
+                        max_products=remaining if remaining is not None else 10**9,
+                        # Magento must never be blocked by stale sitemap failure cache.
+                        follow_sitemaps=(plat != "Magento"),
+                        card_selector=card_sel,
+                        platform=plat,
+                        logger=self.logger,
+                    )
+                finally:
+                    if plat == "Magento":
+                        self.http.respect_robots = prev_robots
                 found = disc["product_urls"]
                 if not found:
                     reason = f"discovery_empty: {url}"

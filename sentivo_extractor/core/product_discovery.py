@@ -728,39 +728,86 @@ def discover_domain_products(
     sitemap_urls: list[str] = []
     parsed = urlparse(seed_url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
+    domain = (parsed.netloc or "").lower().removeprefix("www.")
     html = ""
 
-    # HTML category discovery + pagination
-    category_urls: list[str] = []
+    # Resolve platform BEFORE discovery. Prefer explicit (from live detect in crawler).
+    resolved_early = ""
+    if platform and str(platform).strip():
+        resolved_early = str(platform).strip()
     try:
         html = get_text(seed_url)
-        resolved_early = infer_discovery_platform(html, explicit=platform)
+        if not resolved_early or resolved_early in ("Custom", "Unknown"):
+            resolved_early = infer_discovery_platform(html, explicit=platform)
+    except Exception as exc:
+        notes.append(f"seed_html_failed:{exc}")
+        if not resolved_early:
+            resolved_early = str(platform or "Custom")
 
-        # Magento: dedicated nav + ?p= pagination crawler (sheetplastics / Hyva).
-        if resolved_early == "Magento":
+    log.info("Detected platform: %s", resolved_early or "Custom")
+
+    # Magento: skip ALL sitemap/robots probes (stale cache must not block nav crawl).
+    # Go straight to MagentoCategoryCrawler.discover().
+    if resolved_early == "Magento":
+        from sentivo_extractor.crawlers.magento_crawler import MagentoCategoryCrawler
+
+        notes.append("magento_skip_sitemaps")
+        notes.append("magento_skip_robots_probes")
+        try:
+            # MagentoCategoryCrawler.discover() logs Starting / Found / Discovered.
+            magento_crawler = MagentoCategoryCrawler(
+                get_text,
+                max_products=max_products,
+                logger=log,
+            )
+            mag = magento_crawler.discover(seed_url)
+            mag_urls = list(mag.get("product_urls") or [])
+            product_urls.extend(mag_urls)
+            notes.extend(list(mag.get("notes") or []))
+            notes.append(f"magento_crawler_products:{len(mag_urls)}")
+        except Exception as exc:  # noqa: BLE001
+            notes.append(f"magento_crawler_failed:{exc}")
+            log.warning("[Magento] crawler failed (%s) — HTML fallback only", exc)
+
+        # Optional catalogsearch fallback if nav crawl found nothing.
+        if not product_urls:
+            catalogsearch = f"{origin.rstrip('/')}/catalogsearch/result/"
             try:
-                from sentivo_extractor.crawlers.magento_crawler import (
-                    discover_magento_products,
+                search_html = get_text(catalogsearch)
+                search_found = discover_magento_from_category_html(
+                    search_html, catalogsearch, max_links=max_products
                 )
+                search_found.extend(
+                    discover_from_html(
+                        search_html, catalogsearch, max_links=max_products
+                    )
+                )
+                search_found = unique_preserve(search_found)[:max_products]
+                if search_found:
+                    product_urls.extend(search_found)
+                    notes.append(f"magento_catalogsearch_products:{len(search_found)}")
+                    log.info(
+                        "[Magento] catalogsearch product URLs found: %s",
+                        len(search_found),
+                    )
+            except Exception as exc:
+                notes.append(f"magento_catalogsearch_failed:{exc}")
 
-                mag = discover_magento_products(
-                    seed_url,
-                    get_text,
-                    max_products=max_products,
-                    logger=log,
-                )
-                mag_urls = list(mag.get("product_urls") or [])
-                product_urls.extend(mag_urls)
-                notes.extend(list(mag.get("notes") or []))
-                notes.append(f"magento_crawler_products:{len(mag_urls)}")
-                log.info(
-                    "Magento crawler discovered %s product URL(s) from %s",
-                    len(mag_urls),
-                    seed_url,
-                )
-            except Exception as exc:  # noqa: BLE001
-                notes.append(f"magento_crawler_failed:{exc}")
-                log.warning("Magento crawler failed (%s) — falling back", exc)
+        product_urls = unique_preserve(product_urls)[:max_products]
+        return {
+            "product_urls": product_urls,
+            "pagination_urls": pagination_urls,
+            "sitemap_urls": [],
+            "notes": notes,
+            "platform": "Magento",
+            "discovery_version": PRODUCT_DISCOVERY_VERSION,
+        }
+
+    # Non-Magento: HTML category discovery + pagination (+ optional sitemaps)
+    category_urls: list[str] = []
+    try:
+        if not html:
+            html = get_text(seed_url)
 
         if len(product_urls) < max_products:
             category_urls.extend(
@@ -768,8 +815,7 @@ def discover_domain_products(
                     html, seed_url, max_links=max_products, card_selector=card_selector
                 )
             )
-            # Magento category grids often have product IDs without product hrefs.
-            if resolved_early == "Magento" or "product-item" in (html or "").lower():
+            if "product-item" in (html or "").lower():
                 category_urls.extend(
                     discover_magento_from_category_html(
                         html, seed_url, max_links=max_products
@@ -788,15 +834,6 @@ def discover_domain_products(
             pagination_urls = discover_pagination_urls(
                 html, seed_url, max_pages=max_pages
             )
-            # Magento uses ?p=N — pick up next links the generic pager may miss.
-            if resolved_early == "Magento":
-                for a in BeautifulSoup(html or "", "lxml").select(
-                    'a[title="Next"], a.action.next, .pages a[href*="p="]'
-                ):
-                    href = (a.get("href") or "").strip()
-                    if href:
-                        pagination_urls.append(urljoin(seed_url, href))
-                pagination_urls = unique_preserve(pagination_urls)[:max_pages]
 
             for page_url in pagination_urls:
                 if len(product_urls) >= max_products:
@@ -809,10 +846,7 @@ def discover_domain_products(
                         max_links=max_products,
                         card_selector=card_selector,
                     )
-                    if (
-                        resolved_early == "Magento"
-                        or "product-item" in (page_html or "").lower()
-                    ):
+                    if "product-item" in (page_html or "").lower():
                         page_found.extend(
                             discover_magento_from_category_html(
                                 page_html, page_url, max_links=max_products
@@ -830,30 +864,7 @@ def discover_domain_products(
     except Exception as exc:
         notes.append(f"seed_html_failed:{exc}")
 
-    resolved_platform = infer_discovery_platform(html, explicit=platform)
-
-    # Magento: optionally consult catalogsearch listing / sitemap when HTML empty.
-    # Sitemap remains optional — never required for a successful category crawl.
-    if resolved_platform == "Magento" and not product_urls:
-        catalogsearch = f"{origin.rstrip('/')}/catalogsearch/result/"
-        try:
-            search_html = get_text(catalogsearch)
-            search_found = discover_magento_from_category_html(
-                search_html, catalogsearch, max_links=max_products
-            )
-            search_found.extend(
-                discover_from_html(search_html, catalogsearch, max_links=max_products)
-            )
-            search_found = unique_preserve(search_found)[:max_products]
-            if search_found:
-                product_urls.extend(search_found)
-                notes.append(f"magento_catalogsearch_products:{len(search_found)}")
-                log.info(
-                    "Magento catalogsearch product URLs found: %s",
-                    len(search_found),
-                )
-        except Exception as exc:
-            notes.append(f"magento_catalogsearch_failed:{exc}")
+    resolved_platform = infer_discovery_platform(html, explicit=resolved_early or platform)
 
     if follow_sitemaps:
         allow_shopify = should_probe_shopify_product_sitemaps(resolved_platform, [])
