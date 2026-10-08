@@ -75,12 +75,20 @@ class ConfidenceScorer:
 
     Title +40, Price +20, SKU +15, Images +15, Description +10.
     Total below 70% → caller should retry with another strategy.
+
+    When price_optional=True (cut-to-size Magento), missing price does not
+    reduce the denominator or fail the product — price is a bonus only.
     """
 
     threshold = CONFIDENCE_THRESHOLD
     max_score = MAX_SCORE
 
-    def score(self, data: dict[str, Any] | None) -> dict[str, Any]:
+    def score(
+        self,
+        data: dict[str, Any] | None,
+        *,
+        price_optional: bool = False,
+    ) -> dict[str, Any]:
         product = data if isinstance(data, dict) else {}
         points = 0
         breakdown: dict[str, int] = {
@@ -93,7 +101,8 @@ class ConfidenceScorer:
         if _has_title(product):
             breakdown["title"] = POINTS_TITLE
             points += POINTS_TITLE
-        if _has_price(product):
+        has_price = _has_price(product)
+        if has_price:
             breakdown["price"] = POINTS_PRICE
             points += POINTS_PRICE
         if _has_sku(product):
@@ -106,16 +115,26 @@ class ConfidenceScorer:
             breakdown["description"] = POINTS_DESCRIPTION
             points += POINTS_DESCRIPTION
 
-        percent = int(round((points / MAX_SCORE) * 100)) if MAX_SCORE else 0
+        if price_optional and not has_price:
+            effective_max = MAX_SCORE - POINTS_PRICE
+        else:
+            effective_max = MAX_SCORE
+        percent = int(round((points / effective_max) * 100)) if effective_max else 0
+        missing = [k for k, v in breakdown.items() if v == 0]
+        if price_optional:
+            missing = [m for m in missing if m != "price"]
         return {
             "points": points,
             "percent": percent,
-            "max_points": MAX_SCORE,
+            "max_points": effective_max,
             "threshold": CONFIDENCE_THRESHOLD,
             "passed": percent >= CONFIDENCE_THRESHOLD,
             "breakdown": breakdown,
-            "missing": [k for k, v in breakdown.items() if v == 0],
+            "missing": missing,
+            "price_optional": price_optional,
         }
 
-    def passes(self, data: dict[str, Any] | None) -> bool:
-        return bool(self.score(data).get("passed"))
+    def passes(
+        self, data: dict[str, Any] | None, *, price_optional: bool = False
+    ) -> bool:
+        return bool(self.score(data, price_optional=price_optional).get("passed"))

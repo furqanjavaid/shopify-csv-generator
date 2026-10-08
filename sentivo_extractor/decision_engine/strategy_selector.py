@@ -25,7 +25,12 @@ DEFAULT_STRATEGY_CHAIN: tuple[str, ...] = (
     SOURCE_PLAYWRIGHT,
 )
 
-# Platform → preferred first strategies (rest follow DEFAULT order, de-duped).
+# Platforms whose chain is exclusive (do NOT append Shopify/Woo from DEFAULT).
+_EXCLUSIVE_PLATFORMS = frozenset({"Magento", "Shopify", "WooCommerce", "Next.js"})
+
+# Platform → preferred strategies.
+# Magento: Magento Config → JSON-LD → OpenGraph → Playwright ONLY
+# (Shopify JS / Woo API never work on Magento and must not run).
 _PLATFORM_PRIORITY: dict[str, tuple[str, ...]] = {
     "Shopify": (SOURCE_SHOPIFY, SOURCE_JSONLD, SOURCE_OPENGRAPH, SOURCE_PLAYWRIGHT),
     "Magento": (
@@ -64,6 +69,8 @@ class StrategySelector:
     def __init__(self) -> None:
         # domain → last successful strategy name
         self._winners: dict[str, str] = {}
+        # domain → resolved platform (avoids re-running Playwright per PDP)
+        self._platforms: dict[str, str] = {}
 
     def detect(
         self,
@@ -71,11 +78,22 @@ class StrategySelector:
         *,
         html: str = "",
         session: Any = None,
+        live_fallback: bool = True,
     ) -> dict[str, Any]:
-        detected = detect_platform(url, html=html, session=session)
+        domain = _domain_of(url)
+        cached = self._platforms.get(domain) if domain else None
+        if cached:
+            return {"platform": cached, "signals": ["domain_memory"]}
+
+        detected = detect_platform(
+            url, html=html, session=session, live_fallback=live_fallback
+        )
         platform = str(detected.get("platform") or "Custom")
         if platform in ("", "Unknown"):
             platform = "Custom"
+        # Remember strong platform hits so Magento PDPs skip Shopify/Woo forever.
+        if domain and platform in ("Magento", "Shopify", "WooCommerce"):
+            self._platforms[domain] = platform
         return {
             "platform": platform,
             "signals": list(detected.get("signals") or []),
@@ -89,10 +107,12 @@ class StrategySelector:
     ) -> list[str]:
         """Return ordered strategy names for this platform (winners first)."""
         preferred = list(_PLATFORM_PRIORITY.get(platform) or DEFAULT_STRATEGY_CHAIN)
-        # Fill with any DEFAULT entries not already present.
-        for name in DEFAULT_STRATEGY_CHAIN:
-            if name not in preferred:
-                preferred.append(name)
+        # Magento / Shopify / Woo / Next: exclusive chains — do not append
+        # DEFAULT (which would reintroduce Shopify JS + Woo API on Magento).
+        if platform not in _EXCLUSIVE_PLATFORMS:
+            for name in DEFAULT_STRATEGY_CHAIN:
+                if name not in preferred:
+                    preferred.append(name)
 
         domain = _domain_of(url)
         winner = self._winners.get(domain) if domain else None

@@ -35,6 +35,8 @@ class FallbackManager:
         url: str,
         strategies: list[str],
         runner: Callable[[str, int], dict[str, Any] | None],
+        *,
+        price_optional: bool = False,
     ) -> dict[str, Any]:
         """
         Execute strategies in order.
@@ -68,7 +70,7 @@ class FallbackManager:
                     continue
 
                 last_partial = partial
-                score = self.scorer.score(partial)
+                score = self.scorer.score(partial, price_optional=price_optional)
                 last_score = score
                 self.logger.info(
                     "DecisionEngine strategy=%s confidence=%s%% (need %s%%) url=%s",

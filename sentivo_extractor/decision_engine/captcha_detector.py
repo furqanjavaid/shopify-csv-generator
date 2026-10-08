@@ -122,23 +122,32 @@ class PlaywrightLiveSession:
             return
         from playwright.sync_api import sync_playwright
 
+        from sentivo_extractor.core.platform_detector import (
+            _launch_chromium_for_cloudflare,
+        )
+        from sentivo_extractor.core.utils import BROWSER_HEADERS
+
         self._manager = sync_playwright()
         self._pw = self._manager.start()
-        self.browser = self._pw.chromium.launch(headless=False)
-        from sentivo_extractor.core.utils import BROWSER_HEADERS, BROWSER_USER_AGENT
-
+        # Headed system Chrome — headless / requests get Cloudflare 502.
+        self.browser = _launch_chromium_for_cloudflare(self._pw)
         opts: dict[str, Any] = {
             "viewport": {"width": 1440, "height": 900},
-            "user_agent": user_agent or BROWSER_USER_AGENT,
+            "locale": "en-GB",
             "extra_http_headers": {
                 k: v for k, v in BROWSER_HEADERS.items() if k.lower() != "user-agent"
             },
         }
+        # Only override UA when caller explicitly provides one (CAPTCHA resume).
+        if user_agent:
+            opts["user_agent"] = user_agent
         self.context = self.browser.new_context(**opts)
         self.page = self.context.new_page()
-        self.logger.info("Opened visible Playwright window for CAPTCHA / remaining URLs")
+        self.logger.info(
+            "Opened headed Chrome Playwright window (Cloudflare bypass / CAPTCHA)"
+        )
 
-    def goto(self, url: str, *, timeout_ms: int = 30000) -> Any:
+    def goto(self, url: str, *, timeout_ms: int = 45000) -> Any:
         self.ensure_visible()
         self.network_json = []
         page = self.page
@@ -166,6 +175,10 @@ class PlaywrightLiveSession:
         self._on_response = on_response
         page.on("response", on_response)
         page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+        try:
+            page.wait_for_load_state("networkidle", timeout=min(20000, timeout_ms))
+        except Exception:
+            pass
         return page
 
     def has_visible_challenge_iframe(self) -> bool:
@@ -222,10 +235,11 @@ class PlaywrightLiveSession:
             "cf_clearance": self.has_cf_clearance(),
         }
 
-    def render_url(self, url: str, *, timeout_ms: int = 30000) -> dict[str, Any]:
+    def render_url(self, url: str, *, timeout_ms: int = 45000) -> dict[str, Any]:
         self.goto(url, timeout_ms=timeout_ms)
         try:
-            self.page.wait_for_timeout(1500)
+            # Settle so Cloudflare JS challenge / Magento Hyva pricing init finishes.
+            self.page.wait_for_timeout(2500)
         except Exception:
             pass
         return self.snapshot()

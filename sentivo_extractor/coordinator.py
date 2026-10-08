@@ -131,13 +131,14 @@ class DecisionCoordinator:
             logger=self.logger,
         )
 
-        html, fetch_blocked = self._soft_fetch(url)
+        # Detect platform BEFORE product fetch so Magento never hits requests/httpx.
         detected = self.selector.detect(
             url,
-            html=html,
+            html="",
             session=getattr(self.http, "session", None),
         )
         platform = detected["platform"]
+        price_optional = platform == "Magento"
         strategies = self.selector.strategies_for(platform, url=url)
         self.logger.info(
             "DecisionEngine platform=%s strategies=%s url=%s",
@@ -146,16 +147,38 @@ class DecisionCoordinator:
             url,
         )
 
+        if platform == "Magento":
+            html, fetch_blocked = self._magento_playwright_fetch(url)
+        else:
+            html, fetch_blocked = self._soft_fetch(url)
+            # Refine platform from fetched HTML when initial probe was Custom.
+            if platform in ("Custom", "Unknown") and html:
+                detected = self.selector.detect(
+                    url,
+                    html=html,
+                    session=getattr(self.http, "session", None),
+                )
+                platform = detected["platform"]
+                price_optional = platform == "Magento"
+                strategies = self.selector.strategies_for(platform, url=url)
+                if platform == "Magento":
+                    self.logger.info(
+                        "DecisionEngine reclassified Magento — Playwright PDP fetch %s",
+                        url,
+                    )
+                    html, fetch_blocked = self._magento_playwright_fetch(url)
+
         context: dict[str, Any] = {
             "http": self.http,
             "platform": platform,
             "site_rules": self.site_rules.get("selectors") or self.site_rules,
-            "use_playwright": False,
-            "timeout_ms": int(float(self.options.get("timeout") or 25) * 1000),
+            "use_playwright": platform == "Magento",
+            "timeout_ms": int(float(self.options.get("timeout") or 45) * 1000),
             "capture_network": True,
             "probe_variants": False,
             "logger": self.logger,
             "browser_headers": platform == "Magento",
+            "playwright_headless": False,
         }
         if platform == "Magento" and hasattr(self.http, "apply_browser_headers"):
             try:
@@ -189,7 +212,9 @@ class DecisionCoordinator:
             )
             return dict(values)
 
-        chain = self.fallback.run_chain(url, strategies, runner)
+        chain = self.fallback.run_chain(
+            url, strategies, runner, price_optional=price_optional
+        )
         if chain.get("success"):
             winning_strategy = chain.get("strategy")
             if winning_strategy:
@@ -197,11 +222,11 @@ class DecisionCoordinator:
 
         # If still weak and Playwright not already tried, force one Playwright pass
         # when HTTP fetch was blocked or confidence failed.
-        score = self.scorer.score(values)
+        score = self.scorer.score(values, price_optional=price_optional)
         if (
             not score["passed"]
             and SOURCE_PLAYWRIGHT not in methods_attempted
-            and (fetch_blocked or values)
+            and (fetch_blocked or values or platform == "Magento")
         ):
             self.logger.info(
                 "DecisionEngine activating Playwright after low confidence / block"
@@ -215,7 +240,7 @@ class DecisionCoordinator:
                 pipeline._merge_partial(  # noqa: SLF001
                     values, sources, confidences, partial, SOURCE_PLAYWRIGHT
                 )
-                score = self.scorer.score(values)
+                score = self.scorer.score(values, price_optional=price_optional)
                 if score["passed"]:
                     winning_strategy = SOURCE_PLAYWRIGHT
                     self.selector.remember_success(url, SOURCE_PLAYWRIGHT)
@@ -253,6 +278,9 @@ class DecisionCoordinator:
                     context["playwright_headless"] = False
 
         pipeline._ensure_price(values, sources, confidences, engine_html or html)  # noqa: SLF001
+        # Magento cut-to-size: price is JS-calculated — empty string is OK.
+        if price_optional and not str(values.get("price") or "").strip():
+            values["price"] = ""
         pipeline._ensure_description(  # noqa: SLF001
             values,
             sources,
@@ -264,39 +292,53 @@ class DecisionCoordinator:
         )
 
         product = pipeline._build_product(values, url)  # noqa: SLF001
+        if price_optional and not str(product.get("price") or "").strip():
+            product["price"] = ""
         product["field_sources"] = dict(sources)
         product["extraction_method"] = pipeline._summarize_method(sources)  # noqa: SLF001
         product["platform"] = platform
         product["decision_engine"] = {
             "platform": platform,
             "winning_strategy": winning_strategy,
-            "confidence": self.scorer.score(values),
+            "confidence": self.scorer.score(values, price_optional=price_optional),
             "methods_attempted": list(methods_attempted),
             "strategy_chain": list(strategies),
+            "price_optional": price_optional,
         }
 
         product, variant_report = pipeline._apply_variant_engine(  # noqa: SLF001
             product, url, engine_html, context
         )
         pipeline._scrub_zero_prices(product)  # noqa: SLF001
+        if price_optional and not str(product.get("price") or "").strip():
+            product["price"] = ""
         product, image_report = pipeline._apply_image_engine(  # noqa: SLF001
             product, url, engine_html, context
         )
 
+        missing_for_report = pipeline._missing_required(values)  # noqa: SLF001
+        if price_optional:
+            missing_for_report = [m for m in missing_for_report if m != "price"]
         report_entry = pipeline._build_report_entry(  # noqa: SLF001
             url=url,
             product=product,
             values=values,
             sources=sources,
             confidences=confidences,
-            missing=pipeline._missing_required(values),  # noqa: SLF001
+            missing=missing_for_report,
             methods_attempted=methods_attempted,
         )
         pipeline._log_field_sources(sources)  # noqa: SLF001
 
+        # Prefer product after image engine (values may lack images Magento DOM missed).
         still_missing = [
             m for m in pipeline._missing_required(values) if m != "price"  # noqa: SLF001
         ]
+        if product.get("images") and "images" in still_missing:
+            still_missing = [m for m in still_missing if m != "images"]
+            values["images"] = product.get("images")
+        if price_optional:
+            still_missing = [m for m in still_missing if m != "price"]
         debug = pipeline._debug_artifacts(engine_html)  # noqa: SLF001
         de_meta = product.get("decision_engine") or {}
 
@@ -334,7 +376,7 @@ class DecisionCoordinator:
             }
 
         # Final field confidence gate (Decision Engine requirement).
-        final_score = self.scorer.score(product)
+        final_score = self.scorer.score(product, price_optional=price_optional)
         de_meta = dict(de_meta)
         de_meta["final_confidence"] = final_score
         product["decision_engine"] = de_meta
@@ -376,6 +418,44 @@ class DecisionCoordinator:
             "debug_artifacts": debug,
             "decision_engine": de_meta,
         }
+
+    def _magento_playwright_fetch(self, url: str) -> tuple[str, bool]:
+        """
+        Magento PDP fetch — Playwright headed Chrome ONLY (never requests/httpx).
+        Reuses the shared session so Cloudflare cookies persist across products.
+        """
+        self.logger.info(
+            "[Magento] Playwright product fetch (headed Chrome): %s", url
+        )
+        session = self._live_session()
+        try:
+            snap = session.render_url(url, timeout_ms=45000)
+            html = str(snap.get("html") or "")
+            title = str(snap.get("title") or "")
+            probe = self.captcha.inspect(
+                html=html,
+                title=title,
+                url=url,
+                visible_challenge_iframe=bool(snap.get("visible_challenge_iframe")),
+                cf_clearance=bool(snap.get("cf_clearance")),
+                logger=self.logger,
+            )
+            if probe.get("blocked"):
+                html = self._wait_out_captcha(
+                    url, reasons=list(probe.get("reasons") or [])
+                )
+            # Keep requests session in sync for any non-HTML assets, but Magento
+            # HTML itself must not be re-fetched via requests.
+            session.apply_cookies_to_requests(getattr(self.http, "session", None))
+            if not html.strip():
+                self.logger.warning("[Magento] Playwright returned empty HTML for %s", url)
+                return "", True
+            return html, False
+        except CaptchaTimeoutError:
+            raise
+        except Exception as exc:
+            self.logger.warning("[Magento] Playwright product fetch failed %s: %s", url, exc)
+            return "", True
 
     def _wait_out_captcha(
         self, url: str, *, reasons: list[str] | None = None
