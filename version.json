@@ -1,6 +1,6 @@
 {
-  "version": "1.2.0",
+  "version": "1.3.0",
   "app_name": "Sentivo Tools",
   "publisher": "Sentivo Limited",
-  "release_notes": "Decision Engine coordinator with confidence scoring, strategy selection, CAPTCHA detection, and Resume-from-checkpoint."
+  "release_notes": "Magento platform support with headed Chrome, Sucuri-aware pacing, real-time checkpoint save, and failed-products retry CSV."
 }

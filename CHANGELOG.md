@@ -1,3 +1,12 @@
+## Sentivo Tools v1.3.0
+
+## What's New
+- Magento platform support (sheetplastics.co.uk)
+- Headed Chrome browser — visible window during scraping
+- Human-like delays — Sucuri firewall bypass
+- Real-time checkpoint save — data safe if interrupted
+- Failed products report — missed URLs in separate CSV for retry
+
 ## Sentivo Tools v1.2.0
 
 ### What's New
