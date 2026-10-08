@@ -1530,18 +1530,22 @@ class ScraperScreen(ctk.CTkFrame):
                         }
                     )
 
-            cmd = [
-                sys.executable,
-                "-m",
-                "sentivo_extractor",
-                "extract",
-                "--input",
-                str(input_csv),
-                "--output",
-                str(out_dir),
-                "--overwrite",
-                "true",
-            ]
+            # Packaged exe: SentivoTools.exe extract --input ...
+            # Dev:          python main.py extract --input ...
+            cmd = [sys.executable]
+            if not getattr(sys, "frozen", False):
+                cmd.append(str(PROJECT_ROOT / "main.py"))
+            cmd.extend(
+                [
+                    "extract",
+                    "--input",
+                    str(input_csv),
+                    "--output",
+                    str(out_dir),
+                    "--overwrite",
+                    "true",
+                ]
+            )
             if kind == "pilot":
                 cmd.extend(
                     [
