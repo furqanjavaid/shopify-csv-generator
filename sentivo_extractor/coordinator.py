@@ -24,6 +24,10 @@ from sentivo_extractor.decision_engine.captcha_detector import (
 )
 from sentivo_extractor.decision_engine.confidence_scorer import ConfidenceScorer
 from sentivo_extractor.decision_engine.fallback_manager import FallbackManager
+from sentivo_extractor.decision_engine.magento_browser import (
+    close_shared_magento_pool,
+    shared_magento_pool,
+)
 from sentivo_extractor.decision_engine.retry_handler import RetryHandler
 from sentivo_extractor.decision_engine.strategy_selector import StrategySelector
 
@@ -70,6 +74,14 @@ class DecisionCoordinator:
         return _SHARED_PW_SESSION
 
     @classmethod
+    def shared_selector(cls) -> StrategySelector:
+        return _SHARED_SELECTOR
+
+    @classmethod
+    def remember_platform(cls, url_or_domain: str, platform: str) -> None:
+        _SHARED_SELECTOR.remember_platform(url_or_domain, platform)
+
+    @classmethod
     def close_shared_session(cls) -> None:
         global _SHARED_PW_SESSION
         if _SHARED_PW_SESSION is not None:
@@ -78,6 +90,7 @@ class DecisionCoordinator:
             except Exception:
                 pass
             _SHARED_PW_SESSION = None
+        close_shared_magento_pool()
 
     def _live_session(self) -> PlaywrightLiveSession:
         global _SHARED_PW_SESSION
@@ -85,11 +98,17 @@ class DecisionCoordinator:
             _SHARED_PW_SESSION = PlaywrightLiveSession(logger=self.logger)
         return _SHARED_PW_SESSION
 
-    def extract(self, url: str) -> dict[str, Any]:
+    def extract(
+        self,
+        url: str,
+        *,
+        html: str | None = None,
+        platform: str | None = None,
+    ) -> dict[str, Any]:
         """Extract one URL with retries. CaptchaTimeoutError is not retried."""
 
         def _once() -> dict[str, Any]:
-            return self._extract_once(url)
+            return self._extract_once(url, html=html, platform=platform)
 
         def _ok(outcome: dict[str, Any]) -> bool:
             return bool(outcome.get("success"))
@@ -122,7 +141,13 @@ class DecisionCoordinator:
 
     # ── single attempt ────────────────────────────────────
 
-    def _extract_once(self, url: str) -> dict[str, Any]:
+    def _extract_once(
+        self,
+        url: str,
+        *,
+        html: str | None = None,
+        platform: str | None = None,
+    ) -> dict[str, Any]:
         pipeline = PDPExtractionPipeline(
             http=self.http,
             options=self.options,
@@ -131,13 +156,24 @@ class DecisionCoordinator:
             logger=self.logger,
         )
 
-        # Detect platform BEFORE product fetch so Magento never hits requests/httpx.
-        detected = self.selector.detect(
-            url,
-            html="",
-            session=getattr(self.http, "session", None),
-        )
-        platform = detected["platform"]
+        # Prefer pinned / remembered Magento — never re-detect on 502 failures.
+        remembered = self.selector.platform_for(url)
+        if platform:
+            resolved_platform = str(platform)
+            if resolved_platform == "Magento":
+                self.selector.remember_platform(url, "Magento")
+        elif remembered:
+            resolved_platform = remembered
+        else:
+            detected = self.selector.detect(
+                url,
+                html=html or "",
+                session=getattr(self.http, "session", None),
+                live_fallback=not bool(html),
+            )
+            resolved_platform = detected["platform"]
+
+        platform = resolved_platform
         price_optional = platform == "Magento"
         strategies = self.selector.strategies_for(platform, url=url)
         self.logger.info(
@@ -147,7 +183,12 @@ class DecisionCoordinator:
             url,
         )
 
-        if platform == "Magento":
+        fetch_blocked = False
+        if html is not None:
+            # Pre-fetched (parallel Magento pool) — skip network entirely.
+            html = html or ""
+            fetch_blocked = not bool(html.strip())
+        elif platform == "Magento":
             html, fetch_blocked = self._magento_playwright_fetch(url)
         else:
             html, fetch_blocked = self._soft_fetch(url)
@@ -157,6 +198,7 @@ class DecisionCoordinator:
                     url,
                     html=html,
                     session=getattr(self.http, "session", None),
+                    live_fallback=False,
                 )
                 platform = detected["platform"]
                 price_optional = platform == "Magento"
@@ -422,39 +464,48 @@ class DecisionCoordinator:
     def _magento_playwright_fetch(self, url: str) -> tuple[str, bool]:
         """
         Magento PDP fetch — Playwright headed Chrome ONLY (never requests/httpx).
-        Reuses the shared session so Cloudflare cookies persist across products.
+        Uses the shared MagentoBrowserPool so one browser serves every product.
         """
         self.logger.info(
-            "[Magento] Playwright product fetch (headed Chrome): %s", url
+            "[Magento] Playwright product fetch (shared pool): %s", url
         )
-        session = self._live_session()
         try:
-            snap = session.render_url(url, timeout_ms=45000)
-            html = str(snap.get("html") or "")
-            title = str(snap.get("title") or "")
-            probe = self.captcha.inspect(
-                html=html,
-                title=title,
-                url=url,
-                visible_challenge_iframe=bool(snap.get("visible_challenge_iframe")),
-                cf_clearance=bool(snap.get("cf_clearance")),
-                logger=self.logger,
-            )
-            if probe.get("blocked"):
-                html = self._wait_out_captcha(
-                    url, reasons=list(probe.get("reasons") or [])
+            pool = shared_magento_pool(logger=self.logger)
+            html = pool.fetch_one(url, timeout_ms=45000)
+            if not (html or "").strip():
+                # Fallback to CAPTCHA/live session if pool got an empty/blocked page.
+                session = self._live_session()
+                snap = session.render_url(url, timeout_ms=45000)
+                html = str(snap.get("html") or "")
+                probe = self.captcha.inspect(
+                    html=html,
+                    title=str(snap.get("title") or ""),
+                    url=url,
+                    visible_challenge_iframe=bool(
+                        snap.get("visible_challenge_iframe")
+                    ),
+                    cf_clearance=bool(snap.get("cf_clearance")),
+                    logger=self.logger,
                 )
-            # Keep requests session in sync for any non-HTML assets, but Magento
-            # HTML itself must not be re-fetched via requests.
-            session.apply_cookies_to_requests(getattr(self.http, "session", None))
-            if not html.strip():
-                self.logger.warning("[Magento] Playwright returned empty HTML for %s", url)
+                if probe.get("blocked"):
+                    html = self._wait_out_captcha(
+                        url, reasons=list(probe.get("reasons") or [])
+                    )
+                session.apply_cookies_to_requests(
+                    getattr(self.http, "session", None)
+                )
+            if not (html or "").strip():
+                self.logger.warning(
+                    "[Magento] Playwright returned empty HTML for %s", url
+                )
                 return "", True
             return html, False
         except CaptchaTimeoutError:
             raise
         except Exception as exc:
-            self.logger.warning("[Magento] Playwright product fetch failed %s: %s", url, exc)
+            self.logger.warning(
+                "[Magento] Playwright product fetch failed %s: %s", url, exc
+            )
             return "", True
 
     def _wait_out_captcha(

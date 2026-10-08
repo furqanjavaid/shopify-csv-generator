@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
@@ -38,6 +38,10 @@ from sentivo_extractor.decision_engine.captcha_detector import (
     CaptchaBlockedError,
     CaptchaTimeoutError,
     SOLVE_TIMEOUT_SEC,
+)
+from sentivo_extractor.decision_engine.magento_browser import (
+    DEFAULT_WORKERS as MAGENTO_WORKERS,
+    shared_magento_pool,
 )
 from sentivo_extractor.core.pdp_pipeline import (
     write_pdp_extraction_report,
@@ -156,7 +160,12 @@ class UniversalCrawler:
         self.captcha_paused = False
         self.captcha_pause_info: dict[str, Any] = {}
         self._captcha_blocked_hosts: set[str] = set()
+        self._magento_domains: set[str] = set()
         self._extract_pool = ThreadPoolExecutor(max_workers=1)
+        self._magento_workers = int(
+            options.get("magento_parallel_workers") or MAGENTO_WORKERS
+        )
+        self._magento_workers = max(3, min(5, self._magento_workers))
 
     def _domain_dir(self, domain_key: str) -> Path:
         if domain_key not in self._domain_dirs:
@@ -271,6 +280,8 @@ class UniversalCrawler:
 
         manifest_rows: list[dict[str, Any]] = []
 
+        pending_magento: list[str] = []
+        pending_other: list[str] = []
         for url in product_urls:
             if url in seen_in_run:
                 skipped += 1
@@ -293,12 +304,78 @@ class UniversalCrawler:
                 self.logger.info("Skip [captcha_site_blocked]: %s", url)
                 continue
 
+            # Parallel Magento path skips the production-validation retry loop.
+            if self._is_magento_url(url) and not self.production_validation:
+                DecisionCoordinator.remember_platform(url, "Magento")
+                pending_magento.append(url)
+            else:
+                pending_other.append(url)
+
+        magento_total = len(pending_magento)
+        if magento_total:
+            self.logger.info(
+                "[Magento] Parallel extraction: %s product(s), workers=%s",
+                magento_total,
+                self._magento_workers,
+            )
+            magento_done = 0
+            for batch_start in range(0, magento_total, self._magento_workers):
+                batch = pending_magento[
+                    batch_start : batch_start + self._magento_workers
+                ]
+                batch_results = self._extract_magento_batch(batch)
+                for url, product, reason in batch_results:
+                    try:
+                        if not product:
+                            self.checkpoint.mark_failed(
+                                url, reason or "extraction_failed"
+                            )
+                            failed_count += 1
+                            if reason and "captcha_timeout" in reason:
+                                self._captcha_blocked_hosts.add(domain_from_url(url))
+                            continue
+                        ok = self._finalize_extracted_product(
+                            url, product, manifest_rows
+                        )
+                        if ok:
+                            products.append(product)
+                            processed += 1
+                            magento_done += 1
+                            if magento_done % 10 == 0 or magento_done == magento_total:
+                                self.logger.info(
+                                    "[Magento] Extracted %s/%s products...",
+                                    magento_done,
+                                    magento_total,
+                                )
+                        else:
+                            failed_count += 1
+                    except CaptchaTimeoutError as exc:
+                        reason = (
+                            getattr(exc, "reason", None)
+                            or "captcha_timeout_site_blocked"
+                        )
+                        self._captcha_blocked_hosts.add(domain_from_url(url))
+                        self.logger.error(
+                            "CAPTCHA timeout — site blocked, next URL: %s", url
+                        )
+                        self.checkpoint.mark_failed(url, reason)
+                        self._failed_reasons.append((url, reason))
+                        failed_count += 1
+                    except Exception as exc:  # noqa: BLE001
+                        self.logger.error("FAIL %s: %s", url, exc)
+                        self.checkpoint.mark_failed(url, str(exc))
+                        self._failed_reasons.append((url, str(exc)))
+                        failed_count += 1
+
+        for url in pending_other:
             try:
                 if self.production_validation:
                     product, val_row = self._extract_and_validate_product(url)
                     self._validation_rows.append(val_row)
                     if not product:
-                        reason = str(val_row.get("Failure Reason") or "validation_failed")
+                        reason = str(
+                            val_row.get("Failure Reason") or "validation_failed"
+                        )
                         self.checkpoint.mark_failed(url, reason)
                         failed_count += 1
                         if "captcha_timeout" in reason:
@@ -324,39 +401,24 @@ class UniversalCrawler:
                             self._captcha_blocked_hosts.add(domain_from_url(url))
                         continue
                     product = normalize_product(product, base_url=url)
-                    meta = self._url_meta.get(canonicalize_product_url(url)) or self._url_meta.get(
-                        url
-                    ) or {}
+                    meta = self._url_meta.get(
+                        canonicalize_product_url(url)
+                    ) or self._url_meta.get(url) or {}
                     product = apply_seed_metadata(product, meta)
                     from sentivo_extractor.core.confidence import apply_confidence
 
                     product = apply_confidence(product)
-                domain_key = domain_folder_name(url)
-                domain_dir = self._domain_dir(domain_key)
-                rows = process_product_images(
-                    product,
-                    download=bool(self.options.get("download_images")),
-                    convert=True,
-                    images_dir=domain_dir / "images"
-                    if self.options.get("download_images")
-                    else None,
-                    session=self.http.session,
-                )
-                for row in rows:
-                    row["domain"] = domain_key
-                manifest_rows.extend(rows)
-                raw_dir = domain_dir / "raw_json_backup"
-                raw_dir.mkdir(parents=True, exist_ok=True)
-                write_json(raw_dir / f"{product.get('handle') or 'product'}.json", product)
-                products.append(product)
-                self.checkpoint.mark_done(url, product)
-                processed += 1
-                self.logger.info(
-                    "OK [%s/%.2f] %s",
-                    product.get("confidence_band"),
-                    float(product.get("confidence_score") or 0),
-                    product.get("title"),
-                )
+                if self._finalize_extracted_product(url, product, manifest_rows):
+                    products.append(product)
+                    processed += 1
+                    self.logger.info(
+                        "OK [%s/%.2f] %s",
+                        product.get("confidence_band"),
+                        float(product.get("confidence_score") or 0),
+                        product.get("title"),
+                    )
+                else:
+                    failed_count += 1
             except CaptchaTimeoutError as exc:
                 reason = getattr(exc, "reason", None) or "captcha_timeout_site_blocked"
                 self._captcha_blocked_hosts.add(domain_from_url(url))
@@ -366,9 +428,10 @@ class UniversalCrawler:
                 failed_count += 1
                 continue
             except CaptchaBlockedError as exc:
-                # Should be waited out in coordinator; treat leftover as this-URL failure.
                 reason = getattr(exc, "reason", None) or str(exc)
-                self.logger.error("CAPTCHA leftover — failing URL and continuing: %s", url)
+                self.logger.error(
+                    "CAPTCHA leftover — failing URL and continuing: %s", url
+                )
                 self.checkpoint.mark_failed(url, reason)
                 self._failed_reasons.append((url, reason))
                 failed_count += 1
@@ -563,14 +626,135 @@ class UniversalCrawler:
             )
         return rows
 
+    def _is_magento_url(self, url: str) -> bool:
+        host = domain_from_url(url)
+        if host in self._magento_domains:
+            return True
+        pinned = DecisionCoordinator.shared_selector().platform_for(url)
+        return pinned == "Magento"
+
+    def _finalize_extracted_product(
+        self,
+        url: str,
+        product: dict[str, Any],
+        manifest_rows: list[dict[str, Any]],
+    ) -> bool:
+        """Persist images/checkpoint for a successfully extracted product."""
+        try:
+            domain_key = domain_folder_name(url)
+            domain_dir = self._domain_dir(domain_key)
+            rows = process_product_images(
+                product,
+                download=bool(self.options.get("download_images")),
+                convert=True,
+                images_dir=domain_dir / "images"
+                if self.options.get("download_images")
+                else None,
+                session=self.http.session,
+            )
+            for row in rows:
+                row["domain"] = domain_key
+            manifest_rows.extend(rows)
+            raw_dir = domain_dir / "raw_json_backup"
+            raw_dir.mkdir(parents=True, exist_ok=True)
+            write_json(
+                raw_dir / f"{product.get('handle') or 'product'}.json", product
+            )
+            self.checkpoint.mark_done(url, product)
+            self.logger.info(
+                "OK [%s/%.2f] %s",
+                product.get("confidence_band"),
+                float(product.get("confidence_score") or 0),
+                product.get("title"),
+            )
+            return True
+        except Exception as exc:  # noqa: BLE001
+            self.logger.error("Finalize FAIL %s: %s", url, exc)
+            self.checkpoint.mark_failed(url, str(exc))
+            self._failed_reasons.append((url, str(exc)))
+            return False
+
+    def _extract_magento_batch(
+        self, urls: list[str]
+    ) -> list[tuple[str, dict[str, Any] | None, str]]:
+        """
+        Fetch a batch of Magento PDPs in parallel (one shared browser), then
+        parse/extract concurrently via ThreadPoolExecutor.
+        """
+        if not urls:
+            return []
+        pool = shared_magento_pool(
+            workers=self._magento_workers, logger=self.logger
+        )
+        html_map = pool.fetch_many(urls, timeout_ms=45000)
+        results: list[tuple[str, dict[str, Any] | None, str]] = []
+
+        def _parse(url: str) -> tuple[str, dict[str, Any] | None, str]:
+            html = html_map.get(url) or ""
+            product, reason = self.extract_one(
+                url,
+                queue_on_failure=True,
+                html=html,
+                platform="Magento",
+            )
+            if product:
+                product = normalize_product(product, base_url=url)
+                meta = self._url_meta.get(
+                    canonicalize_product_url(url)
+                ) or self._url_meta.get(url) or {}
+                product = apply_seed_metadata(product, meta)
+                from sentivo_extractor.core.confidence import apply_confidence
+
+                product = apply_confidence(product)
+            return url, product, reason
+
+        # Parse in parallel — HTML already fetched; no Playwright in workers.
+        workers = min(self._magento_workers, len(urls))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(_parse, u): u for u in urls}
+            for fut in as_completed(futures):
+                url = futures[fut]
+                try:
+                    results.append(fut.result())
+                except CaptchaTimeoutError as exc:
+                    reason = (
+                        getattr(exc, "reason", None)
+                        or "captcha_timeout_site_blocked"
+                    )
+                    results.append((url, None, reason))
+                except Exception as exc:  # noqa: BLE001
+                    results.append((url, None, str(exc)))
+        # Preserve batch order for deterministic logging.
+        order = {u: i for i, u in enumerate(urls)}
+        results.sort(key=lambda row: order.get(row[0], 0))
+        return results
+
     def extract_one(
-        self, url: str, *, queue_on_failure: bool = True
+        self,
+        url: str,
+        *,
+        queue_on_failure: bool = True,
+        html: str | None = None,
+        platform: str | None = None,
     ) -> tuple[dict[str, Any] | None, str]:
         timeout_sec = float(self.options.get("product_timeout_sec") or 60)
         timeout_sec += float(SOLVE_TIMEOUT_SEC) + 20
 
+        # Pre-fetched Magento HTML: parse on calling thread (pool already parallel).
+        if html is not None and platform == "Magento":
+            return self._extract_one_impl(
+                url,
+                queue_on_failure=queue_on_failure,
+                html=html,
+                platform=platform,
+            )
+
         future = self._extract_pool.submit(
-            self._extract_one_impl, url, queue_on_failure=queue_on_failure
+            self._extract_one_impl,
+            url,
+            queue_on_failure=queue_on_failure,
+            html=html,
+            platform=platform,
         )
         try:
             return future.result(timeout=timeout_sec)
@@ -605,7 +789,12 @@ class UniversalCrawler:
             return None, reason
 
     def _extract_one_impl(
-        self, url: str, *, queue_on_failure: bool = True
+        self,
+        url: str,
+        *,
+        queue_on_failure: bool = True,
+        html: str | None = None,
+        platform: str | None = None,
     ) -> tuple[dict[str, Any] | None, str]:
         coordinator = DecisionCoordinator(
             http=self.http,
@@ -615,7 +804,7 @@ class UniversalCrawler:
             logger=self.logger,
         )
         try:
-            outcome = coordinator.extract(url)
+            outcome = coordinator.extract(url, html=html, platform=platform)
         except (CaptchaBlockedError, CaptchaTimeoutError):
             raise
         report = outcome.get("report")
@@ -820,6 +1009,9 @@ class UniversalCrawler:
                 )
                 plat = str(detected.get("platform") or "Custom")
                 self.logger.info("Detected platform: %s", plat)
+                if plat == "Magento":
+                    self._magento_domains.add(domain)
+                    DecisionCoordinator.remember_platform(url, "Magento")
 
                 # Magento: skip sitemap AND robots.txt gates — nav crawl only.
                 prev_robots = getattr(self.http, "respect_robots", True)

@@ -72,6 +72,19 @@ class StrategySelector:
         # domain → resolved platform (avoids re-running Playwright per PDP)
         self._platforms: dict[str, str] = {}
 
+    def remember_platform(self, url_or_domain: str, platform: str) -> None:
+        """Pin platform for a domain (skips Playwright re-detect on later PDPs)."""
+        domain = _domain_of(url_or_domain) or str(url_or_domain or "").lower().removeprefix(
+            "www."
+        )
+        plat = str(platform or "").strip()
+        if domain and plat:
+            self._platforms[domain] = plat
+
+    def platform_for(self, url: str) -> str | None:
+        domain = _domain_of(url)
+        return self._platforms.get(domain) if domain else None
+
     def detect(
         self,
         url: str,
@@ -83,10 +96,13 @@ class StrategySelector:
         domain = _domain_of(url)
         cached = self._platforms.get(domain) if domain else None
         if cached:
+            # Never re-run live Magento detection (or 502 retries) once confirmed.
             return {"platform": cached, "signals": ["domain_memory"]}
 
+        # If caller already knows Magento, do not open a detection browser.
+        effective_fallback = live_fallback
         detected = detect_platform(
-            url, html=html, session=session, live_fallback=live_fallback
+            url, html=html, session=session, live_fallback=effective_fallback
         )
         platform = str(detected.get("platform") or "Custom")
         if platform in ("", "Unknown"):
