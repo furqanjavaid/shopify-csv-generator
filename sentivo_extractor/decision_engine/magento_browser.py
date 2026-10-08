@@ -1,8 +1,7 @@
 """
-Shared headed-Chrome Playwright pool for Magento PDP fetches.
+Shared headed-Chrome Playwright session for Magento PDP fetches.
 
-One browser stays alive for the whole crawl. Up to N pages fetch in parallel
-via asyncio (Playwright sync API is not thread-safe for concurrent gotos).
+One browser, one tab — sequential only (avoids Sucuri IDS parallel blocks).
 """
 
 from __future__ import annotations
@@ -10,17 +9,29 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import time
 from typing import Any
 
 from sentivo_extractor.core.utils import BROWSER_HEADERS
 
-DEFAULT_WORKERS = 4
+DEFAULT_WORKERS = 1
 _SETTLE_FIRST_MS = 2500
-_SETTLE_WARM_MS = 600
+_SETTLE_WARM_MS = 800
+
+_SUCURI_MARKERS = (
+    "sucuri",
+    "access denied",
+    "website firewall",
+)
+
+
+def is_sucuri_block(html: str) -> bool:
+    low = (html or "").lower()
+    return any(m in low for m in _SUCURI_MARKERS)
 
 
 class MagentoBrowserPool:
-    """Process-wide Magento browser: one Chrome, parallel page fetches."""
+    """Process-wide Magento browser: one Chrome tab, sequential fetches."""
 
     def __init__(
         self,
@@ -28,13 +39,15 @@ class MagentoBrowserPool:
         workers: int = DEFAULT_WORKERS,
         logger: logging.Logger | None = None,
     ) -> None:
-        self.workers = max(1, min(5, int(workers)))
+        del workers  # always single-tab
+        self.workers = 1
         self.logger = logger or logging.getLogger(__name__)
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._pw: Any = None
         self._browser: Any = None
         self._context: Any = None
+        self._page: Any = None
         self._ready = threading.Event()
         self._start_error: BaseException | None = None
         self._warmed = False
@@ -47,6 +60,7 @@ class MagentoBrowserPool:
             and self._thread is not None
             and self._thread.is_alive()
             and self._context is not None
+            and self._page is not None
             and self._start_error is None
         )
 
@@ -69,8 +83,7 @@ class MagentoBrowserPool:
                 f"Magento Playwright pool failed: {self._start_error}"
             ) from self._start_error
         self.logger.info(
-            "[Magento] Playwright pool ready (workers=%s, session reused for all PDPs)",
-            self.workers,
+            "[Magento] Playwright session ready (single tab, sequential)"
         )
 
     def _thread_main(self) -> None:
@@ -108,68 +121,73 @@ class MagentoBrowserPool:
             viewport={"width": 1440, "height": 900},
             locale="en-GB",
         )
+        self._page = await self._context.new_page()
 
     def fetch_one(self, url: str, *, timeout_ms: int = 45000) -> str:
-        result = self.fetch_many([url], timeout_ms=timeout_ms)
-        return str(result.get(url) or "")
+        self.start()
+        assert self._loop is not None
+        fut = asyncio.run_coroutine_threadsafe(
+            self._fetch_one(url, timeout_ms=timeout_ms), self._loop
+        )
+        try:
+            html = fut.result(timeout=max(90.0, timeout_ms / 1000.0 + 30))
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning("[Magento] Sequential fetch failed: %s", exc)
+            return ""
+
+        if is_sucuri_block(html):
+            self.logger.warning(
+                "[Magento] Sucuri block detected — pausing 5 minutes"
+            )
+            time.sleep(300)
+            # Retry once after cooldown on the same single tab.
+            fut2 = asyncio.run_coroutine_threadsafe(
+                self._fetch_one(url, timeout_ms=timeout_ms), self._loop
+            )
+            try:
+                html = fut2.result(timeout=max(90.0, timeout_ms / 1000.0 + 30))
+            except Exception as exc:  # noqa: BLE001
+                self.logger.warning(
+                    "[Magento] Fetch after Sucuri pause failed: %s", exc
+                )
+                return ""
+            if is_sucuri_block(html):
+                self.logger.warning(
+                    "[Magento] Sucuri still blocking after pause — continuing"
+                )
+                return ""
+        return html or ""
 
     def fetch_many(
         self, urls: list[str], *, timeout_ms: int = 45000
     ) -> dict[str, str]:
-        if not urls:
-            return {}
-        self.start()
-        assert self._loop is not None
-        fut = asyncio.run_coroutine_threadsafe(
-            self._fetch_many(urls, timeout_ms=timeout_ms), self._loop
-        )
-        # Per-URL budget + overhead for the batch
-        budget = max(60.0, (timeout_ms / 1000.0) * max(2, len(urls) / self.workers))
-        try:
-            return fut.result(timeout=budget)
-        except Exception as exc:  # noqa: BLE001
-            self.logger.warning("[Magento] Parallel fetch failed: %s", exc)
-            return {u: "" for u in urls}
-
-    async def _fetch_many(
-        self, urls: list[str], *, timeout_ms: int
-    ) -> dict[str, str]:
-        assert self._context is not None
-        sem = asyncio.Semaphore(self.workers)
-        settle = _SETTLE_WARM_MS if self._warmed else _SETTLE_FIRST_MS
+        """Sequential single-tab fetch (no parallel)."""
         out: dict[str, str] = {}
-
-        async def one(url: str) -> None:
-            async with sem:
-                page = await self._context.new_page()
-                try:
-                    await page.goto(
-                        url, wait_until="domcontentloaded", timeout=timeout_ms
-                    )
-                    try:
-                        await page.wait_for_load_state(
-                            "networkidle", timeout=min(12000, timeout_ms)
-                        )
-                    except Exception:
-                        pass
-                    await page.wait_for_timeout(settle)
-                    html = await page.content()
-                    out[url] = html or ""
-                except Exception as exc:  # noqa: BLE001
-                    self.logger.warning(
-                        "[Magento] page fetch failed %s: %s", url, exc
-                    )
-                    out[url] = ""
-                finally:
-                    try:
-                        await page.close()
-                    except Exception:
-                        pass
-
-        await asyncio.gather(*[one(u) for u in urls])
-        if any(out.values()):
-            self._warmed = True
+        for url in urls:
+            out[url] = self.fetch_one(url, timeout_ms=timeout_ms)
         return out
+
+    async def _fetch_one(self, url: str, *, timeout_ms: int) -> str:
+        assert self._page is not None
+        settle = _SETTLE_WARM_MS if self._warmed else _SETTLE_FIRST_MS
+        try:
+            await self._page.goto(
+                url, wait_until="domcontentloaded", timeout=timeout_ms
+            )
+            try:
+                await self._page.wait_for_load_state(
+                    "networkidle", timeout=min(12000, timeout_ms)
+                )
+            except Exception:
+                pass
+            await self._page.wait_for_timeout(settle)
+            html = await self._page.content()
+            if html:
+                self._warmed = True
+            return html or ""
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning("[Magento] page fetch failed %s: %s", url, exc)
+            return ""
 
     def close(self) -> None:
         with self._lock:
@@ -193,11 +211,12 @@ class MagentoBrowserPool:
             self._pw = None
             self._browser = None
             self._context = None
+            self._page = None
             self._warmed = False
             self._ready.clear()
 
     async def _async_close(self) -> None:
-        for obj in (self._context, self._browser):
+        for obj in (self._page, self._context, self._browser):
             try:
                 if obj is not None:
                     await obj.close()
@@ -223,7 +242,7 @@ def shared_magento_pool(
     with _POOL_LOCK:
         if _SHARED_MAGENTO_POOL is None or not _SHARED_MAGENTO_POOL.alive:
             _SHARED_MAGENTO_POOL = MagentoBrowserPool(
-                workers=workers, logger=logger
+                workers=1, logger=logger
             )
         return _SHARED_MAGENTO_POOL
 

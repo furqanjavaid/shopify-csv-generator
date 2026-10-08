@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from collections import Counter, defaultdict
 from pathlib import Path
+import random
+import time
 from typing import Any
 from urllib.parse import urlparse
 
@@ -39,10 +41,7 @@ from sentivo_extractor.decision_engine.captcha_detector import (
     CaptchaTimeoutError,
     SOLVE_TIMEOUT_SEC,
 )
-from sentivo_extractor.decision_engine.magento_browser import (
-    DEFAULT_WORKERS as MAGENTO_WORKERS,
-    shared_magento_pool,
-)
+from sentivo_extractor.decision_engine.magento_browser import shared_magento_pool
 from sentivo_extractor.core.pdp_pipeline import (
     write_pdp_extraction_report,
     write_retry_queue,
@@ -162,10 +161,6 @@ class UniversalCrawler:
         self._captcha_blocked_hosts: set[str] = set()
         self._magento_domains: set[str] = set()
         self._extract_pool = ThreadPoolExecutor(max_workers=1)
-        self._magento_workers = int(
-            options.get("magento_parallel_workers") or MAGENTO_WORKERS
-        )
-        self._magento_workers = max(3, min(5, self._magento_workers))
 
     def _domain_dir(self, domain_key: str) -> Path:
         if domain_key not in self._domain_dirs:
@@ -304,7 +299,7 @@ class UniversalCrawler:
                 self.logger.info("Skip [captcha_site_blocked]: %s", url)
                 continue
 
-            # Parallel Magento path skips the production-validation retry loop.
+            # Sequential Magento path (human-like delays) skips production-validation loop.
             if self._is_magento_url(url) and not self.production_validation:
                 DecisionCoordinator.remember_platform(url, "Magento")
                 pending_magento.append(url)
@@ -314,26 +309,23 @@ class UniversalCrawler:
         magento_total = len(pending_magento)
         if magento_total:
             self.logger.info(
-                "[Magento] Parallel extraction: %s product(s), workers=%s",
+                "[Magento] Sequential extraction: %s product(s), single tab + delays",
                 magento_total,
-                self._magento_workers,
             )
+            # Warm the shared single-tab session once.
+            shared_magento_pool(logger=self.logger).start()
             magento_done = 0
-            for batch_start in range(0, magento_total, self._magento_workers):
-                batch = pending_magento[
-                    batch_start : batch_start + self._magento_workers
-                ]
-                batch_results = self._extract_magento_batch(batch)
-                for url, product, reason in batch_results:
-                    try:
-                        if not product:
-                            self.checkpoint.mark_failed(
-                                url, reason or "extraction_failed"
-                            )
-                            failed_count += 1
-                            if reason and "captcha_timeout" in reason:
-                                self._captcha_blocked_hosts.add(domain_from_url(url))
-                            continue
+            for idx, url in enumerate(pending_magento):
+                try:
+                    url, product, reason = self._extract_magento_one(url)
+                    if not product:
+                        self.checkpoint.mark_failed(
+                            url, reason or "extraction_failed"
+                        )
+                        failed_count += 1
+                        if reason and "captcha_timeout" in reason:
+                            self._captcha_blocked_hosts.add(domain_from_url(url))
+                    else:
                         ok = self._finalize_extracted_product(
                             url, product, manifest_rows
                         )
@@ -349,23 +341,40 @@ class UniversalCrawler:
                                 )
                         else:
                             failed_count += 1
-                    except CaptchaTimeoutError as exc:
-                        reason = (
-                            getattr(exc, "reason", None)
-                            or "captcha_timeout_site_blocked"
+                except CaptchaTimeoutError as exc:
+                    reason = (
+                        getattr(exc, "reason", None)
+                        or "captcha_timeout_site_blocked"
+                    )
+                    self._captcha_blocked_hosts.add(domain_from_url(url))
+                    self.logger.error(
+                        "CAPTCHA timeout — site blocked, next URL: %s", url
+                    )
+                    self.checkpoint.mark_failed(url, reason)
+                    self._failed_reasons.append((url, reason))
+                    failed_count += 1
+                except Exception as exc:  # noqa: BLE001
+                    self.logger.error("FAIL %s: %s", url, exc)
+                    self.checkpoint.mark_failed(url, str(exc))
+                    self._failed_reasons.append((url, str(exc)))
+                    failed_count += 1
+
+                # Human-like pacing between products (not after the last one).
+                if idx < magento_total - 1:
+                    delay = random.uniform(8, 15)
+                    self.logger.info(
+                        "[Magento] Waiting %.1fs before next product...", delay
+                    )
+                    time.sleep(delay)
+                    # Extra cool-down every 20 products to avoid Sucuri IDS.
+                    if (idx + 1) % 20 == 0:
+                        pause = random.uniform(30, 40)
+                        self.logger.info(
+                            "[Magento] Cool-down after %s products — pausing %.1fs",
+                            idx + 1,
+                            pause,
                         )
-                        self._captcha_blocked_hosts.add(domain_from_url(url))
-                        self.logger.error(
-                            "CAPTCHA timeout — site blocked, next URL: %s", url
-                        )
-                        self.checkpoint.mark_failed(url, reason)
-                        self._failed_reasons.append((url, reason))
-                        failed_count += 1
-                    except Exception as exc:  # noqa: BLE001
-                        self.logger.error("FAIL %s: %s", url, exc)
-                        self.checkpoint.mark_failed(url, str(exc))
-                        self._failed_reasons.append((url, str(exc)))
-                        failed_count += 1
+                        time.sleep(pause)
 
         for url in pending_other:
             try:
@@ -674,60 +683,28 @@ class UniversalCrawler:
             self._failed_reasons.append((url, str(exc)))
             return False
 
-    def _extract_magento_batch(
-        self, urls: list[str]
-    ) -> list[tuple[str, dict[str, Any] | None, str]]:
-        """
-        Fetch a batch of Magento PDPs in parallel (one shared browser), then
-        parse/extract concurrently via ThreadPoolExecutor.
-        """
-        if not urls:
-            return []
-        pool = shared_magento_pool(
-            workers=self._magento_workers, logger=self.logger
+    def _extract_magento_one(
+        self, url: str
+    ) -> tuple[str, dict[str, Any] | None, str]:
+        """Fetch one Magento PDP on the shared single tab, then extract."""
+        pool = shared_magento_pool(logger=self.logger)
+        html = pool.fetch_one(url, timeout_ms=45000)
+        product, reason = self.extract_one(
+            url,
+            queue_on_failure=True,
+            html=html,
+            platform="Magento",
         )
-        html_map = pool.fetch_many(urls, timeout_ms=45000)
-        results: list[tuple[str, dict[str, Any] | None, str]] = []
+        if product:
+            product = normalize_product(product, base_url=url)
+            meta = self._url_meta.get(
+                canonicalize_product_url(url)
+            ) or self._url_meta.get(url) or {}
+            product = apply_seed_metadata(product, meta)
+            from sentivo_extractor.core.confidence import apply_confidence
 
-        def _parse(url: str) -> tuple[str, dict[str, Any] | None, str]:
-            html = html_map.get(url) or ""
-            product, reason = self.extract_one(
-                url,
-                queue_on_failure=True,
-                html=html,
-                platform="Magento",
-            )
-            if product:
-                product = normalize_product(product, base_url=url)
-                meta = self._url_meta.get(
-                    canonicalize_product_url(url)
-                ) or self._url_meta.get(url) or {}
-                product = apply_seed_metadata(product, meta)
-                from sentivo_extractor.core.confidence import apply_confidence
-
-                product = apply_confidence(product)
-            return url, product, reason
-
-        # Parse in parallel — HTML already fetched; no Playwright in workers.
-        workers = min(self._magento_workers, len(urls))
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = {executor.submit(_parse, u): u for u in urls}
-            for fut in as_completed(futures):
-                url = futures[fut]
-                try:
-                    results.append(fut.result())
-                except CaptchaTimeoutError as exc:
-                    reason = (
-                        getattr(exc, "reason", None)
-                        or "captcha_timeout_site_blocked"
-                    )
-                    results.append((url, None, reason))
-                except Exception as exc:  # noqa: BLE001
-                    results.append((url, None, str(exc)))
-        # Preserve batch order for deterministic logging.
-        order = {u: i for i, u in enumerate(urls)}
-        results.sort(key=lambda row: order.get(row[0], 0))
-        return results
+            product = apply_confidence(product)
+        return url, product, reason
 
     def extract_one(
         self,
