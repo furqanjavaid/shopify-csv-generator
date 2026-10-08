@@ -25,6 +25,85 @@ from sentivo_extractor.core.utils import BROWSER_HEADERS
 
 GetTextFn = Callable[[str], str]
 
+
+class _PlaywrightSession:
+    """
+    Reusable headed Chrome session for Magento nav crawl.
+
+    Cloudflare blocks requests/httpx (502) and headless Chromium (challenge).
+    Headed system Chrome + networkidle + settle wait passes CF. One browser is
+    kept open for the whole discover() run so cookies persist across pages.
+    """
+
+    def __init__(self, logger: logging.Logger) -> None:
+        self.logger = logger
+        self._pw = None
+        self._browser = None
+        self._context = None
+        self._page = None
+
+    def __enter__(self) -> "_PlaywrightSession":
+        from playwright.sync_api import sync_playwright
+
+        from sentivo_extractor.core.platform_detector import (
+            _launch_chromium_for_cloudflare,
+        )
+
+        self._pw = sync_playwright().start()
+        self._browser = _launch_chromium_for_cloudflare(self._pw)
+        extra = {
+            k: v
+            for k, v in BROWSER_HEADERS.items()
+            if k.lower() != "user-agent"
+        }
+        self._context = self._browser.new_context(
+            extra_http_headers=extra,
+            viewport={"width": 1440, "height": 900},
+            locale="en-GB",
+        )
+        self._page = self._context.new_page()
+        self.logger.info(
+            "[Magento] Playwright session started (headed Chrome, Cloudflare bypass)"
+        )
+        return self
+
+    def get_text(self, url: str) -> str:
+        assert self._page is not None
+        self._page.goto(url, wait_until="domcontentloaded", timeout=45000)
+        try:
+            self._page.wait_for_load_state("networkidle", timeout=20000)
+        except Exception:
+            pass
+        self._page.wait_for_timeout(2500)
+        text = self._page.content() or ""
+        low = text.lower()
+        if (
+            "just a moment" in low
+            or "cf-browser-verification" in low
+            or "attention required" in low
+        ):
+            self._page.wait_for_timeout(3000)
+            try:
+                self._page.wait_for_load_state("networkidle", timeout=15000)
+            except Exception:
+                pass
+            text = self._page.content() or ""
+        return text
+
+    def __exit__(self, *exc: object) -> None:
+        for obj in (self._page, self._context, self._browser):
+            try:
+                if obj is not None:
+                    obj.close()
+            except Exception:
+                pass
+        try:
+            if self._pw is not None:
+                self._pw.stop()
+        except Exception:
+            pass
+        self._page = self._context = self._browser = self._pw = None
+
 _SKIP_NAV_FRAGMENTS = (
     "/cart",
     "/checkout",
@@ -103,8 +182,39 @@ class MagentoCategoryCrawler:
         origin = self._origin(seed)
         domain = urlparse(origin).netloc.lower().removeprefix("www.")
         self.logger.info("[Magento] Starting nav-based category crawl for %s", domain)
+
+        # Prefer Playwright (CF bypass). Fall back to injected get_text only if PW fails to start.
+        fetch: GetTextFn = self.get_text
+        pw_session: _PlaywrightSession | None = None
         try:
-            home_html = self.get_text(seed)
+            pw_session = _PlaywrightSession(self.logger)
+            pw_session.__enter__()
+            fetch = pw_session.get_text
+            notes.append("magento_playwright_fetch")
+        except Exception as exc:  # noqa: BLE001
+            notes.append(f"playwright_unavailable:{exc}")
+            self.logger.warning(
+                "[Magento] Playwright unavailable (%s) — falling back to HTTP get_text",
+                exc,
+            )
+            pw_session = None
+
+        try:
+            return self._discover_with_fetch(seed, origin, domain, notes, fetch)
+        finally:
+            if pw_session is not None:
+                pw_session.__exit__(None, None, None)
+
+    def _discover_with_fetch(
+        self,
+        seed: str,
+        origin: str,
+        domain: str,
+        notes: list[str],
+        fetch: GetTextFn,
+    ) -> dict[str, Any]:
+        try:
+            home_html = fetch(seed)
         except Exception as exc:  # noqa: BLE001
             notes.append(f"seed_fetch_failed:{exc}")
             self.logger.error("[Magento] Homepage fetch failed: %s", exc)
@@ -115,9 +225,18 @@ class MagentoCategoryCrawler:
                 "platform": "Magento",
             }
 
+        if not (home_html or "").strip():
+            notes.append("seed_html_empty")
+            self.logger.error("[Magento] Homepage HTML empty for %s", domain)
+            return {
+                "product_urls": [],
+                "category_urls": [],
+                "notes": notes,
+                "platform": "Magento",
+            }
+
         categories = self.extract_nav_categories(home_html, seed)
         if not categories:
-            # Seed itself may already be a category listing.
             categories = [canonicalize_product_url(seed) or seed]
             notes.append("nav_empty_using_seed_as_category")
         else:
@@ -128,7 +247,7 @@ class MagentoCategoryCrawler:
         for cat in categories[: self.max_categories]:
             if len(product_urls) >= self.max_products:
                 break
-            found = self.crawl_category(cat)
+            found = self.crawl_category(cat, fetch=fetch)
             notes.append(f"category:{cat}:{len(found)}")
             product_urls.extend(found)
             self.logger.info(
@@ -137,7 +256,6 @@ class MagentoCategoryCrawler:
                 cat,
             )
 
-        # Also harvest products linked directly from the homepage.
         home_products = self.extract_product_urls(home_html, seed)
         if home_products:
             notes.append(f"homepage_products:{len(home_products)}")
@@ -196,14 +314,17 @@ class MagentoCategoryCrawler:
                 break
         return found
 
-    def crawl_category(self, category_url: str) -> list[str]:
+    def crawl_category(
+        self, category_url: str, *, fetch: GetTextFn | None = None
+    ) -> list[str]:
         """Paginate Magento category with ?p=N until a page yields no products."""
+        get_html = fetch or self.get_text
         collected: list[str] = []
         seen: set[str] = set()
         for page_num in range(1, self.max_pages_per_category + 1):
             page_url = self._with_page(category_url, page_num)
             try:
-                html = self.get_text(page_url)
+                html = get_html(page_url)
             except Exception as exc:  # noqa: BLE001
                 self.logger.warning("Magento category page failed %s: %s", page_url, exc)
                 break

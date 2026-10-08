@@ -203,39 +203,90 @@ def _fetch_homepage_html(
         return ""
 
 
-def _fetch_homepage_playwright(url: str) -> str:
-    """Optional Playwright fallback when requests returns empty/blocked HTML."""
+def _launch_chromium_for_cloudflare(p: Any) -> Any:
+    """
+    Cloudflare blocks headless Chromium and bare requests (502 / challenge).
+    Prefer headed system Chrome; fall back to headed bundled Chromium.
+    Window is placed off-screen so the flash is minimal during detection.
+    """
+    args = [
+        "--disable-blink-features=AutomationControlled",
+        "--window-position=-2400,-2400",
+    ]
+    try:
+        return p.chromium.launch(channel="chrome", headless=False, args=args)
+    except Exception:
+        return p.chromium.launch(headless=False, args=args)
+
+
+def fetch_html_playwright(
+    url: str,
+    *,
+    timeout_ms: int = 45000,
+    settle_ms: int = 2500,
+) -> str:
+    """
+    Fetch HTML via Playwright (headed Chrome fingerprint).
+
+    Cloudflare returns 502 to requests/httpx and blocks headless Chromium.
+    page.goto + networkidle + settle wait lets the JS challenge complete.
+    """
     try:
         from playwright.sync_api import sync_playwright
     except Exception:
         return ""
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = _launch_chromium_for_cloudflare(p)
             try:
+                # Do NOT spoof an old User-Agent — CF fingerprints that. Keep
+                # Magento Accept-Language / Referer style headers only.
+                extra = {
+                    k: v
+                    for k, v in BROWSER_HEADERS.items()
+                    if k.lower() not in ("user-agent",)
+                }
                 ctx = browser.new_context(
-                    user_agent=BROWSER_USER_AGENT,
-                    extra_http_headers={
-                        k: v
-                        for k, v in BROWSER_HEADERS.items()
-                        if k.lower() != "user-agent"
-                    },
+                    extra_http_headers=extra,
                     viewport={"width": 1440, "height": 900},
+                    locale="en-GB",
                 )
                 page = ctx.new_page()
-                resp = page.goto(url, wait_until="domcontentloaded", timeout=25000)
-                page.wait_for_timeout(1200)
-                if resp is not None and resp.status >= 400:
-                    return ""
+                page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                try:
+                    page.wait_for_load_state(
+                        "networkidle", timeout=min(20000, timeout_ms)
+                    )
+                except Exception:
+                    # Magento/Hyva often keeps sockets open — continue after settle.
+                    pass
+                page.wait_for_timeout(max(2000, int(settle_ms)))
                 text = (page.content() or "")[:300_000]
+                if _is_error_or_challenge_html(text) or "just a moment" in text.lower():
+                    page.wait_for_timeout(3000)
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=15000)
+                    except Exception:
+                        pass
+                    text = (page.content() or "")[:300_000]
                 if _is_error_or_challenge_html(text):
+                    logger.info(
+                        "Playwright fetched error/challenge HTML for %s (len=%s)",
+                        url,
+                        len(text),
+                    )
                     return ""
                 return text
             finally:
                 browser.close()
     except Exception as exc:
-        logger.info("Playwright platform probe failed for %s: %s", url, exc)
+        logger.info("Playwright fetch failed for %s: %s", url, exc)
         return ""
+
+
+def _fetch_homepage_playwright(url: str) -> str:
+    """Back-compat alias used by Magento live re-detection."""
+    return fetch_html_playwright(url)
 
 
 def detect_platform(
@@ -249,8 +300,8 @@ def detect_platform(
     Return {"platform": str, "signals": list[str], "html": optional body used}.
 
     When initial detection is Custom/Unknown and live_fallback is True, re-fetch the
-    homepage with browser headers (and Playwright if needed) and re-check Magento
-    BEFORE callers run discovery.
+    homepage with Playwright (not requests) so Cloudflare bot protection does not
+    block Magento signal detection BEFORE discovery runs.
     """
     url = (url or "").strip()
     signals: list[str] = []
@@ -288,46 +339,40 @@ def detect_platform(
         signals.append(spa.lower())
         return {"platform": spa, "signals": signals, "html": body}
 
-    # Live fallback: Custom so far — re-fetch with browser headers and re-check Magento.
+    # Live Magento re-detection: Playwright ONLY (requests/httpx get CF 502).
     if live_fallback:
-        live_body = _fetch_homepage_html(home, sess, browser_headers=True)
-        if not live_body:
-            live_body = _fetch_homepage_html(url, sess, browser_headers=True)
-        if live_body:
-            signals.append("live_browser_fetch")
-            if detect_magento(live_body, url=url):
-                signals.append("magento_live")
-                logger.info("Detected platform: Magento (live browser-header fetch)")
-                return {"platform": "Magento", "signals": signals, "html": live_body}
-            if detect_woocommerce(live_body, base, sess):
-                signals.append("woocommerce_live")
+        logger.info(
+            "Live Magento re-detection via Playwright for %s",
+            home,
+        )
+        pw_body = fetch_html_playwright(home)
+        if not pw_body and url.rstrip("/") != home.rstrip("/"):
+            pw_body = fetch_html_playwright(url)
+        if pw_body:
+            signals.append("live_playwright_fetch")
+            body = pw_body
+            if detect_magento(pw_body, url=url):
+                signals.append("magento_playwright")
+                logger.info("Detected platform: Magento")
+                return {
+                    "platform": "Magento",
+                    "signals": signals,
+                    "html": pw_body,
+                }
+            if detect_woocommerce(pw_body, base, sess):
+                signals.append("woocommerce_playwright")
                 return {
                     "platform": "WooCommerce",
                     "signals": signals,
-                    "html": live_body,
+                    "html": pw_body,
                 }
-            body = live_body or body
-
-        # Still Custom — try Playwright render for JS-heavy Magento/Hyva storefronts.
-        if not detect_magento(body, url=url):
-            pw_body = _fetch_homepage_playwright(home)
-            if pw_body:
-                signals.append("live_playwright_fetch")
-                body = pw_body
-                if detect_magento(pw_body, url=url):
-                    signals.append("magento_playwright")
-                    logger.info("Detected platform: Magento (Playwright live fetch)")
-                    return {
-                        "platform": "Magento",
-                        "signals": signals,
-                        "html": pw_body,
-                    }
 
         if detect_magento(body, url=url):
             signals.append("magento")
+            logger.info("Detected platform: Magento")
             return {"platform": "Magento", "signals": signals, "html": body}
 
-    if '"@type"' in body and "Product" in body:
+    if body and '"@type"' in body and "Product" in body:
         signals.append("json-ld")
         return {"platform": "Custom", "signals": signals, "html": body}
 
