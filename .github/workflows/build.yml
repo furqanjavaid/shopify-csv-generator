@@ -51,9 +51,13 @@ jobs:
         shell: pwsh
 
       - name: Build installer
-        run: |
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "installer/sentivo_setup.iss"
         shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.VERSION }}"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
+            "/DMyAppVersion=$version" `
+            "installer/sentivo_setup.iss"
+          Get-ChildItem installer/output/*.exe | ForEach-Object { $_.FullName }
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -62,6 +66,7 @@ jobs:
           name: Sentivo Tools v${{ steps.version.outputs.VERSION }}
           body_path: CHANGELOG.md
           files: installer/output/SentivoToolsSetup-v${{ steps.version.outputs.VERSION }}.exe
+          fail_on_unmatched_files: true
           make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

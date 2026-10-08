@@ -1,3 +1,9 @@
+## Sentivo Tools v1.3.1
+
+## What's New
+- Fix Update Now button — always clickable (opens download or release page)
+- Fix installer upload — versioned setup .exe now attaches to GitHub Release
+
 ## Sentivo Tools v1.3.0
 
 ## What's New

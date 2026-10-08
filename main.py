@@ -110,7 +110,7 @@ class App(ctk.CTk):
     def show_update_banner(
         self, latest_version: str, download_url: str | None, release_notes: str
     ) -> None:
-        """Show update banner at top of window."""
+        """Show update banner at top of window with a clickable Update Now button."""
         if self._update_banner is not None:
             try:
                 self._update_banner.destroy()
@@ -118,63 +118,87 @@ class App(ctk.CTk):
                 pass
 
         notes = (release_notes or "Bug fixes and improvements").replace("\n", " ")
-        banner = ctk.CTkFrame(self, fg_color="#1a3a1a", height=44, corner_radius=0)
+        banner = ctk.CTkFrame(self, fg_color="#1a3a1a", height=48, corner_radius=0)
+        # Pack above content so the banner (and its buttons) stay clickable.
         banner.pack(fill="x", side="top", before=self.container)
         banner.pack_propagate(False)
         self._update_banner = banner
+        try:
+            banner.lift()
+        except Exception:
+            pass
 
-        inner = ctk.CTkFrame(banner, fg_color="transparent")
-        inner.pack(expand=True)
-
+        # Put controls directly on the banner (avoid transparent nested frames
+        # that can swallow clicks on some CustomTkinter / Windows setups).
         ctk.CTkLabel(
-            inner,
+            banner,
             text=f"🔔 Update v{latest_version} available — {notes[:60]}",
             font=T.font(12),
             text_color="#90EE90",
-        ).pack(side="left", padx=(0, 16))
+        ).pack(side="left", padx=(16, 12), pady=10)
 
-        if download_url:
-            update_btn = ctk.CTkButton(
-                inner,
-                text="Update Now",
-                fg_color="#2d5a2d",
-                hover_color="#3a7a3a",
-                text_color="white",
-                height=28,
-                width=100,
-                font=T.font(12, "bold"),
-                corner_radius=4,
-            )
+        has_installer = bool(download_url and str(download_url).lower().endswith(".exe"))
+        btn_text = "Update Now" if has_installer else "Get Update"
 
-            def _do_update() -> None:
-                update_btn.configure(text="Downloading...", state="disabled")
+        def _do_update() -> None:
+            update_btn.configure(state="disabled")
+            if has_installer:
+                update_btn.configure(text="Downloading...")
 
                 def _progress(pct: int) -> None:
                     self.after(
                         0,
-                        lambda p=pct: update_btn.configure(text=f"Downloading {p}%..."),
+                        lambda p=pct: update_btn.configure(
+                            text=f"Downloading {p}%...", state="disabled"
+                        ),
                     )
 
                 threading.Thread(
-                    target=lambda: download_and_install(download_url, _progress),
+                    target=lambda: download_and_install(
+                        str(download_url), _progress
+                    ),
                     daemon=True,
                 ).start()
+            else:
+                # No .exe on the release yet — open the release page in browser.
+                update_btn.configure(text="Opening…")
+                threading.Thread(
+                    target=lambda: download_and_install(
+                        str(download_url or ""), None
+                    ),
+                    daemon=True,
+                ).start()
+                self.after(
+                    1500,
+                    lambda: update_btn.configure(text=btn_text, state="normal"),
+                )
 
-            update_btn.configure(command=_do_update)
-            update_btn.pack(side="left", padx=(0, 8))
+        update_btn = ctk.CTkButton(
+            banner,
+            text=btn_text,
+            command=_do_update,
+            fg_color="#2d5a2d",
+            hover_color="#3a7a3a",
+            text_color="white",
+            height=30,
+            width=110,
+            font=T.font(12, "bold"),
+            corner_radius=6,
+        )
+        update_btn.pack(side="left", padx=(0, 8), pady=9)
 
         ctk.CTkButton(
-            inner,
+            banner,
             text="✕",
-            command=banner.destroy,
+            command=lambda: (banner.destroy(), setattr(self, "_update_banner", None)),
             fg_color="transparent",
             hover_color="#2d5a2d",
             text_color="#90EE90",
-            height=28,
-            width=28,
+            height=30,
+            width=30,
             font=T.font(12),
-            corner_radius=4,
-        ).pack(side="left")
+            corner_radius=6,
+        ).pack(side="right", padx=(0, 12), pady=9)
 
 
 def main() -> None:
