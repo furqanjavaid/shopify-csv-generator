@@ -54,7 +54,7 @@ from sentivo_extractor.core.product_discovery import (
     canonicalize_product_url,
     clear_sitemap_failure_cache,
     discover_domain_products,
-    is_direct_product_page_url,
+    is_homepage_url,
     unique_preserve,
 )
 from sentivo_extractor.core.production_validation import (
@@ -847,7 +847,9 @@ class UniversalCrawler:
     ) -> tuple[str, dict[str, Any] | None, str]:
         """Fetch one Magento PDP on the shared single tab, then extract."""
         pool = shared_magento_pool(logger=self.logger)
-        html = pool.fetch_one(url, timeout_ms=45000)
+        page = pool.fetch_page(url, timeout_ms=45000)
+        html = str(page.get("html") or "")
+        configurator = page.get("configurator_pricing")
         product, reason = self.extract_one(
             url,
             queue_on_failure=True,
@@ -855,6 +857,14 @@ class UniversalCrawler:
             platform="Magento",
         )
         if product:
+            if configurator:
+                from sentivo_extractor.extractors.cut_configurator import (
+                    apply_configurator_pricing,
+                )
+
+                product = apply_configurator_pricing(
+                    product, configurator, logger=self.logger
+                )
             product = normalize_product(product, base_url=url)
             meta = self._url_meta.get(
                 canonicalize_product_url(url)
@@ -1129,15 +1139,19 @@ class UniversalCrawler:
             meta = seed_metadata(seed)
             domain = domain_from_url(url)
 
-            # Typed PDP rows always extract directly (still detect Magento for routing).
-            if kind in ("product", "pdp"):
+            # CSV / seed URLs: NEVER crawl unless the URL is the site homepage.
+            # type=product|pdp, category pages, and PDPs all go straight to extraction.
+            if kind in ("product", "pdp") or not is_homepage_url(url):
                 try:
                     self._detect_seed_platform(url, domain)
                 except Exception as exc:  # noqa: BLE001
                     self.logger.warning(
-                        "Platform detect failed for product seed %s: %s", url, exc
+                        "Platform detect failed for seed %s: %s", url, exc
                     )
                 cu = canonicalize_product_url(url)
+                self.logger.info(
+                    "Direct extract (non-homepage seed) — skip crawl: %s", cu
+                )
                 urls.append(cu)
                 self._url_meta[cu] = meta
                 per_domain_count[domain] += 1
@@ -1158,20 +1172,8 @@ class UniversalCrawler:
                 card_sel = sels["product_card"][0]
 
             try:
-                # Platform detection BEFORE discovery (live Magento fallback included).
+                # Homepage only → platform detect + category/nav discovery.
                 plat = self._detect_seed_platform(url, domain)
-
-                # Magento product PDPs (slug heuristics): skip homepage/category/sitemap.
-                if plat == "Magento" and is_direct_product_page_url(url):
-                    cu = canonicalize_product_url(url)
-                    self.logger.info(
-                        "[Magento] Direct product URL — skip category crawl/sitemap: %s",
-                        cu,
-                    )
-                    urls.append(cu)
-                    self._url_meta[cu] = meta
-                    per_domain_count[domain] += 1
-                    continue
 
                 # Magento: skip sitemap AND robots.txt gates — nav crawl only.
                 prev_robots = getattr(self.http, "respect_robots", True)

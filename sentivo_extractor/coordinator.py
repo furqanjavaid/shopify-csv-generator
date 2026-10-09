@@ -68,6 +68,7 @@ class DecisionCoordinator:
         self.captcha = CaptchaDetector()
         self.retry = RetryHandler(logger=self.logger)
         self.fallback = FallbackManager(scorer=self.scorer, logger=self.logger)
+        self._last_configurator_pricing: dict[str, Any] | None = None
 
     @classmethod
     def shared_playwright(cls) -> PlaywrightLiveSession | None:
@@ -358,6 +359,18 @@ class DecisionCoordinator:
             product, url, engine_html, context
         )
 
+        # Sheet Plastics Vue CutConfiguratorWidget → structured pricing fields.
+        pricing = getattr(self, "_last_configurator_pricing", None)
+        if pricing:
+            from sentivo_extractor.extractors.cut_configurator import (
+                apply_configurator_pricing,
+            )
+
+            product = apply_configurator_pricing(
+                product, pricing, logger=self.logger
+            )
+            self._last_configurator_pricing = None
+
         missing_for_report = pipeline._missing_required(values)  # noqa: SLF001
         if price_optional:
             missing_for_report = [m for m in missing_for_report if m != "price"]
@@ -471,7 +484,10 @@ class DecisionCoordinator:
         )
         try:
             pool = shared_magento_pool(logger=self.logger)
-            html = pool.fetch_one(url, timeout_ms=45000)
+            page = pool.fetch_page(url, timeout_ms=45000)
+            html = str(page.get("html") or "")
+            # Stash Vue configurator pricing for post-extract merge.
+            self._last_configurator_pricing = page.get("configurator_pricing")
             if not (html or "").strip():
                 # Fallback to CAPTCHA/live session if pool got an empty/blocked page.
                 session = self._live_session()

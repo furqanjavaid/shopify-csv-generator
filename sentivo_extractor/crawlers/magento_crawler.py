@@ -19,7 +19,7 @@ from bs4 import BeautifulSoup
 
 from sentivo_extractor.core.product_discovery import (
     canonicalize_product_url,
-    is_direct_product_page_url,
+    is_homepage_url,
     unique_preserve,
 )
 from sentivo_extractor.core.utils import BROWSER_HEADERS
@@ -183,13 +183,13 @@ class MagentoCategoryCrawler:
         origin = self._origin(seed)
         domain = urlparse(origin).netloc.lower().removeprefix("www.")
 
-        # Product PDP seeds must never trigger homepage/nav/category crawl.
-        if is_direct_product_page_url(seed):
+        # Non-homepage seeds must never trigger nav/category crawl.
+        if not is_homepage_url(seed):
             cu = canonicalize_product_url(seed) or seed
             notes.append("magento_direct_product_url")
             notes.append("magento_skip_category_crawl")
             self.logger.info(
-                "[Magento] Direct product URL — skip category crawl: %s", cu
+                "[Magento] Non-homepage seed — skip category crawl: %s", cu
             )
             return {
                 "product_urls": [cu],

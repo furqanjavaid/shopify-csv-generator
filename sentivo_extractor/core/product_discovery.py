@@ -132,6 +132,14 @@ def path_segment_count(url: str) -> int:
     return len([seg for seg in path.split("/") if seg])
 
 
+def is_homepage_url(url: str) -> bool:
+    """True only for site root (/, empty path) — the only seed that triggers crawl."""
+    if not (url or "").strip():
+        return False
+    path = (urlparse(url.strip()).path or "").strip("/")
+    return path == ""
+
+
 def is_direct_product_page_url(url: str) -> bool:
     """
     Magento SEO PDP heuristic (sheetplastics-style storefronts).
@@ -792,19 +800,19 @@ def discover_domain_products(
     log.info("Detected platform: %s", resolved_early or "Custom")
 
     # Magento: skip ALL sitemap/robots probes (stale cache must not block nav crawl).
-    # Direct PDP seeds (product-slug heuristics) skip category crawl entirely.
+    # Non-homepage seeds always direct-extract (CSV URLs never crawl).
     if resolved_early == "Magento":
         from sentivo_extractor.crawlers.magento_crawler import MagentoCategoryCrawler
 
         notes.append("magento_skip_sitemaps")
         notes.append("magento_skip_robots_probes")
 
-        if is_direct_product_page_url(seed_url):
+        if not is_homepage_url(seed_url):
             cu = canonicalize_product_url(seed_url) or seed_url.strip()
             notes.append("magento_direct_product_url")
             notes.append("magento_skip_category_crawl")
             log.info(
-                "[Magento] Direct product URL — skip category crawl/sitemap: %s",
+                "[Magento] CSV/non-homepage URL — skip category crawl/sitemap: %s",
                 cu,
             )
             return {

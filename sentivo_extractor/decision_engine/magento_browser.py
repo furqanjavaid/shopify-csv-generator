@@ -124,39 +124,55 @@ class MagentoBrowserPool:
         self._page = await self._context.new_page()
 
     def fetch_one(self, url: str, *, timeout_ms: int = 45000) -> str:
+        """Back-compat: HTML only."""
+        return str(self.fetch_page(url, timeout_ms=timeout_ms).get("html") or "")
+
+    def fetch_page(
+        self, url: str, *, timeout_ms: int = 45000
+    ) -> dict[str, Any]:
+        """
+        Fetch PDP HTML + optional CutConfiguratorWidget Vue pricing state.
+        Returns {html, configurator_pricing}.
+        """
         self.start()
         assert self._loop is not None
         fut = asyncio.run_coroutine_threadsafe(
-            self._fetch_one(url, timeout_ms=timeout_ms), self._loop
+            self._fetch_page(url, timeout_ms=timeout_ms), self._loop
         )
         try:
-            html = fut.result(timeout=max(90.0, timeout_ms / 1000.0 + 30))
+            result = fut.result(timeout=max(90.0, timeout_ms / 1000.0 + 45))
         except Exception as exc:  # noqa: BLE001
             self.logger.warning("[Magento] Sequential fetch failed: %s", exc)
-            return ""
+            return {"html": "", "configurator_pricing": None}
+
+        html = str((result or {}).get("html") or "")
+        pricing = (result or {}).get("configurator_pricing")
 
         if is_sucuri_block(html):
             self.logger.warning(
                 "[Magento] Sucuri block detected — pausing 5 minutes"
             )
             time.sleep(300)
-            # Retry once after cooldown on the same single tab.
             fut2 = asyncio.run_coroutine_threadsafe(
-                self._fetch_one(url, timeout_ms=timeout_ms), self._loop
+                self._fetch_page(url, timeout_ms=timeout_ms), self._loop
             )
             try:
-                html = fut2.result(timeout=max(90.0, timeout_ms / 1000.0 + 30))
+                result = fut2.result(
+                    timeout=max(90.0, timeout_ms / 1000.0 + 45)
+                )
             except Exception as exc:  # noqa: BLE001
                 self.logger.warning(
                     "[Magento] Fetch after Sucuri pause failed: %s", exc
                 )
-                return ""
+                return {"html": "", "configurator_pricing": None}
+            html = str((result or {}).get("html") or "")
+            pricing = (result or {}).get("configurator_pricing")
             if is_sucuri_block(html):
                 self.logger.warning(
                     "[Magento] Sucuri still blocking after pause — continuing"
                 )
-                return ""
-        return html or ""
+                return {"html": "", "configurator_pricing": None}
+        return {"html": html or "", "configurator_pricing": pricing}
 
     def fetch_many(
         self, urls: list[str], *, timeout_ms: int = 45000
@@ -167,7 +183,7 @@ class MagentoBrowserPool:
             out[url] = self.fetch_one(url, timeout_ms=timeout_ms)
         return out
 
-    async def _fetch_one(self, url: str, *, timeout_ms: int) -> str:
+    async def _fetch_page(self, url: str, *, timeout_ms: int) -> dict[str, Any]:
         assert self._page is not None
         settle = _SETTLE_WARM_MS if self._warmed else _SETTLE_FIRST_MS
         try:
@@ -181,13 +197,50 @@ class MagentoBrowserPool:
             except Exception:
                 pass
             await self._page.wait_for_timeout(settle)
+            # Give Vue CutConfiguratorWidget time to hydrate store.
+            try:
+                await self._page.wait_for_function(
+                    """() => !!(window.CutConfiguratorWidget
+                        && window.CutConfiguratorWidget.vm
+                        && window.CutConfiguratorWidget.vm.$store
+                        && window.CutConfiguratorWidget.vm.$store.state
+                        && window.CutConfiguratorWidget.vm.$store.state.Configurator)""",
+                    timeout=8000,
+                )
+            except Exception:
+                pass
             html = await self._page.content()
+            pricing = await self._read_cut_configurator_pricing()
             if html:
                 self._warmed = True
-            return html or ""
+            return {"html": html or "", "configurator_pricing": pricing}
         except Exception as exc:  # noqa: BLE001
             self.logger.warning("[Magento] page fetch failed %s: %s", url, exc)
-            return ""
+            return {"html": "", "configurator_pricing": None}
+
+    async def _read_cut_configurator_pricing(self) -> dict[str, Any] | None:
+        """Evaluate Vue store → structured pricePerSqm / size / polish / holes."""
+        assert self._page is not None
+        try:
+            from sentivo_extractor.extractors.cut_configurator import (
+                CUT_CONFIGURATOR_EVAL_JS,
+                parse_cut_configurator_payload,
+            )
+
+            raw = await self._page.evaluate(CUT_CONFIGURATOR_EVAL_JS)
+            pricing = parse_cut_configurator_payload(raw)
+            if pricing:
+                self.logger.info(
+                    "[Magento] CutConfigurator state: pricePerSqm=%s sku=%s",
+                    pricing.get("pricePerSqm"),
+                    pricing.get("sku") or "-",
+                )
+            return pricing
+        except Exception as exc:  # noqa: BLE001
+            self.logger.debug(
+                "[Magento] CutConfigurator evaluate skipped: %s", exc
+            )
+            return None
 
     def close(self) -> None:
         with self._lock:
