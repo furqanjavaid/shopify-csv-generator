@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import re
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +53,26 @@ def _option_names(product: dict[str, Any]) -> list[str]:
     return names
 
 
+def _cts_price_per_sqm(product: dict[str, Any]) -> str:
+    """Prefer cached configurator £/m² over broken £0.00 per cm² variant price."""
+    cp = product.get("configurator_pricing")
+    if isinstance(cp, dict) and cp.get("pricePerSqm") is not None:
+        amount = normalize_price(cp.get("pricePerSqm"))
+        if amount and not is_blank_price(amount):
+            return amount
+    pps = product.get("price_per_sqm")
+    if pps is not None and str(pps).strip():
+        amount = normalize_price(pps)
+        if amount and not is_blank_price(amount):
+            return amount
+    specs = product.get("specifications")
+    if isinstance(specs, dict) and specs.get("pricePerSqm") is not None:
+        amount = normalize_price(specs.get("pricePerSqm"))
+        if amount and not is_blank_price(amount):
+            return amount
+    return ""
+
+
 def product_to_rows(product: dict[str, Any]) -> list[dict[str, str]]:
     """Expand one product into Shopify CSV rows (variants + image rows)."""
     handle = product.get("handle") or ""
@@ -63,6 +84,8 @@ def product_to_rows(product: dict[str, Any]) -> list[dict[str, str]]:
         tags_str = ", ".join(str(t) for t in tags)
     else:
         tags_str = str(tags)
+
+    cts_price = _cts_price_per_sqm(product)
 
     rows: list[dict[str, str]] = []
     status = (product.get("status") or "active").capitalize()
@@ -99,11 +122,26 @@ def product_to_rows(product: dict[str, Any]) -> list[dict[str, str]]:
         row["Variant Inventory Qty"] = str(variant.get("inventory_qty") or "")
         row["Variant Inventory Policy"] = "deny"
         row["Variant Fulfillment Service"] = "manual"
-        row["Variant Price"] = (
-            ""
-            if is_blank_price(variant.get("price"))
-            else normalize_price(variant.get("price"))
-        )
+        # Prefer per-variant price (merged Size rows keep own £/m²).
+        # Fall back to product-level pricePerSqm when variant is blank/£0.00 cm².
+        v_price = variant.get("price") if isinstance(variant, dict) else None
+        v_text = str(v_price or "").strip()
+        v_is_cm2_quirk = bool(v_text and re.search(r"per\s*cm", v_text, re.I))
+        if (
+            v_price is not None
+            and v_text
+            and not v_is_cm2_quirk
+            and not is_blank_price(v_price)
+        ):
+            row["Variant Price"] = normalize_price(v_price)
+        elif cts_price:
+            row["Variant Price"] = cts_price
+        else:
+            row["Variant Price"] = (
+                ""
+                if is_blank_price(v_price)
+                else normalize_price(v_price)
+            )
         row["Variant Compare At Price"] = (
             ""
             if is_blank_price(variant.get("compare_at_price"))
