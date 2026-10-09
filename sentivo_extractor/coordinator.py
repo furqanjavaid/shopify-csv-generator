@@ -105,11 +105,17 @@ class DecisionCoordinator:
         *,
         html: str | None = None,
         platform: str | None = None,
+        configurator_pricing: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Extract one URL with retries. CaptchaTimeoutError is not retried."""
 
         def _once() -> dict[str, Any]:
-            return self._extract_once(url, html=html, platform=platform)
+            return self._extract_once(
+                url,
+                html=html,
+                platform=platform,
+                configurator_pricing=configurator_pricing,
+            )
 
         def _ok(outcome: dict[str, Any]) -> bool:
             return bool(outcome.get("success"))
@@ -148,6 +154,7 @@ class DecisionCoordinator:
         *,
         html: str | None = None,
         platform: str | None = None,
+        configurator_pricing: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         pipeline = PDPExtractionPipeline(
             http=self.http,
@@ -177,6 +184,9 @@ class DecisionCoordinator:
         platform = resolved_platform
         price_optional = platform == "Magento"
         strategies = self.selector.strategies_for(platform, url=url)
+        # Pre-fetched Vue CutConfigurator pricing (sheetplastics) — apply before score.
+        if configurator_pricing and isinstance(configurator_pricing, dict):
+            self._last_configurator_pricing = configurator_pricing
         self.logger.info(
             "DecisionEngine platform=%s strategies=%s url=%s",
             platform,
@@ -262,6 +272,9 @@ class DecisionCoordinator:
             winning_strategy = chain.get("strategy")
             if winning_strategy:
                 self.selector.remember_success(url, winning_strategy)
+
+        # Merge Vue CutConfigurator SKU/price into values so confidence can pass.
+        self._seed_values_from_configurator(values, sources, confidences)
 
         # If still weak and Playwright not already tried, force one Playwright pass
         # when HTTP fetch was blocked or confidence failed.
@@ -473,6 +486,35 @@ class DecisionCoordinator:
             "debug_artifacts": debug,
             "decision_engine": de_meta,
         }
+
+    def _seed_values_from_configurator(
+        self,
+        values: dict[str, Any],
+        sources: dict[str, str],
+        confidences: dict[str, float],
+    ) -> None:
+        """Push Vue configurator SKU/price into scored values (sheetplastics)."""
+        pricing = getattr(self, "_last_configurator_pricing", None)
+        if not isinstance(pricing, dict):
+            return
+        sku = str(pricing.get("sku") or "").strip()
+        if sku and not str(values.get("sku") or "").strip():
+            values["sku"] = sku
+            sources["sku"] = "cut_configurator"
+            confidences["sku"] = 0.9
+        price_sqm = pricing.get("pricePerSqm")
+        if price_sqm is not None and not str(values.get("price") or "").strip():
+            try:
+                from sentivo_extractor.core.utils import format_cut_to_size_price
+
+                per_cm2 = float(price_sqm) / 10000.0
+                priced = format_cut_to_size_price(per_cm2)
+            except (TypeError, ValueError):
+                priced = ""
+            if priced:
+                values["price"] = priced
+                sources["price"] = "cut_configurator"
+                confidences["price"] = 0.9
 
     def _magento_playwright_fetch(self, url: str) -> tuple[str, bool]:
         """

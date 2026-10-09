@@ -13,17 +13,25 @@ from bs4 import BeautifulSoup
 MIN_DESCRIPTION_LEN = 20
 
 CSS_SELECTORS: tuple[str, ...] = (
+    ".product-info-main .product.attribute.description .value",
+    ".product.attribute.description .value",
+    '[data-content-type="text"]',
+    '[data-content-type="description"]',
     ".product-description",
     "#description",
     ".description",
-    '[data-content-type="description"]',
-    ".product.attribute.description .value",
     ".product-info-main .overview",
     "#tab-description",
     ".woocommerce-product-details__short-description",
     ".product__description",
     "article.product-single__description",
     '[class*="description"]',
+)
+
+_REVIEW_TEXT_RE = re.compile(
+    r"(?i)\b(review by|customer review|was this review|stars? out of|"
+    r"i bought this|used this for|great service|highly recommend|"
+    r"delivery was|arrived (quickly|fast)|would (order|buy) again)\b"
 )
 
 _DESC_KEYS = (
@@ -57,7 +65,13 @@ def plain_text_length(html_or_text: str) -> int:
 def is_usable_description(html_or_text: str | None) -> bool:
     if not html_or_text:
         return False
-    return plain_text_length(str(html_or_text)) >= MIN_DESCRIPTION_LEN
+    if plain_text_length(str(html_or_text)) < MIN_DESCRIPTION_LEN:
+        return False
+    # Reject customer-review snippets mistaken for product copy.
+    plain = BeautifulSoup(str(html_or_text), "lxml").get_text(" ", strip=True)
+    if _REVIEW_TEXT_RE.search(plain or ""):
+        return False
+    return True
 
 
 def extract_description(
@@ -301,20 +315,31 @@ def _css_on_html(html: str) -> str:
         return ""
     for sel in CSS_SELECTORS:
         try:
-            el = soup.select_one(sel)
+            els = soup.select(sel)
         except Exception:
             continue
-        if not el:
-            continue
-        try:
-            if hasattr(el, "decode_contents"):
-                content = str(el.decode_contents()).strip()
-            else:
-                content = str(el).strip()
-        except Exception:
-            content = el.get_text(" ", strip=True)
-        if is_usable_description(content):
-            return content
+        for el in els:
+            if not el:
+                continue
+            # Skip review / rating containers.
+            cls_blob = " ".join(el.get("class") or []).lower()
+            parent = el.parent
+            for _ in range(3):
+                if parent is None:
+                    break
+                cls_blob += " " + " ".join(parent.get("class") or []).lower()
+                parent = getattr(parent, "parent", None)
+            if any(tok in cls_blob for tok in ("review", "rating", "testimonial")):
+                continue
+            try:
+                if hasattr(el, "decode_contents"):
+                    content = str(el.decode_contents()).strip()
+                else:
+                    content = str(el).strip()
+            except Exception:
+                content = el.get_text(" ", strip=True)
+            if is_usable_description(content):
+                return content
     return ""
 
 

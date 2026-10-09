@@ -850,21 +850,18 @@ class UniversalCrawler:
         page = pool.fetch_page(url, timeout_ms=45000)
         html = str(page.get("html") or "")
         configurator = page.get("configurator_pricing")
+        # Pass Vue pricing into Decision Engine BEFORE confidence gate
+        # (otherwise missing SKU/price rejects 4/5 sheetplastics PDPs).
         product, reason = self.extract_one(
             url,
             queue_on_failure=True,
             html=html,
             platform="Magento",
+            configurator_pricing=configurator
+            if isinstance(configurator, dict)
+            else None,
         )
         if product:
-            if configurator:
-                from sentivo_extractor.extractors.cut_configurator import (
-                    apply_configurator_pricing,
-                )
-
-                product = apply_configurator_pricing(
-                    product, configurator, logger=self.logger
-                )
             product = normalize_product(product, base_url=url)
             meta = self._url_meta.get(
                 canonicalize_product_url(url)
@@ -882,6 +879,7 @@ class UniversalCrawler:
         queue_on_failure: bool = True,
         html: str | None = None,
         platform: str | None = None,
+        configurator_pricing: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any] | None, str]:
         timeout_sec = float(self.options.get("product_timeout_sec") or 60)
         timeout_sec += float(SOLVE_TIMEOUT_SEC) + 20
@@ -893,6 +891,7 @@ class UniversalCrawler:
                 queue_on_failure=queue_on_failure,
                 html=html,
                 platform=platform,
+                configurator_pricing=configurator_pricing,
             )
 
         future = self._extract_pool.submit(
@@ -901,6 +900,7 @@ class UniversalCrawler:
             queue_on_failure=queue_on_failure,
             html=html,
             platform=platform,
+            configurator_pricing=configurator_pricing,
         )
         try:
             return future.result(timeout=timeout_sec)
@@ -941,6 +941,7 @@ class UniversalCrawler:
         queue_on_failure: bool = True,
         html: str | None = None,
         platform: str | None = None,
+        configurator_pricing: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any] | None, str]:
         coordinator = DecisionCoordinator(
             http=self.http,
@@ -950,7 +951,12 @@ class UniversalCrawler:
             logger=self.logger,
         )
         try:
-            outcome = coordinator.extract(url, html=html, platform=platform)
+            outcome = coordinator.extract(
+                url,
+                html=html,
+                platform=platform,
+                configurator_pricing=configurator_pricing,
+            )
         except (CaptchaBlockedError, CaptchaTimeoutError):
             raise
         report = outcome.get("report")

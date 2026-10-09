@@ -59,12 +59,20 @@ _SKU_SELECTORS = (
     "[itemprop='sku']",
 )
 _DESC_SELECTORS = (
+    # Prefer real product copy — never review markup first.
+    ".product-info-main .product.attribute.description .value",
     ".product.attribute.description .value",
     ".product.attribute.overview .value",
     "#description .product.attribute.description .value",
+    '[data-content-type="text"]',
+    ".product-description",
     "#description",
     ".product-info-main .description",
-    "[itemprop='description']",
+)
+_REVIEW_DESC_RE = re.compile(
+    r"(?i)\b(review by|customer review|was this review|stars? out of|"
+    r"i bought this|used this for|great service|highly recommend|"
+    r"delivery was|arrived (quickly|fast)|would (order|buy) again)\b"
 )
 _PRICE_SELECTORS = (
     ".price-wrapper .price",
@@ -198,16 +206,64 @@ class MagentoProductExtractor(BaseExtractor):
     def _description(self, soup: BeautifulSoup) -> tuple[str, str]:
         for sel in _DESC_SELECTORS:
             try:
-                el = soup.select_one(sel)
+                els = soup.select(sel)
             except Exception:
                 continue
-            if el is None:
-                continue
-            html = el.decode_contents().strip() if hasattr(el, "decode_contents") else ""
-            text = el.get_text(" ", strip=True)
-            if html or text:
-                return html or f"<p>{text}</p>", text
+            for el in els:
+                if el is None:
+                    continue
+                # Skip review widgets / review itemprop blocks.
+                if self._looks_like_review_node(el):
+                    continue
+                html = (
+                    el.decode_contents().strip()
+                    if hasattr(el, "decode_contents")
+                    else ""
+                )
+                text = el.get_text(" ", strip=True)
+                if not text or self._looks_like_review_text(text):
+                    continue
+                if html or text:
+                    return html or f"<p>{text}</p>", text
         return "", ""
+
+    @staticmethod
+    def _looks_like_review_text(text: str) -> bool:
+        return bool(_REVIEW_DESC_RE.search(text or ""))
+
+    @staticmethod
+    def _looks_like_review_node(el: Any) -> bool:
+        try:
+            classes = " ".join(el.get("class") or []).lower()
+        except Exception:
+            classes = ""
+        parent_cls = ""
+        try:
+            parent = el.parent
+            for _ in range(4):
+                if parent is None:
+                    break
+                parent_cls += " " + " ".join(parent.get("class") or []).lower()
+                parent_cls += " " + str(parent.get("id") or "").lower()
+                parent = parent.parent
+        except Exception:
+            pass
+        blob = f"{classes} {parent_cls}"
+        if any(tok in blob for tok in ("review", "rating", "testimonial")):
+            return True
+        # Sheetplastics: review snippets misuse itemprop=description.
+        try:
+            if (el.get("itemprop") or "").lower() == "description":
+                if MagentoProductExtractor._looks_like_review_text(
+                    el.get_text(" ", strip=True)
+                ):
+                    return True
+                # Bare itemprop=description under reviews section → skip.
+                if "review" in blob:
+                    return True
+        except Exception:
+            pass
+        return False
 
     def _alpine_final_price(self, soup: BeautifulSoup, html: str) -> str:
         """Scalar Alpine/Hyva finalPrice only (not Magento optionPrices objects)."""

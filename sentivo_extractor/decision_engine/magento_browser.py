@@ -200,15 +200,21 @@ class MagentoBrowserPool:
             # Give Vue CutConfiguratorWidget time to hydrate store.
             try:
                 await self._page.wait_for_function(
-                    """() => !!(window.CutConfiguratorWidget
-                        && window.CutConfiguratorWidget.vm
-                        && window.CutConfiguratorWidget.vm.$store
-                        && window.CutConfiguratorWidget.vm.$store.state
-                        && window.CutConfiguratorWidget.vm.$store.state.Configurator)""",
-                    timeout=8000,
+                    """() => {
+                        const w = window.CutConfiguratorWidget;
+                        return !!(w && w.vm && w.vm.$store
+                          && w.vm.$store.state
+                          && w.vm.$store.state.Configurator
+                          && w.vm.$store.state.Configurator.confData);
+                    }""",
+                    timeout=15000,
                 )
+                # Extra beat so selectedPathWay / thickness price settle.
+                await self._page.wait_for_timeout(1500)
             except Exception:
-                pass
+                self.logger.warning(
+                    "[Magento] CutConfiguratorWidget not ready after wait — probing keys"
+                )
             html = await self._page.content()
             pricing = await self._read_cut_configurator_pricing()
             if html:
@@ -227,6 +233,44 @@ class MagentoBrowserPool:
                 parse_cut_configurator_payload,
             )
 
+            # Probe confData first (helps diagnose undefined widget).
+            probe = await self._page.evaluate(
+                """() => {
+                  try {
+                    const conf = window.CutConfiguratorWidget
+                      && window.CutConfiguratorWidget.vm
+                      && window.CutConfiguratorWidget.vm.$store
+                      && window.CutConfiguratorWidget.vm.$store.state
+                      && window.CutConfiguratorWidget.vm.$store.state.Configurator;
+                    if (!conf) {
+                      const keys = Object.keys(window).filter(
+                        k => /Cut|Config|Widget/i.test(k)
+                      );
+                      return { ok: false, keys };
+                    }
+                    const cd = conf.confData;
+                    return {
+                      ok: !!cd,
+                      confDataKeys: cd ? Object.keys(cd) : [],
+                      entityLen: cd && cd.entities ? cd.entities.length : 0,
+                      hasPath: Array.isArray(conf.selectedPathWay)
+                        && conf.selectedPathWay.length > 0,
+                    };
+                  } catch (e) {
+                    return { ok: false, error: String(e) };
+                  }
+                }"""
+            )
+            self.logger.info("[Magento] CutConfigurator probe: %s", probe)
+
+            if not (isinstance(probe, dict) and probe.get("ok")):
+                keys = (probe or {}).get("keys") if isinstance(probe, dict) else None
+                self.logger.warning(
+                    "[Magento] CutConfigurator confData missing; window keys=%s",
+                    keys,
+                )
+                return None
+
             raw = await self._page.evaluate(CUT_CONFIGURATOR_EVAL_JS)
             pricing = parse_cut_configurator_payload(raw)
             if pricing:
@@ -235,9 +279,14 @@ class MagentoBrowserPool:
                     pricing.get("pricePerSqm"),
                     pricing.get("sku") or "-",
                 )
+            else:
+                self.logger.warning(
+                    "[Magento] CutConfigurator evaluate returned no pricing: %s",
+                    str(raw)[:300] if raw is not None else None,
+                )
             return pricing
         except Exception as exc:  # noqa: BLE001
-            self.logger.debug(
+            self.logger.warning(
                 "[Magento] CutConfigurator evaluate skipped: %s", exc
             )
             return None
