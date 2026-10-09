@@ -1161,7 +1161,7 @@ class UniversalCrawler:
                 # Platform detection BEFORE discovery (live Magento fallback included).
                 plat = self._detect_seed_platform(url, domain)
 
-                # Magento product PDPs (2+ path segments): skip homepage/category/sitemap.
+                # Magento product PDPs (slug heuristics): skip homepage/category/sitemap.
                 if plat == "Magento" and is_direct_product_page_url(url):
                     cu = canonicalize_product_url(url)
                     self.logger.info(

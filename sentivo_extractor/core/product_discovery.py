@@ -127,19 +127,48 @@ def canonicalize_product_url(url: str) -> str:
 
 
 def path_segment_count(url: str) -> int:
-    """Count non-empty path segments (home=0, category=1, Magento PDP=2+)."""
+    """Count non-empty path segments (home=0, category/product slug=1+)."""
     path = urlparse(url or "").path or ""
     return len([seg for seg in path.split("/") if seg])
 
 
 def is_direct_product_page_url(url: str) -> bool:
     """
-    Magento SEO PDP heuristic used by sheetplastics-style storefronts:
-    - Homepage: /
-    - Category: /clear-acrylic  (1 segment)
-    - Product:  /clear-acrylic/3mm-clear-acrylic-sheet-cut-to-size  (2+ segments)
+    Magento SEO PDP heuristic (sheetplastics-style storefronts).
+
+    Product (skip category crawl) when the path matches any of:
+    - contains "-cut-to-size"
+    - contains "-sheet-"
+    - contains "-acrylic-"
+    - last slug has more than 3 hyphens (long product slug)
+    - 2+ path segments (nested /category/product-slug)
+
+    Category/home (crawl): short single slug like /clear-acrylic with no
+    product keywords.
     """
-    return path_segment_count(url) >= 2
+    parsed = urlparse(url or "")
+    path = (parsed.path or "").strip().lower()
+    if not path or path == "/":
+        return False
+    segments = [seg for seg in path.split("/") if seg]
+    if not segments:
+        return False
+
+    # Nested Magento SEO: /clear-acrylic/3mm-…-cut-to-size
+    if len(segments) >= 2:
+        return True
+
+    slug = segments[-1]
+    if "-cut-to-size" in slug or "-cut-to-size" in path:
+        return True
+    if "-sheet-" in slug or "-sheet-" in path:
+        return True
+    if "-acrylic-" in slug or "-acrylic-" in path:
+        return True
+    # Long product slug: more than 3 hyphens
+    if slug.count("-") > 3:
+        return True
+    return False
 
 
 def unique_preserve(urls: Iterable[str]) -> list[str]:
@@ -763,7 +792,7 @@ def discover_domain_products(
     log.info("Detected platform: %s", resolved_early or "Custom")
 
     # Magento: skip ALL sitemap/robots probes (stale cache must not block nav crawl).
-    # Direct PDP seeds (2+ path segments) skip category crawl entirely.
+    # Direct PDP seeds (product-slug heuristics) skip category crawl entirely.
     if resolved_early == "Magento":
         from sentivo_extractor.crawlers.magento_crawler import MagentoCategoryCrawler
 
