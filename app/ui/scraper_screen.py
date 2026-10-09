@@ -194,8 +194,23 @@ class ScraperScreen(ctk.CTkFrame):
         )
         self.browse_btn.grid(row=0, column=1, sticky="e")
 
+        self.var_fresh_start = ctk.BooleanVar(value=False)
+        self.fresh_start_checkbox = ctk.CTkCheckBox(
+            right_col,
+            text="Fresh Start (overwrite previous data)",
+            variable=self.var_fresh_start,
+            font=T.font_tuple(T.LABEL),
+            text_color=T.TEXT_SECONDARY,
+            fg_color=T.ACCENT,
+            hover_color=T.ACCENT_HOVER,
+            border_color=T.BORDER,
+            checkmark_color=T.BTN_ON_ACCENT,
+            corner_radius=T.BORDER_RADIUS,
+        )
+        self.fresh_start_checkbox.grid(row=2, column=0, sticky="w", pady=(10, 0))
+
         self._vendor_host = ctk.CTkFrame(right_col, fg_color="transparent")
-        self._vendor_host.grid(row=2, column=0, sticky="ew", pady=(12, 0))
+        self._vendor_host.grid(row=3, column=0, sticky="ew", pady=(12, 0))
         self._vendor_host.grid_columnconfigure(0, weight=1)
         self.var_custom_vendor = ctk.BooleanVar(value=False)
         self.vendor_checkbox = ctk.CTkCheckBox(
@@ -1542,10 +1557,12 @@ class ScraperScreen(ctk.CTkFrame):
                     str(input_csv),
                     "--output",
                     str(out_dir),
-                    "--overwrite",
-                    "true",
                 ]
             )
+            # Fresh Start ON → wipe checkpoint / previous domain output.
+            # OFF (default) → resume from checkpoint when interrupted.
+            if bool(self.var_fresh_start.get()):
+                cmd.extend(["--overwrite", "true"])
             if kind == "pilot":
                 cmd.extend(
                     [
