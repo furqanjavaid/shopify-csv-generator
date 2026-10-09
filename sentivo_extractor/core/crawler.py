@@ -54,6 +54,7 @@ from sentivo_extractor.core.product_discovery import (
     canonicalize_product_url,
     clear_sitemap_failure_cache,
     discover_domain_products,
+    is_direct_product_page_url,
     unique_preserve,
 )
 from sentivo_extractor.core.production_validation import (
@@ -1098,6 +1099,24 @@ class UniversalCrawler:
         self._retry_queue.append(entry)
         self._failed_reasons.append((url, reason))
 
+    def _detect_seed_platform(self, url: str, domain: str) -> str:
+        """Live platform detect; remember Magento domains for sequential extraction."""
+        if hasattr(self.http, "apply_browser_headers"):
+            # Magento/Hyva storefronts often 403 without browser-like headers.
+            self.http.apply_browser_headers()
+        detected = detect_platform(
+            url,
+            html="",
+            session=getattr(self.http, "session", None),
+            live_fallback=True,
+        )
+        plat = str(detected.get("platform") or "Custom")
+        self.logger.info("Detected platform: %s", plat)
+        if plat == "Magento":
+            self._magento_domains.add(domain)
+            DecisionCoordinator.remember_platform(url, "Magento")
+        return plat
+
     def _discover_all(self, seeds: list[dict[str, str]]) -> list[str]:
         urls: list[str] = []
         per_domain_count: dict[str, int] = defaultdict(int)
@@ -1110,7 +1129,14 @@ class UniversalCrawler:
             meta = seed_metadata(seed)
             domain = domain_from_url(url)
 
+            # Typed PDP rows always extract directly (still detect Magento for routing).
             if kind in ("product", "pdp"):
+                try:
+                    self._detect_seed_platform(url, domain)
+                except Exception as exc:  # noqa: BLE001
+                    self.logger.warning(
+                        "Platform detect failed for product seed %s: %s", url, exc
+                    )
                 cu = canonicalize_product_url(url)
                 urls.append(cu)
                 self._url_meta[cu] = meta
@@ -1133,20 +1159,19 @@ class UniversalCrawler:
 
             try:
                 # Platform detection BEFORE discovery (live Magento fallback included).
-                if hasattr(self.http, "apply_browser_headers"):
-                    # Magento/Hyva storefronts often 403 without browser-like headers.
-                    self.http.apply_browser_headers()
-                detected = detect_platform(
-                    url,
-                    html="",
-                    session=getattr(self.http, "session", None),
-                    live_fallback=True,
-                )
-                plat = str(detected.get("platform") or "Custom")
-                self.logger.info("Detected platform: %s", plat)
-                if plat == "Magento":
-                    self._magento_domains.add(domain)
-                    DecisionCoordinator.remember_platform(url, "Magento")
+                plat = self._detect_seed_platform(url, domain)
+
+                # Magento product PDPs (2+ path segments): skip homepage/category/sitemap.
+                if plat == "Magento" and is_direct_product_page_url(url):
+                    cu = canonicalize_product_url(url)
+                    self.logger.info(
+                        "[Magento] Direct product URL — skip category crawl/sitemap: %s",
+                        cu,
+                    )
+                    urls.append(cu)
+                    self._url_meta[cu] = meta
+                    per_domain_count[domain] += 1
+                    continue
 
                 # Magento: skip sitemap AND robots.txt gates — nav crawl only.
                 prev_robots = getattr(self.http, "respect_robots", True)

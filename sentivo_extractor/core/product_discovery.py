@@ -126,6 +126,22 @@ def canonicalize_product_url(url: str) -> str:
     return urlunparse((parsed.scheme.lower(), parsed.netloc.lower(), path, "", query, ""))
 
 
+def path_segment_count(url: str) -> int:
+    """Count non-empty path segments (home=0, category=1, Magento PDP=2+)."""
+    path = urlparse(url or "").path or ""
+    return len([seg for seg in path.split("/") if seg])
+
+
+def is_direct_product_page_url(url: str) -> bool:
+    """
+    Magento SEO PDP heuristic used by sheetplastics-style storefronts:
+    - Homepage: /
+    - Category: /clear-acrylic  (1 segment)
+    - Product:  /clear-acrylic/3mm-clear-acrylic-sheet-cut-to-size  (2+ segments)
+    """
+    return path_segment_count(url) >= 2
+
+
 def unique_preserve(urls: Iterable[str]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
@@ -747,12 +763,30 @@ def discover_domain_products(
     log.info("Detected platform: %s", resolved_early or "Custom")
 
     # Magento: skip ALL sitemap/robots probes (stale cache must not block nav crawl).
-    # Go straight to MagentoCategoryCrawler.discover().
+    # Direct PDP seeds (2+ path segments) skip category crawl entirely.
     if resolved_early == "Magento":
         from sentivo_extractor.crawlers.magento_crawler import MagentoCategoryCrawler
 
         notes.append("magento_skip_sitemaps")
         notes.append("magento_skip_robots_probes")
+
+        if is_direct_product_page_url(seed_url):
+            cu = canonicalize_product_url(seed_url) or seed_url.strip()
+            notes.append("magento_direct_product_url")
+            notes.append("magento_skip_category_crawl")
+            log.info(
+                "[Magento] Direct product URL — skip category crawl/sitemap: %s",
+                cu,
+            )
+            return {
+                "product_urls": [cu] if cu else [],
+                "pagination_urls": [],
+                "sitemap_urls": [],
+                "notes": notes,
+                "platform": "Magento",
+                "discovery_version": PRODUCT_DISCOVERY_VERSION,
+            }
+
         try:
             # MagentoCategoryCrawler.discover() logs Starting / Found / Discovered.
             magento_crawler = MagentoCategoryCrawler(

@@ -10,6 +10,7 @@ from sentivo_extractor.core.schema import empty_product, empty_variant, ensure_p
 from sentivo_extractor.core.utils import (
     absolute_url,
     canonicalize_option_name,
+    coerce_variant_price,
     detect_currency,
     normalize_price,
     sanitize_sku,
@@ -158,7 +159,7 @@ def normalize_product(raw: dict[str, Any], base_url: str = "") -> dict[str, Any]
                 continue
             v = empty_variant()
             v.update({k: raw_v.get(k, v.get(k)) for k in v})
-            v["price"] = normalize_price(v.get("price"))
+            v["price"] = coerce_variant_price(v.get("price"))
             v["compare_at_price"] = normalize_price(v.get("compare_at_price"))
             v["sku"] = sanitize_sku(v.get("sku"))
             v["barcode"] = str(v.get("barcode") or "").strip()
@@ -178,7 +179,7 @@ def normalize_product(raw: dict[str, Any], base_url: str = "") -> dict[str, Any]
             variants.append(v)
     else:
         # Infer a base price from first image alt / leftover fields
-        base_price = normalize_price(raw.get("price") or "")
+        base_price = coerce_variant_price(raw.get("price") or "")
         base_compare = normalize_price(raw.get("compare_at_price") or "")
         if not currency:
             currency = detect_currency(str(raw.get("price") or ""))

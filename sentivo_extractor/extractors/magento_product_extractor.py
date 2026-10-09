@@ -15,12 +15,35 @@ from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 
 from sentivo_extractor.core.schema import empty_image, empty_product, empty_variant
-from sentivo_extractor.core.utils import absolute_url, normalize_price, sanitize_sku
+from sentivo_extractor.core.utils import (
+    absolute_url,
+    format_cut_to_size_price,
+    normalize_price,
+    sanitize_sku,
+)
 from sentivo_extractor.extractors.base import BaseExtractor
 
 logger = logging.getLogger(__name__)
 
-CUT_TO_SIZE_TAG = "cut-to-size pricing"
+CUT_TO_SIZE_TAG = "cut-to-size-pricing"
+
+_SKU_BODY_RE = re.compile(r"\(SKU:\s*([^\)]+)\)", re.I)
+# Alpine/Hyva scalar only — must NOT match Magento spConfig
+# `"finalPrice": {"amount": 12.5}` (optionPrices).
+_ALPINE_SCALAR_FINAL_PRICE_RE = re.compile(
+    r"""\bfinalPrice\s*:\s*['"]?£?\s*(\d+(?:\.\d+)?)""",
+    re.I,
+)
+_PRICE_BOX_FINAL_AMOUNT_PATTERNS = (
+    re.compile(
+        r"""data-price-type=['"]finalPrice['"][^>]*data-price-amount=['"](\d+(?:\.\d+)?)""",
+        re.I,
+    ),
+    re.compile(
+        r"""data-price-amount=['"](\d+(?:\.\d+)?)[^>]*data-price-type=['"]finalPrice['"]""",
+        re.I,
+    ),
+)
 
 _TITLE_SELECTORS = (
     "h1.page-title span",
@@ -88,7 +111,7 @@ class MagentoProductExtractor(BaseExtractor):
         if not title:
             return None
 
-        sku = sanitize_sku(self._first_text(soup, _SKU_SELECTORS))
+        sku = self._sku(soup, html, logger=log)
         description_html, description_text = self._description(soup)
         specs = self._specs(soup)
         if specs:
@@ -104,7 +127,7 @@ class MagentoProductExtractor(BaseExtractor):
             else:
                 description_text = spec_line
 
-        price = self._price(soup)
+        price, cut_to_size = self._price(soup, html)
         images = self._images(soup, url)
 
         product = empty_product()
@@ -116,7 +139,9 @@ class MagentoProductExtractor(BaseExtractor):
         product["confidence_score"] = 0.82
         product["images"] = images
         product["specifications"] = specs
-        product["tags"] = [CUT_TO_SIZE_TAG]
+        product["tags"] = [CUT_TO_SIZE_TAG] if cut_to_size else []
+        if cut_to_size or "£" in (price or ""):
+            product["currency"] = "GBP"
 
         variant = empty_variant()
         variant["sku"] = sku
@@ -151,6 +176,25 @@ class MagentoProductExtractor(BaseExtractor):
                 return text
         return ""
 
+    def _sku(
+        self,
+        soup: BeautifulSoup,
+        html: str,
+        *,
+        logger: logging.Logger | None = None,
+    ) -> str:
+        # Prefer explicit "(SKU: CODE)" in page body (sheetplastics / Hyva).
+        body_text = soup.get_text(" ", strip=True)
+        m = _SKU_BODY_RE.search(body_text or "")
+        if not m:
+            m = _SKU_BODY_RE.search(html or "")
+        if m:
+            sku = sanitize_sku(m.group(1).strip(), logger=logger)
+            if sku:
+                return sku
+
+        return sanitize_sku(self._first_text(soup, _SKU_SELECTORS), logger=logger)
+
     def _description(self, soup: BeautifulSoup) -> tuple[str, str]:
         for sel in _DESC_SELECTORS:
             try:
@@ -165,7 +209,58 @@ class MagentoProductExtractor(BaseExtractor):
                 return html or f"<p>{text}</p>", text
         return "", ""
 
-    def _price(self, soup: BeautifulSoup) -> str:
+    def _alpine_final_price(self, soup: BeautifulSoup, html: str) -> str:
+        """Scalar Alpine/Hyva finalPrice only (not Magento optionPrices objects)."""
+
+        def _scalar_from(text: str) -> str:
+            for m in _ALPINE_SCALAR_FINAL_PRICE_RE.finditer(text or ""):
+                # Reject Magento JSON objects: finalPrice: { "amount": ... }
+                tail = (text or "")[m.end() : m.end() + 24].lstrip()
+                if tail.startswith("{"):
+                    continue
+                window = (text or "")[m.start() : m.start() + 48]
+                if re.search(r"finalPrice\s*:\s*\{", window, re.I):
+                    continue
+                amount = normalize_price(m.group(1))
+                if amount:
+                    return amount
+            return ""
+
+        for el in soup.select("[x-data]"):
+            amount = _scalar_from(str(el.get("x-data") or ""))
+            if amount:
+                return amount
+
+        amount = _scalar_from(html or "")
+        if amount:
+            return amount
+
+        for pat in _PRICE_BOX_FINAL_AMOUNT_PATTERNS:
+            m = pat.search(html or "")
+            if m:
+                got = normalize_price(m.group(1))
+                if got:
+                    return got
+        return ""
+
+    def _price(self, soup: BeautifulSoup, html: str = "") -> tuple[str, bool]:
+        """
+        Magento price:
+        1) Alpine / Hyva scalar finalPrice
+        2) .price-wrapper .price (and related DOM)
+        Cut-to-size PDPs store price as '£X.XX per cm²'.
+        Returns (price, is_cut_to_size).
+        """
+        blob = html or str(soup)
+        cut_hint = bool(
+            re.search(r"cut[\s-]?to[\s-]?size|per\s*cm", blob, re.I)
+        )
+
+        alpine = self._alpine_final_price(soup, blob)
+        if alpine:
+            # Alpine scalar finalPrice on cut-to-size storefronts is per cm².
+            return format_cut_to_size_price(alpine), True
+
         for sel in _PRICE_SELECTORS:
             try:
                 el = soup.select_one(sel)
@@ -178,16 +273,22 @@ class MagentoProductExtractor(BaseExtractor):
                 raw = str(el.get("content") or "")
             if not raw:
                 raw = el.get_text(" ", strip=True)
-            price = normalize_price(raw)
-            if price:
-                return price
-        # data-price-amount on wrappers
+            amount = normalize_price(raw)
+            if not amount:
+                continue
+            if cut_hint:
+                return format_cut_to_size_price(amount), True
+            return amount, False
+
         for el in soup.select("[data-price-amount]"):
             raw = el.get("data-price-amount") or ""
-            price = normalize_price(str(raw))
-            if price:
-                return price
-        return ""
+            amount = normalize_price(str(raw))
+            if not amount:
+                continue
+            if cut_hint:
+                return format_cut_to_size_price(amount), True
+            return amount, False
+        return "", cut_hint
 
     def _specs(self, soup: BeautifulSoup) -> dict[str, str]:
         specs: dict[str, str] = {}

@@ -135,6 +135,27 @@ def normalize_price(value: Any) -> str:
         return match.group(0)
 
 
+def format_cut_to_size_price(value: Any) -> str:
+    """Return '£X.XX per cm²' when a numeric amount can be parsed, else ''."""
+    amount = normalize_price(value)
+    if not amount:
+        return ""
+    return f"£{amount} per cm²"
+
+
+def coerce_variant_price(value: Any) -> str:
+    """
+    Normalize variant prices, preserving Magento cut-to-size display form
+    ('£X.XX per cm²') when present.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if re.search(r"per\s*cm", text, re.I):
+        return format_cut_to_size_price(text) or text
+    return normalize_price(text)
+
+
 def is_blank_price(value: Any) -> bool:
     """True when price is missing or numerically zero (0 / 0.0 / 0.00)."""
     text = normalize_price(value)
