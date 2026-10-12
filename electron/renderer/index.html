@@ -974,9 +974,16 @@
     });
 
     function logLevelClass(line) {
-      if (line.includes("[ERROR]")) return "error";
-      if (line.includes("[WARNING]")) return "warning";
-      if (line.includes("[INFO]")) return "info";
+      const text = String(line || "");
+      if (text.includes("[ERROR]") || /\bERROR\b/.test(text) || /\bFAIL\b/.test(text)) {
+        return "error";
+      }
+      if (text.includes("[WARNING]") || /\bWARNING\b/.test(text) || /\bWARN\b/.test(text)) {
+        return "warning";
+      }
+      if (text.includes("[INFO]") || /\bINFO\b/.test(text)) {
+        return "info";
+      }
       return "";
     }
 
@@ -1068,51 +1075,162 @@
       alert("Download is UI-only until the backend is wired.");
     });
 
-    // Scraper
+    // Scraper → Python backend via preload IPC
     const scraperLog = document.getElementById("scraper-log");
     const scraperRun = document.getElementById("scraper-run");
     const scraperStop = document.getElementById("scraper-stop");
     const scraperCsv = document.getElementById("scraper-generate-csv");
-    let scraperTimer = null;
     let scraperStartedAt = null;
     let scraperElapsedTimer = null;
+    let scraperSeedCount = 0;
+    let scraperProducts = 0;
+    let scraperRunning = false;
+
+    function api() {
+      return window.sentivo || null;
+    }
 
     document.getElementById("scraper-vendor-toggle").addEventListener("change", (e) => {
       document.getElementById("scraper-vendor-wrap").classList.toggle("hidden", !e.target.checked);
     });
 
-    document.getElementById("scraper-browse").addEventListener("click", () => {
-      const folder = prompt("Output folder path", document.getElementById("scraper-output").value || "");
-      if (folder !== null) document.getElementById("scraper-output").value = folder;
+    document.getElementById("scraper-browse").addEventListener("click", async () => {
+      const bridge = api();
+      if (!bridge) {
+        alert("Electron bridge unavailable. Restart the app.");
+        return;
+      }
+      const folder = await bridge.browseFolder();
+      if (folder) document.getElementById("scraper-output").value = folder;
     });
 
     function resetScraperUi() {
+      scraperRunning = false;
       scraperRun.disabled = false;
       scraperStop.disabled = true;
-      clearInterval(scraperTimer);
       clearInterval(scraperElapsedTimer);
-      scraperTimer = null;
       scraperElapsedTimer = null;
     }
 
-    scraperRun.addEventListener("click", () => {
-      const seeds = document.getElementById("scraper-seeds").value.trim();
-      if (!seeds) {
+    function parseScraperLogLine(line) {
+      const text = String(line || "");
+
+      const pctMatch =
+        text.match(/\b(\d{1,3})\s*%/) ||
+        text.match(/progress[=:]\s*(\d{1,3})/i);
+      if (pctMatch) {
+        const pct = Math.max(0, Math.min(100, parseInt(pctMatch[1], 10)));
+        setProgress(
+          document.getElementById("scraper-progress-fill"),
+          document.getElementById("scraper-progress-pct"),
+          document.getElementById("scraper-progress-label"),
+          pct,
+          text.slice(0, 80)
+        );
+      }
+
+      const productsMatch =
+        text.match(/Products\s+(?:processed|discovered|found)\s*[:=]\s*(\d+)/i) ||
+        text.match(/category_products_total:(\d+)/i) ||
+        text.match(/products_total[:=]\s*(\d+)/i);
+      if (productsMatch) {
+        scraperProducts = parseInt(productsMatch[1], 10) || scraperProducts;
+        document.getElementById("scraper-stat-products").textContent = String(scraperProducts);
+      }
+
+      if (/Seed CSV:/i.test(text) || /Output (base|folder|path)/i.test(text)) {
+        const pathMatch = text.match(/:\s*(.+)$/);
+        if (pathMatch) {
+          document.getElementById("scraper-stat-output").textContent = pathMatch[1].trim();
+        }
+      }
+      if (/Domain folder:/i.test(text)) {
+        const pathMatch = text.match(/Domain folder:\s*(.+)$/i);
+        if (pathMatch) {
+          document.getElementById("scraper-stat-output").textContent = pathMatch[1].trim();
+        }
+      }
+    }
+
+    if (api()) {
+      api().onLogLine((line) => {
+        if (!scraperRunning && !String(line || "").trim()) return;
+        appendLog(scraperLog, line);
+        parseScraperLogLine(line);
+      });
+      api().onScraperDone((payload) => {
+        const stopped = Boolean(payload && payload.stopped);
+        const code = payload && typeof payload.code === "number" ? payload.code : -1;
+        clearInterval(scraperElapsedTimer);
+        scraperElapsedTimer = null;
+        scraperRun.disabled = false;
+        scraperStop.disabled = true;
+        scraperRunning = false;
+        document.getElementById("scraper-stat-seeds").textContent = String(scraperSeedCount);
+        if (stopped) {
+          document.getElementById("scraper-stat-status").textContent = "Stopped";
+          document.getElementById("scraper-progress-label").textContent = "Stopped";
+          appendLog(scraperLog, "[WARNING] Scraper stopped.");
+        } else if (code === 0) {
+          document.getElementById("scraper-stat-status").textContent = "Complete";
+          setProgress(
+            document.getElementById("scraper-progress-fill"),
+            document.getElementById("scraper-progress-pct"),
+            document.getElementById("scraper-progress-label"),
+            100,
+            "Complete"
+          );
+          scraperCsv.disabled = false;
+          appendLog(scraperLog, "[INFO] Scraper finished successfully.");
+        } else {
+          document.getElementById("scraper-stat-status").textContent = "Failed";
+          document.getElementById("scraper-progress-label").textContent = "Failed";
+          appendLog(scraperLog, `[ERROR] Scraper exited with code ${code}.`);
+        }
+      });
+    }
+
+    scraperRun.addEventListener("click", async () => {
+      const bridge = api();
+      if (!bridge) {
+        alert("Electron bridge unavailable. Restart with npm start from electron/.");
+        return;
+      }
+      const seeds = document.getElementById("scraper-seeds").value
+        .split(/\r?\n/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const outputFolder = document.getElementById("scraper-output").value.trim();
+      if (!seeds.length) {
         alert("Enter at least one seed URL.");
         return;
       }
-      const seedCount = seeds.split(/\r?\n/).map((s) => s.trim()).filter(Boolean).length;
-      const output = document.getElementById("scraper-output").value.trim() || "—";
+      if (!outputFolder) {
+        alert("Choose an output folder.");
+        return;
+      }
+
+      scraperSeedCount = seeds.length;
+      scraperProducts = 0;
       clearLog(scraperLog, "[INFO] Starting scraper…");
       scraperRun.disabled = true;
       scraperStop.disabled = false;
       scraperCsv.disabled = true;
+      scraperRunning = true;
       document.getElementById("scraper-stat-seeds").textContent = "0";
       document.getElementById("scraper-stat-products").textContent = "0";
-      document.getElementById("scraper-stat-output").textContent = output;
+      document.getElementById("scraper-stat-output").textContent = outputFolder;
       document.getElementById("scraper-stat-status").textContent = "Running";
       document.getElementById("scraper-stat-elapsed").textContent = "00:00";
+      setProgress(
+        document.getElementById("scraper-progress-fill"),
+        document.getElementById("scraper-progress-pct"),
+        document.getElementById("scraper-progress-label"),
+        0,
+        "Running"
+      );
       scraperStartedAt = Date.now();
+      clearInterval(scraperElapsedTimer);
       scraperElapsedTimer = setInterval(() => {
         const secs = Math.floor((Date.now() - scraperStartedAt) / 1000);
         const mm = String(Math.floor(secs / 60)).padStart(2, "0");
@@ -1120,46 +1238,45 @@
         document.getElementById("scraper-stat-elapsed").textContent = mm + ":" + ss;
       }, 1000);
 
-      scraperTimer = fakeProgress({
-        fillEl: document.getElementById("scraper-progress-fill"),
-        pctEl: document.getElementById("scraper-progress-pct"),
-        labelEl: document.getElementById("scraper-progress-label"),
-        logEl: scraperLog,
-        labels: [
-          "[INFO] Validating seed URLs…",
-          "[INFO] Detecting platform…",
-          "[INFO] Discovering products…",
-          "[WARNING] Slow response from store — retrying…",
-          "[INFO] Extracting product pages…",
-          "[INFO] Writing shopify_import.csv…",
-        ],
-        onDone: () => {
-          appendLog(scraperLog, "[INFO] Scrape complete.");
-          document.getElementById("scraper-stat-seeds").textContent = String(seedCount);
-          document.getElementById("scraper-stat-products").textContent = String(seedCount * 12);
-          document.getElementById("scraper-stat-status").textContent = "Complete";
-          scraperCsv.disabled = false;
-          resetScraperUi();
-        },
-      });
+      const useVendor = document.getElementById("scraper-vendor-toggle").checked;
+      try {
+        await bridge.runScraper({
+          urls: seeds,
+          outputFolder,
+          mode: document.getElementById("scraper-mode").value,
+          maxProducts: document.getElementById("scraper-max").value.trim(),
+          proxyUrl: document.getElementById("scraper-proxy").value.trim(),
+          freshStart: document.getElementById("scraper-fresh").checked,
+          customVendor: useVendor
+            ? document.getElementById("scraper-vendor").value.trim()
+            : "",
+        });
+      } catch (err) {
+        appendLog(scraperLog, `[ERROR] ${err && err.message ? err.message : err}`);
+        document.getElementById("scraper-stat-status").textContent = "Failed";
+        resetScraperUi();
+      }
     });
 
-    scraperStop.addEventListener("click", () => {
-      appendLog(scraperLog, "[WARNING] Stopped by user.");
-      document.getElementById("scraper-stat-status").textContent = "Stopped";
-      document.getElementById("scraper-progress-label").textContent = "Stopped";
-      resetScraperUi();
+    scraperStop.addEventListener("click", async () => {
+      const bridge = api();
+      if (!bridge) return;
+      appendLog(scraperLog, "[WARNING] Stop requested…");
+      try {
+        await bridge.stopScraper();
+      } catch (err) {
+        appendLog(scraperLog, `[ERROR] Stop failed: ${err && err.message ? err.message : err}`);
+      }
     });
 
     document.getElementById("scraper-reprocess").addEventListener("click", () => {
-      clearLog(scraperLog, "[INFO] Reprocess requested (UI demo).");
-      appendLog(scraperLog, "[INFO] Looking for existing domain output…");
-      appendLog(scraperLog, "[WARNING] No backend connected yet.");
+      clearLog(scraperLog, "[INFO] Reprocess is not wired in Electron yet.");
+      appendLog(scraperLog, "[WARNING] Use the Python GUI reprocess flow for now.");
     });
 
     scraperCsv.addEventListener("click", () => {
-      appendLog(scraperLog, "[INFO] Generate Final CSV clicked (UI demo).");
-      alert("CSV generation is UI-only until the backend is wired.");
+      appendLog(scraperLog, "[INFO] CSV is written by the extractor into the output folder.");
+      alert("Open the Output Path folder for shopify_import.csv.");
     });
 
     // Auditor
@@ -1203,13 +1320,17 @@
     document.getElementById("converter-quality").addEventListener("input", (e) => {
       document.getElementById("converter-quality-value").textContent = e.target.value;
     });
-    document.getElementById("converter-browse-input").addEventListener("click", () => {
-      const folder = prompt("Input folder path", document.getElementById("converter-input").value || "");
-      if (folder !== null) document.getElementById("converter-input").value = folder;
+    document.getElementById("converter-browse-input").addEventListener("click", async () => {
+      const bridge = api();
+      if (!bridge) return;
+      const folder = await bridge.browseFolder();
+      if (folder) document.getElementById("converter-input").value = folder;
     });
-    document.getElementById("converter-browse-output").addEventListener("click", () => {
-      const folder = prompt("Output folder path", document.getElementById("converter-output").value || "");
-      if (folder !== null) document.getElementById("converter-output").value = folder;
+    document.getElementById("converter-browse-output").addEventListener("click", async () => {
+      const bridge = api();
+      if (!bridge) return;
+      const folder = await bridge.browseFolder();
+      if (folder) document.getElementById("converter-output").value = folder;
     });
     document.getElementById("converter-run").addEventListener("click", () => {
       const input = document.getElementById("converter-input").value.trim();
@@ -1238,9 +1359,11 @@
     });
 
     // Settings
-    document.getElementById("settings-browse-output").addEventListener("click", () => {
-      const folder = prompt("Default output folder", document.getElementById("settings-output").value || "");
-      if (folder !== null) document.getElementById("settings-output").value = folder;
+    document.getElementById("settings-browse-output").addEventListener("click", async () => {
+      const bridge = api();
+      if (!bridge) return;
+      const folder = await bridge.browseFolder();
+      if (folder) document.getElementById("settings-output").value = folder;
     });
     document.getElementById("settings-save").addEventListener("click", () => {
       alert("Settings saved locally in the UI (not persisted yet).");
