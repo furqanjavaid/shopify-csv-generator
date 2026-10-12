@@ -1,4 +1,5 @@
 node_modules/
+electron/node_modules/
 .env
 .shopify/
 *.log
@@ -30,3 +31,12 @@ audits/
 config.json
 installer/python-*.exe
 installer/output/
+
+# Local working / scrape artifacts
+input/
+task_history.json
+dp_categories.txt
+dp_categories_names.txt
+dp_seed.csv
+dp_sitemap.xml
+dp_urls.txt
