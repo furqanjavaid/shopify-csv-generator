@@ -66,13 +66,23 @@ def check_image_url(
             result["error"] = str(exc)[:200]
             return result
 
-    result["http_status"] = resp.status_code
-    result["final_url"] = str(resp.url)
-    if resp.status_code in (401, 403):
-        result["status"] = "blocked"
-    elif resp.status_code >= 400:
+    if resp is None:
         result["status"] = "broken"
-        result["error"] = f"HTTP {resp.status_code}"
+        result["error"] = "empty response"
+        return result
+
+    result["http_status"] = getattr(resp, "status_code", None)
+    result["final_url"] = str(getattr(resp, "url", url) or url)
+    status = getattr(resp, "status_code", None)
+    if status == 403:
+        # Image exists; access is restricted from this IP. Keep the URL.
+        result["status"] = "ok"
+        result["final_url"] = url
+    elif status == 401:
+        result["status"] = "blocked"
+    elif status is not None and status >= 400:
+        result["status"] = "broken"
+        result["error"] = f"HTTP {status}"
     elif urlparse(str(resp.url)).netloc.lower() != urlparse(url).netloc.lower() or str(
         resp.url
     ).rstrip("/") != url.rstrip("/"):
@@ -128,14 +138,33 @@ def verify_image_url(
         result["error"] = str(exc)[:200]
         return result
 
-    result["http_status"] = resp.status_code
-    result["final_url"] = str(resp.url)
-    ct = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+    if resp is None:
+        result["error"] = "empty response"
+        return result
+
+    result["http_status"] = getattr(resp, "status_code", None)
+    result["final_url"] = str(getattr(resp, "url", url) or url)
+    ct = ((resp.headers or {}).get("Content-Type") or "").split(";")[0].strip().lower()
     result["content_type"] = ct
 
-    if resp.status_code != 200:
-        result["error"] = f"HTTP {resp.status_code}"
-        resp.close()
+    status_code = getattr(resp, "status_code", None)
+    if status_code == 403:
+        # Exists but blocked from this IP — keep the original URL, skip verification.
+        result["ok"] = True
+        result["final_url"] = url
+        result["error"] = ""
+        try:
+            resp.close()
+        except Exception:
+            pass
+        return result
+
+    if status_code != 200:
+        result["error"] = f"HTTP {getattr(resp, 'status_code', None)}"
+        try:
+            resp.close()
+        except Exception:
+            pass
         return result
 
     if ct.startswith("text/html") or ct.startswith("application/xhtml"):

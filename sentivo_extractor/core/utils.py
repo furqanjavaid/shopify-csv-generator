@@ -389,11 +389,16 @@ class RobotsCache:
         except Exception:
             return None  # fail open
 
+        if resp is None:
+            return None
+        status = getattr(resp, "status_code", None)
+        if status is None:
+            return None
         # Transient / gateway / empty → allow crawl (do not mirror urllib's
         # 403→disallow_all which Cloudflare triggers for bot UAs).
-        if resp.status_code >= 500 or resp.status_code in (408, 429):
+        if status >= 500 or status in (408, 429):
             return None
-        if resp.status_code in (401, 403):
+        if status in (401, 403):
             body = (resp.text or "").strip().lower()
             # Cloudflare / WAF challenge pages are not real robots policies.
             if (
@@ -408,7 +413,7 @@ class RobotsCache:
             rp = RobotFileParser()
             rp.disallow_all = True
             return rp
-        if resp.status_code >= 400:
+        if status >= 400:
             return None
 
         text = resp.text or ""

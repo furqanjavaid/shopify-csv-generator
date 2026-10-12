@@ -1409,7 +1409,13 @@ def run_playwright_audit(
     _emit(progress, "Crawling homepage...")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        from sentivo_extractor.core.http_client import playwright_proxy
+
+        _launch: dict = {"headless": True}
+        _proxy = playwright_proxy()
+        if _proxy:
+            _launch["proxy"] = _proxy
+        browser = p.chromium.launch(**_launch)
 
         # ── DESKTOP VIEWPORT ──
         page = browser.new_page(viewport={"width": 1440, "height": 900})

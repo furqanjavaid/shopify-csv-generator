@@ -41,6 +41,11 @@ from sentivo_extractor.core.output_layout import (
     domain_output_dir,
     ensure_domain_dir,
 )
+from sentivo_extractor.core.platform_fingerprint import (
+    PLATFORM_CACHE_MARKER,
+    PREFLIGHT_FAIL_MARKER,
+    PREFLIGHT_PASS_MARKER,
+)
 from sentivo_extractor.decision_engine.captcha_detector import (
     CAPTCHA_CLEARED_MARKER,
     CAPTCHA_TIMEOUT_MARKER,
@@ -57,7 +62,6 @@ LOG_COLOR_INFO = "#8B7340"
 LOG_COLOR_WARN = "#E88C00"
 LOG_COLOR_ERROR = "#CC3333"
 LOG_MIN_HEIGHT = 160
-PROGRESS_AMBER = "#C9A84C"
 SEED_URL_PLACEHOLDER = "https://your-store.com/collections/all"
 
 PILOT_OUTPUT_BUTTONS = (
@@ -271,6 +275,18 @@ class ScraperScreen(ctk.CTkFrame):
         )
         self.platform_label.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(4, 0))
 
+        ctk.CTkLabel(
+            cfg,
+            text="Proxy URL (optional)",
+            font=T.font(12, "bold"),
+            text_color=T.TEXT_MUTED,
+            anchor="w",
+        ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self.proxy_entry = T.styled_entry(
+            cfg, placeholder="http://user:pass@host:port"
+        )
+        self.proxy_entry.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+
         # Run / Stop
         btn_row = ctk.CTkFrame(cfg, fg_color="transparent")
         btn_row.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(14, 4))
@@ -292,7 +308,7 @@ class ScraperScreen(ctk.CTkFrame):
 
         # Progress + percentage (always visible; idle = 0%)
         self.progress_section = ctk.CTkFrame(cfg, fg_color="transparent")
-        self.progress_section.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(0, 0))
+        self.progress_section.grid(row=10, column=0, columnspan=2, sticky="ew", pady=(0, 0))
         self.progress_section.grid_columnconfigure(0, weight=1)
         self.loading_label = ctk.CTkLabel(
             self.progress_section,
@@ -317,6 +333,36 @@ class ScraperScreen(ctk.CTkFrame):
         )
         self.progress_pct.grid(row=1, column=1, sticky="e")
 
+        # Pre-flight status banner (green pass / red fail)
+        self.preflight_card = ctk.CTkFrame(
+            cfg,
+            fg_color="#E8F7EE",
+            corner_radius=T.CARD_RADIUS,
+            border_width=2,
+            border_color=T.SUCCESS,
+        )
+        self.preflight_card.grid(row=9, column=0, columnspan=2, sticky="ew", pady=(8, 4))
+        self.preflight_card.grid_columnconfigure(0, weight=1)
+        self.preflight_title = ctk.CTkLabel(
+            self.preflight_card,
+            text="Pre-flight",
+            font=T.font(14, "bold"),
+            text_color=T.SUCCESS,
+            anchor="w",
+        )
+        self.preflight_title.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 2))
+        self.preflight_detail = ctk.CTkLabel(
+            self.preflight_card,
+            text="",
+            font=T.font_tuple(T.CAPTION),
+            text_color=T.TEXT_PRIMARY,
+            anchor="w",
+            wraplength=640,
+            justify="left",
+        )
+        self.preflight_detail.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 10))
+        self.preflight_card.grid_remove()
+
         # CAPTCHA wait (yellow — auto-resume, no manual button)
         self.captcha_card = ctk.CTkFrame(
             cfg,
@@ -325,7 +371,7 @@ class ScraperScreen(ctk.CTkFrame):
             border_width=2,
             border_color=T.WARNING,
         )
-        self.captcha_card.grid(row=9, column=0, columnspan=2, sticky="ew", pady=(8, 4))
+        self.captcha_card.grid(row=10, column=0, columnspan=2, sticky="ew", pady=(8, 4))
         self.captcha_card.grid_columnconfigure(0, weight=1)
         self.captcha_title = ctk.CTkLabel(
             self.captcha_card,
@@ -350,13 +396,13 @@ class ScraperScreen(ctk.CTkFrame):
         self.error_label = ctk.CTkLabel(
             cfg, text="", font=T.font_tuple(T.CAPTION), text_color=T.ERROR, anchor="w"
         )
-        self.error_label.grid(row=10, column=0, columnspan=2, sticky="ew")
+        self.error_label.grid(row=11, column=0, columnspan=2, sticky="ew")
         self.strategy_label = ctk.CTkLabel(
             cfg, text="", font=T.font_tuple(T.CAPTION), text_color=T.TEXT_SECONDARY, anchor="w"
         )
-        self.strategy_label.grid(row=11, column=0, columnspan=2, sticky="ew")
+        self.strategy_label.grid(row=12, column=0, columnspan=2, sticky="ew")
         self.output_actions = ctk.CTkFrame(cfg, fg_color="transparent")
-        self.output_actions.grid(row=12, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        self.output_actions.grid(row=13, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         self.output_actions.grid_remove()
         self._output_buttons: list[ctk.CTkButton] = []
 
@@ -807,6 +853,49 @@ class ScraperScreen(ctk.CTkFrame):
             except Exception:
                 pass
 
+    def _show_preflight_banner(
+        self,
+        *,
+        passed: bool,
+        detail: str,
+    ) -> None:
+        """Green pass / red fail banner for platform pre-flight gate."""
+        msg = (detail or "").strip()
+        if passed:
+            fg, border, color, title = (
+                "#E8F7EE",
+                T.SUCCESS,
+                T.SUCCESS,
+                "Pre-flight passed",
+            )
+        else:
+            fg, border, color, title = (
+                "#FDECEC",
+                T.ERROR,
+                T.ERROR,
+                "Pre-flight failed",
+            )
+        try:
+            self.preflight_title.configure(text=title, text_color=color)
+            self.preflight_detail.configure(text=msg[:400])
+            self.preflight_card.configure(fg_color=fg, border_color=border)
+            self.preflight_card.grid()
+        except Exception:
+            pass
+        try:
+            self.result_labels["status"].configure(
+                text="Pre-flight OK" if passed else "Pre-flight failed"
+            )
+        except Exception:
+            pass
+        self._append_log(msg)
+
+    def _hide_preflight_banner(self) -> None:
+        try:
+            self.preflight_card.grid_remove()
+        except Exception:
+            pass
+
     def _show_captcha_alert(self, detail: str = "") -> None:
         """Yellow status card while a visible browser waits for the user to solve CAPTCHA."""
         self._captcha_waiting = True
@@ -1036,6 +1125,7 @@ class ScraperScreen(ctk.CTkFrame):
             self.max_products_entry,
             self.vendor_checkbox,
             self.vendor_entry,
+            self.proxy_entry,
         ):
             try:
                 widget.configure(state=state)
@@ -1201,6 +1291,21 @@ class ScraperScreen(ctk.CTkFrame):
 
     # ── Start ─────────────────────────────────────────────
 
+    def _apply_proxy_from_ui(self) -> None:
+        """Push optional proxy into HttpClient (and SENTIVO_HTTP_PROXY for subprocess)."""
+        from sentivo_extractor.core.http_client import set_proxy
+
+        raw = ""
+        try:
+            raw = (self.proxy_entry.get() or "").strip()
+        except Exception:
+            raw = ""
+        set_proxy(raw or None)
+        if raw:
+            self._append_log(f"Proxy: {raw.split('@')[-1] if '@' in raw else raw}")
+        else:
+            self._append_log("Proxy: (none)")
+
     def _start_scrape(self) -> None:
         store = getattr(self.app, "job_status", None)
         if store is not None and store.is_running(TOOL_URL_SCRAPER):
@@ -1209,6 +1314,7 @@ class ScraperScreen(ctk.CTkFrame):
 
         self.error_label.configure(text="")
         self.strategy_label.configure(text="")
+        self._hide_preflight_banner()
         self._set_status_badge("Ready")
         self.parsed_data = None
         self._universal_output_dir = None
@@ -1227,6 +1333,7 @@ class ScraperScreen(ctk.CTkFrame):
             self.log_box.delete("1.0", "end")
         self.log_box.configure(state="disabled")
 
+        self._apply_proxy_from_ui()
         self._start_universal()
 
     def _claim_scraper_job(self) -> bool:
@@ -1268,6 +1375,7 @@ class ScraperScreen(ctk.CTkFrame):
         except Exception:
             pass
         self._reprocessing = True
+        self._apply_proxy_from_ui()
         self._show_progress("Reprocessing existing data…")
         self._append_log(f"Reprocess input: {input_dir}")
         self._update_results(
@@ -1618,7 +1726,46 @@ class ScraperScreen(ctk.CTkFrame):
                         meta = dict(store.get(TOOL_URL_SCRAPER).ui_meta or {})
                         meta["loading"] = text[:80]
                         store.set_ui_meta(TOOL_URL_SCRAPER, meta)
-                    if CAPTCHA_WAIT_MARKER in text:
+                    if PREFLIGHT_PASS_MARKER in text:
+                        # PREFLIGHT:PASSED WooCommerce confidence=100
+                        parts = text.split()
+                        plat = "Unknown"
+                        conf = "?"
+                        for i, p in enumerate(parts):
+                            if p == PREFLIGHT_PASS_MARKER and i + 1 < len(parts):
+                                plat = parts[i + 1]
+                            if p.startswith("confidence="):
+                                conf = p.split("=", 1)[-1]
+                        detail = (
+                            f"Pre-flight passed — {plat} | title ✅ | price ✅ | "
+                            f"images ✅ | description ✅ (confidence: {conf}pts)"
+                        )
+                        self._post_to_scraper_ui(
+                            lambda s, d=detail: s._show_preflight_banner(
+                                passed=True, detail=d
+                            )
+                        )
+                    elif PREFLIGHT_FAIL_MARKER in text:
+                        missing = ""
+                        if "missing=" in text:
+                            missing = text.split("missing=", 1)[-1].strip()
+                        detail = (
+                            f"Pre-flight failed — missing: "
+                            f"{missing or 'validation failed'}. "
+                            "Full run BLOCKED."
+                        )
+                        self._post_to_scraper_ui(
+                            lambda s, d=detail: s._show_preflight_banner(
+                                passed=False, detail=d
+                            )
+                        )
+                    elif PLATFORM_CACHE_MARKER in text:
+                        detail = text.replace(PLATFORM_CACHE_MARKER, "").strip()
+                        if detail:
+                            self._post_to_scraper_ui(
+                                lambda s, d=detail: s._append_log(d)
+                            )
+                    elif CAPTCHA_WAIT_MARKER in text:
                         detail = (
                             "CAPTCHA detected — solve in the browser window. "
                             "Scraping will resume automatically."
@@ -1644,7 +1791,13 @@ class ScraperScreen(ctk.CTkFrame):
                 )
                 return
             if code != 0:
-                err = f"Universal {label} exited with code {code}. See log."
+                if code == 5:
+                    err = (
+                        "Pre-flight failed — run stopped. "
+                        "Fix extraction (title/price/images/description) before retrying."
+                    )
+                else:
+                    err = f"Universal {label} exited with code {code}. See log."
                 self._post_to_scraper_ui(
                     lambda s, m=err: s._on_error(m),
                     fallback=lambda m=err: self._store_mark_error(m),

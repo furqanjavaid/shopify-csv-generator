@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from typing import Any, Callable, Iterable
-from urllib.parse import parse_qs, urljoin, urlparse, urlunparse
+from urllib.parse import parse_qs, urlencode, urljoin, urlparse, urlunparse
 
 from bs4 import BeautifulSoup
 
@@ -43,10 +43,18 @@ def _dedupe_urls(urls: Iterable[str]) -> list[str]:
     return out
 
 
-def infer_discovery_platform(html: str = "", explicit: str | None = None) -> str:
-    """HTML-only platform hint for sitemap probing (no network probes)."""
+def infer_discovery_platform(
+    html: str = "",
+    explicit: str | None = None,
+    url: str = "",
+) -> str:
+    """HTML/URL platform hint for sitemap probing (no network probes)."""
     if explicit and str(explicit).strip():
         return str(explicit).strip()
+    path = (urlparse(url or "").path or "").lower()
+    # WooCommerce URL patterns beat Magento heuristics (avoid false Magento).
+    if "/product-category/" in path or "/product_category/" in path:
+        return "WooCommerce"
     low = (html or "").lower()
     if "woocommerce" in low or "wp-content/plugins/woocommerce" in low:
         return "WooCommerce"
@@ -59,7 +67,31 @@ def infer_discovery_platform(html: str = "", explicit: str | None = None) -> str
 
     if detect_magento(html):
         return "Magento"
+    # Soft WooCommerce hint from product permalinks in HTML
+    if "/product/" in low and "/product-category/" not in (url or "").lower():
+        if "wp-content" in low or "wp-includes" in low:
+            return "WooCommerce"
     return "Custom"
+
+
+def _strip_www(host: str) -> str:
+    h = (host or "").lower().strip()
+    return h[4:] if h.startswith("www.") else h
+
+
+def _same_site_host(url_a: str, url_b: str) -> bool:
+    """True when hosts match ignoring leading www."""
+    return _strip_www(urlparse(url_a).netloc) == _strip_www(urlparse(url_b).netloc)
+
+
+def _is_woocommerce_product_href(href: str) -> bool:
+    """WooCommerce PDP: path contains /product/ but not /product-category/."""
+    if not href:
+        return False
+    path = (urlparse(href).path or "").lower()
+    if "/product-category/" in path or "/product_category/" in path:
+        return False
+    return "/product/" in path
 
 PRODUCT_HREF_HINTS = (
     "/product/",
@@ -71,6 +103,16 @@ PRODUCT_HREF_HINTS = (
     "/catalogue/",
     "/p-",
     "/catalog/product/view/id/",
+)
+
+# Listing / category path markers (never treat these as a single PDP).
+CATEGORY_PATH_MARKERS = (
+    "/product-category/",
+    "/product_category/",
+    "/catalog/category/",
+    "/category/",
+    "/categories/",
+    "/collections/",
 )
 
 SKIP_PATH_FRAGMENTS = (
@@ -140,6 +182,87 @@ def is_homepage_url(url: str) -> bool:
     return path == ""
 
 
+def is_category_listing_url(url: str) -> bool:
+    """
+    True when the seed looks like a category / listing page (not a single PDP).
+
+    Indicators (path):
+      /product-category/, /category/, /catalog/category/, /collections/, …
+    """
+    parsed = urlparse(url or "")
+    path = (parsed.path or "").lower()
+    if not path or path == "/":
+        return False
+    if any(m in path for m in CATEGORY_PATH_MARKERS):
+        return True
+    # Magento category view-by-id
+    if "/catalog/category/view" in path:
+        return True
+    qs = parse_qs(parsed.query or "")
+    if qs.get("category") or qs.get("cat") or qs.get("category_id"):
+        # Alone not enough — only if path isn't an obvious PDP
+        if not any(h in path for h in PRODUCT_HREF_HINTS):
+            return True
+    return False
+
+
+def category_path_prefix(url: str) -> str:
+    """Normalized path prefix used to keep pagination inside one category."""
+    path = (urlparse(url or "").path or "/").rstrip("/").lower()
+    return path or "/"
+
+
+def pagination_stays_in_category(page_url: str, category_url: str) -> bool:
+    """Allow only pagination / filter URLs under the same category path."""
+    page_parsed = urlparse(page_url or "")
+    if not _same_site_host(page_url or "", category_url):
+        return False
+    cat_prefix = category_path_prefix(category_url)
+    page_path = (page_parsed.path or "/").rstrip("/").lower() or "/"
+    if page_path == cat_prefix or page_path.startswith(cat_prefix + "/"):
+        return True
+    # Same path with ?p= / ?page= only
+    if page_path == cat_prefix or page_path == (urlparse(category_url).path or "").rstrip("/").lower():
+        return True
+    return False
+
+
+def looks_like_category_listing_html(html: str) -> bool:
+    """True for product grids / listing pages (not a single Magento/Woo PDP)."""
+    low = (html or "").lower()
+    if not low or len(low) < 200:
+        return False
+    # Strong single-PDP signals → not a category
+    pdp_markers = (
+        'id="product_addtocart_form"',
+        "id='product_addtocart_form'",
+        "cutconfiguratorwidget",
+        "spconfig =",
+        "spconfig=",
+        '"@type":"product"',
+        '"@type": "product"',
+    )
+    if any(m in low for m in pdp_markers):
+        # Still allow if page also has a large product grid (rare)
+        grid_hits = (
+            low.count("product-item-link")
+            + low.count("product-item-info")
+            + low.count("type-product")
+        )
+        if grid_hits < 4:
+            return False
+    # Listing grids
+    if "products columns-" in low or "ul.products" in low:
+        return True
+    if low.count("product-item") >= 3 or low.count("product-card") >= 3:
+        return True
+    if low.count("type-product") >= 3:
+        return True
+    if low.count("product-item-link") >= 2:
+        return True
+    return False
+
+
 def is_direct_product_page_url(url: str) -> bool:
     """
     Magento SEO PDP heuristic (sheetplastics-style storefronts).
@@ -152,8 +275,11 @@ def is_direct_product_page_url(url: str) -> bool:
     - 2+ path segments (nested /category/product-slug)
 
     Category/home (crawl): short single slug like /clear-acrylic with no
-    product keywords.
+    product keywords; explicit /product-category/ paths are never PDPs.
     """
+    if is_category_listing_url(url):
+        return False
+
     parsed = urlparse(url or "")
     path = (parsed.path or "").strip().lower()
     if not path or path == "/":
@@ -163,6 +289,7 @@ def is_direct_product_page_url(url: str) -> bool:
         return False
 
     # Nested Magento SEO: /clear-acrylic/3mm-…-cut-to-size
+    # But /product-category/foo is already excluded above.
     if len(segments) >= 2:
         return True
 
@@ -317,7 +444,6 @@ def discover_from_html(
     soup = BeautifulSoup(html or "", "lxml")
     found: list[str] = []
     seen: set[str] = set()
-    origin = urlparse(base_url).netloc.lower()
 
     anchors = []
     if card_selector:
@@ -329,6 +455,8 @@ def discover_from_html(
     if not anchors:
         # Prefer product-card-ish containers first
         for sel in (
+            "ul.products li a.woocommerce-loop-product__link",
+            "a.woocommerce-loop-product__link",
             ".product-card a[href]",
             ".product-item a[href]",
             ".product a[href]",
@@ -350,9 +478,12 @@ def discover_from_html(
         full = canonicalize_product_url(urljoin(base_url, href))
         if not full:
             continue
-        if urlparse(full).netloc.lower() != origin:
+        if not _same_site_host(full, base_url):
             continue
-        if not _is_product_path(urlparse(full).path):
+        path = urlparse(full).path
+        if is_category_listing_url(full):
+            continue
+        if not (_is_product_path(path) or _is_woocommerce_product_href(full)):
             continue
         if full in seen:
             continue
@@ -363,29 +494,41 @@ def discover_from_html(
     return found
 
 
-def discover_pagination_urls(html: str, base_url: str, max_pages: int = 25) -> list[str]:
+def discover_pagination_urls(
+    html: str,
+    base_url: str,
+    max_pages: int = 25,
+    *,
+    stay_in_category: bool = False,
+) -> list[str]:
     soup = BeautifulSoup(html or "", "lxml")
-    origin = urlparse(base_url).netloc.lower()
     pages: list[str] = []
     seen = {canonicalize_product_url(base_url)}
 
     for a in soup.select(
         'a[rel="next"], a[class*="next"], .pagination a[href], '
-        'a[href*="page="], a[href*="/page/"]'
+        ".pages a[href], .woocommerce-pagination a[href], "
+        'a[href*="page="], a[href*="/page/"], a[href*="?p="], a[href*="&p="]'
     ):
         href = (a.get("href") or "").strip()
         if not href:
             continue
         full = urljoin(base_url, href).split("#")[0]
-        if urlparse(full).netloc.lower() != origin:
+        if not _same_site_host(full, base_url):
+            continue
+        if stay_in_category and not pagination_stays_in_category(full, base_url):
             continue
         key = canonicalize_product_url(full) or full
         # Keep page query for pagination
-        if "page=" not in full.lower() and "/page/" not in full.lower() and 'rel="next"' not in str(
-            a
+        low_full = full.lower()
+        if (
+            "page=" not in low_full
+            and "/page/" not in low_full
+            and not re.search(r"[?&]p=\d+", low_full)
+            and 'rel="next"' not in str(a).lower()
         ):
             text = (a.get_text(" ", strip=True) or "").lower()
-            if text not in ("next", "›", "»", ">", "older"):
+            if text not in ("next", "›", "»", ">", "older") and not text.isdigit():
                 continue
         if key in seen:
             continue
@@ -394,6 +537,325 @@ def discover_pagination_urls(html: str, base_url: str, max_pages: int = 25) -> l
         if len(pages) >= max_pages:
             break
     return pages
+
+
+def _category_page_url(category_url: str, page: int, *, param: str = "p") -> str:
+    """Build category URL with Magento (?p=) or WooCommerce (?page=) pagination."""
+    parsed = urlparse(category_url)
+    qs = parse_qs(parsed.query, keep_blank_values=False)
+    qs.pop("p", None)
+    qs.pop("page", None)
+    if page > 1:
+        qs[param] = [str(page)]
+    query = urlencode(
+        {k: v[0] if len(v) == 1 else v for k, v in qs.items()}, doseq=True
+    )
+    return urlunparse(
+        (parsed.scheme, parsed.netloc, parsed.path, parsed.params, query, "")
+    )
+
+
+def extract_products_from_listing_html(
+    html: str,
+    base_url: str,
+    *,
+    max_links: int = 500,
+    card_selector: str | None = None,
+) -> list[str]:
+    """Collect product PDP URLs from a category / listing HTML page."""
+    found = discover_from_html(
+        html, base_url, max_links=max_links, card_selector=card_selector
+    )
+    low = (html or "").lower()
+    if "product-item" in low or "product-item-link" in low:
+        found.extend(
+            discover_magento_from_category_html(html, base_url, max_links=max_links)
+        )
+    # WooCommerce / generic product cards (path may be /product/slug)
+    soup = BeautifulSoup(html or "", "lxml")
+    seen = set(found)
+    woo_selectors = (
+        "ul.products li a.woocommerce-loop-product__link",
+        "ul.products li.product a[href]",
+        "li.product a[href]",
+        ".type-product a[href]",
+        "a.woocommerce-loop-product__link[href]",
+        "a.woocommerce-LoopProduct-link[href]",
+        "a.product-item-link[href]",
+    )
+    for sel in woo_selectors:
+        try:
+            nodes = soup.select(sel)
+        except Exception:
+            continue
+        for a in nodes:
+            href = (a.get("href") or "").strip()
+            if not href or href.startswith(("#", "mailto:", "tel:", "javascript:")):
+                continue
+            full = canonicalize_product_url(urljoin(base_url, href))
+            if not full or not _same_site_host(full, base_url):
+                continue
+            path = urlparse(full).path.lower()
+            if any(s in path for s in SKIP_PATH_FRAGMENTS):
+                continue
+            if is_category_listing_url(full):
+                continue
+            if full in seen:
+                continue
+            if canonicalize_product_url(full) == canonicalize_product_url(base_url):
+                continue
+            if (
+                _is_woocommerce_product_href(full)
+                or _is_product_path(path)
+                or path.count("/") >= 1
+            ):
+                seen.add(full)
+                found.append(full)
+                if len(found) >= max_links:
+                    return unique_preserve(found)[:max_links]
+
+    # Fallback: any same-site <a href> whose path contains /product/ (not category)
+    if len(found) < max_links:
+        for a in soup.select("a[href]"):
+            href = (a.get("href") or "").strip()
+            if not href or href.startswith(("#", "mailto:", "tel:", "javascript:")):
+                continue
+            absolute = urljoin(base_url, href)
+            if not _is_woocommerce_product_href(absolute):
+                continue
+            full = canonicalize_product_url(absolute)
+            if not full or not _same_site_host(full, base_url):
+                continue
+            if full in seen or is_category_listing_url(full):
+                continue
+            seen.add(full)
+            found.append(full)
+            if len(found) >= max_links:
+                break
+
+    return unique_preserve(found)[:max_links]
+
+
+def discover_category_seed_products(
+    category_url: str,
+    get_text: GetTextFn,
+    *,
+    max_products: int = 500,
+    max_pages: int = 40,
+    card_selector: str | None = None,
+    logger: logging.Logger | None = None,
+) -> dict[str, Any]:
+    """
+    Crawl ONE category listing (seed) + its pagination only.
+
+    Does not follow other categories / nav. Product PDPs may live outside the
+    category path (e.g. /product/slug) — those are collected as results.
+    """
+    log = logger or logging.getLogger("sentivo_extractor")
+    seed = (category_url or "").strip()
+    notes: list[str] = ["category_seed_crawl"]
+    product_urls: list[str] = []
+    pagination_urls: list[str] = []
+    if not seed:
+        return {
+            "product_urls": [],
+            "pagination_urls": [],
+            "notes": ["empty_category_seed"],
+        }
+
+    log.info("[Category] Crawling category seed (scoped): %s", seed)
+
+    def _page_key(u: str) -> str:
+        return canonicalize_product_url(u) or u.rstrip("/").lower()
+
+    def _fetch_category_html(page_url: str) -> str:
+        """
+        Category pages: always Playwright first.
+
+        - No proxy → visible Chromium (headless=False)
+        - Proxy set → Playwright with proxy (headless=True)
+        - cloudscraper/requests (get_text) only after Playwright fails or
+          returns a Cloudflare challenge/block page.
+        """
+        from sentivo_extractor.core.cloudflare import html_title
+        from sentivo_extractor.core.http_client import (
+            fetch_with_playwright,
+            get_proxy,
+        )
+
+        def _is_cf_block(body: str) -> bool:
+            """
+            Cloudflare block only when BOTH:
+            - title contains "Attention Required" or "Sorry, you have been blocked"
+            - page length is under 10000 chars
+            Pages of 1,000,000+ chars are never a block.
+            """
+            text = body or ""
+            if len(text) >= 1_000_000:
+                return False
+            if len(text) >= 10_000:
+                return False
+            title = (html_title(text) or "").lower()
+            return (
+                "attention required" in title
+                or "sorry, you have been blocked" in title
+            )
+
+        proxy = get_proxy()
+        headless = bool(proxy)  # visible browser when no proxy
+        log.info(
+            "[Category] Playwright first (headless=%s proxy=%s): %s",
+            headless,
+            bool(proxy),
+            page_url,
+        )
+        html = ""
+        try:
+            html = fetch_with_playwright(
+                page_url, logger_=log, headless=headless
+            ) or ""
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "[Category] Playwright failed for %s: %s — falling back to get_text",
+                page_url,
+                exc,
+            )
+            html = ""
+
+        if (html or "").strip() and not _is_cf_block(html):
+            notes.append(f"category_playwright:{page_url}")
+            return html
+
+        if _is_cf_block(html or ""):
+            log.warning(
+                "[Category] Playwright returned Cloudflare block — "
+                "falling back to cloudscraper/get_text: %s",
+                page_url,
+            )
+            notes.append(f"category_playwright_cf_fallback:{page_url}")
+        else:
+            log.warning(
+                "[Category] Playwright empty/failed — "
+                "falling back to cloudscraper/get_text: %s",
+                page_url,
+            )
+            notes.append(f"category_playwright_empty_fallback:{page_url}")
+
+        return get_text(page_url)
+
+    queue: list[str] = [seed]
+    seen_pages: set[str] = set()
+    linked_pagination_found = False
+
+    idx = 0
+    while idx < len(queue) and len(product_urls) < max_products:
+        page_url = queue[idx]
+        idx += 1
+        key = _page_key(page_url)
+        if key in seen_pages:
+            continue
+        if page_url != seed and not pagination_stays_in_category(page_url, seed):
+            continue
+        if len(seen_pages) >= max_pages:
+            break
+        seen_pages.add(key)
+        try:
+            html = _fetch_category_html(page_url)
+        except Exception as exc:  # noqa: BLE001
+            notes.append(f"category_page_failed:{page_url}:{exc}")
+            continue
+        if not (html or "").strip():
+            continue
+
+        # Debug: what HTML did we actually get, and which /product/ links exist?
+        preview = (html or "")[:2000]
+        log.info(
+            "[Category] HTML preview (%s chars total) for %s:\n%s",
+            len(html or ""),
+            page_url,
+            preview,
+        )
+        soup_dbg = BeautifulSoup(html or "", "lxml")
+        product_hrefs: list[str] = []
+        seen_href: set[str] = set()
+        for a in soup_dbg.select("a[href]"):
+            href = (a.get("href") or "").strip()
+            if not href:
+                continue
+            absolute = urljoin(page_url, href)
+            if "/product/" not in absolute.lower():
+                continue
+            if absolute in seen_href:
+                continue
+            seen_href.add(absolute)
+            product_hrefs.append(absolute)
+        log.info(
+            "[Category] <a href> links containing /product/ on %s: %s",
+            page_url,
+            len(product_hrefs),
+        )
+        for ph in product_hrefs[:50]:
+            log.info("[Category]   product-href: %s", ph)
+        if not product_hrefs:
+            low_dbg = (html or "").lower()
+            if "attention required" in low_dbg or "you have been blocked" in low_dbg:
+                log.warning(
+                    "[Category] Page looks like a Cloudflare block — not real category HTML"
+                )
+            notes.append("category_no_product_hrefs_in_html")
+
+        platform_hint = infer_discovery_platform(html, url=page_url)
+        log.info("[Category] platform hint for %s: %s", page_url, platform_hint)
+
+        found = extract_products_from_listing_html(
+            html,
+            page_url,
+            max_links=max_products,
+            card_selector=card_selector,
+        )
+        found = [u for u in found if not is_category_listing_url(u)]
+        before = len(product_urls)
+        product_urls.extend(found)
+        product_urls = unique_preserve(product_urls)[:max_products]
+        new_count = len(product_urls) - before
+        log.info(
+            "[Category] page %s → %s new product URL(s) (total %s)",
+            page_url,
+            new_count,
+            len(product_urls),
+        )
+        notes.append(f"category_page:{page_url}:{new_count}")
+
+        for pu in discover_pagination_urls(
+            html, seed, max_pages=max_pages, stay_in_category=True
+        ):
+            linked_pagination_found = True
+            pagination_urls.append(pu)
+            pk = _page_key(pu)
+            if pk not in seen_pages:
+                queue.append(pu)
+
+        # After seed: if HTML had no pagination links, probe ?p= / ?page=
+        if page_url == seed and not linked_pagination_found:
+            for n in range(2, min(max_pages, 15) + 1):
+                queue.append(_category_page_url(seed, n, param="p"))
+                queue.append(_category_page_url(seed, n, param="page"))
+        elif page_url != seed and new_count == 0 and not linked_pagination_found:
+            # Synthetic pagination ended (no new products).
+            break
+
+    product_urls = unique_preserve(product_urls)[:max_products]
+    log.info(
+        "[Category] Category seed complete: %s product URL(s) from %s",
+        len(product_urls),
+        seed,
+    )
+    notes.append(f"category_products_total:{len(product_urls)}")
+    return {
+        "product_urls": product_urls,
+        "pagination_urls": unique_preserve(pagination_urls),
+        "notes": notes,
+    }
 
 
 def is_sitemap_index(xml_text: str) -> bool:
@@ -808,6 +1270,33 @@ def discover_domain_products(
         notes.append("magento_skip_robots_probes")
 
         if not is_homepage_url(seed_url):
+            # Category listing → scoped crawl; PDP → direct extract.
+            if is_category_listing_url(seed_url) or (
+                not is_direct_product_page_url(seed_url)
+                and looks_like_category_listing_html(html or "")
+            ):
+                log.info(
+                    "[Magento] Category seed — scoped crawl (no sitewide nav): %s",
+                    seed_url,
+                )
+                scoped = discover_category_seed_products(
+                    seed_url,
+                    get_text,
+                    max_products=max_products,
+                    max_pages=max_pages,
+                    card_selector=card_selector,
+                    logger=log,
+                )
+                notes.extend(list(scoped.get("notes") or []))
+                return {
+                    "product_urls": list(scoped.get("product_urls") or []),
+                    "pagination_urls": list(scoped.get("pagination_urls") or []),
+                    "sitemap_urls": [],
+                    "notes": notes,
+                    "platform": "Magento",
+                    "discovery_version": PRODUCT_DISCOVERY_VERSION,
+                }
+
             cu = canonicalize_product_url(seed_url) or seed_url.strip()
             notes.append("magento_direct_product_url")
             notes.append("magento_skip_category_crawl")

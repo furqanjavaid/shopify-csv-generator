@@ -50,11 +50,21 @@ from sentivo_extractor.core.pdp_pipeline import (
 from sentivo_extractor.core.image_engine import write_image_report
 from sentivo_extractor.core.variant_engine import write_variant_report
 from sentivo_extractor.core.platform_detector import detect_platform
+from sentivo_extractor.core.platform_fingerprint import (
+    PreflightFailedError,
+    clear_domain_platform_cache,
+    fingerprint_platform,
+    run_preflight,
+)
 from sentivo_extractor.core.product_discovery import (
     canonicalize_product_url,
     clear_sitemap_failure_cache,
+    discover_category_seed_products,
     discover_domain_products,
+    is_category_listing_url,
+    is_direct_product_page_url,
     is_homepage_url,
+    looks_like_category_listing_html,
     unique_preserve,
 )
 from sentivo_extractor.core.production_validation import (
@@ -238,6 +248,7 @@ class UniversalCrawler:
         self, input_csv: Path, seeds: list[dict[str, str]]
     ) -> dict[str, Any]:
         clear_sitemap_failure_cache()
+        clear_domain_platform_cache()
         self.logger.info("Product Discovery Version: Unified")
         self.logger.info("Output base: %s (domain subfolders + prefixed files)", self.base_output_dir)
 
@@ -265,6 +276,25 @@ class UniversalCrawler:
             product_urls = self._limit_urls_per_domain(product_urls, self.pilot_size)
         self.logger.info("Discovered %s product URL(s)", len(product_urls))
         print(f"Discovered {len(product_urls)} product URL(s)")
+
+        # PHASE 1–2: fingerprint + pre-flight gate (must pass before full extract).
+        try:
+            self._fingerprint_and_preflight(seeds, product_urls)
+        except PreflightFailedError as exc:
+            details = getattr(exc, "details", None) or {}
+            self.logger.error("Run stopped — pre-flight failed: %s", exc)
+            return {
+                "success": False,
+                "pre_flight_failed": True,
+                "pre_flight": details,
+                "reason": str(exc),
+                "products": 0,
+                "failed": 0,
+                "output_dir": str(self.base_output_dir),
+                "domain_output_dirs": {
+                    k: str(v) for k, v in self._domain_dirs.items()
+                },
+            }
 
         # Fresh product list when overwrite; otherwise resume with checkpoint products.
         if self.overwrite:
@@ -306,7 +336,16 @@ class UniversalCrawler:
                 continue
 
             # Sequential Magento path (human-like delays) skips production-validation loop.
-            if self._is_magento_url(url) and not self.production_validation:
+            # WooCommerce domains must never enter the Magento browser pool.
+            pinned = DecisionCoordinator.shared_selector().platform_for(url)
+            from sentivo_extractor.decision_engine.strategy_selector import (
+                is_woocommerce_url_hint,
+            )
+
+            if pinned == "WooCommerce" or is_woocommerce_url_hint(url):
+                DecisionCoordinator.remember_platform(url, "WooCommerce")
+                pending_other.append(url)
+            elif self._is_magento_url(url) and not self.production_validation:
                 DecisionCoordinator.remember_platform(url, "Magento")
                 pending_magento.append(url)
             else:
@@ -1116,7 +1155,18 @@ class UniversalCrawler:
         self._failed_reasons.append((url, reason))
 
     def _detect_seed_platform(self, url: str, domain: str) -> str:
-        """Live platform detect; remember Magento domains for sequential extraction."""
+        """Live platform detect; pin Magento/WooCommerce for the whole domain."""
+        from sentivo_extractor.decision_engine.strategy_selector import (
+            is_woocommerce_url_hint,
+        )
+
+        # /product-category/ or /product/slug → WooCommerce for ALL PDPs on this host.
+        if is_woocommerce_url_hint(url):
+            plat = "WooCommerce"
+            self.logger.info("Detected platform: %s (url hint)", plat)
+            DecisionCoordinator.remember_platform(url, "WooCommerce")
+            return plat
+
         if hasattr(self.http, "apply_browser_headers"):
             # Magento/Hyva storefronts often 403 without browser-like headers.
             self.http.apply_browser_headers()
@@ -1131,7 +1181,160 @@ class UniversalCrawler:
         if plat == "Magento":
             self._magento_domains.add(domain)
             DecisionCoordinator.remember_platform(url, "Magento")
+        elif plat == "WooCommerce":
+            DecisionCoordinator.remember_platform(url, "WooCommerce")
         return plat
+
+    def _fingerprint_and_preflight(
+        self,
+        seeds: list[dict[str, str]],
+        product_urls: list[str],
+    ) -> None:
+        """
+        Fingerprint each seed domain, pin DecisionEngine platform, then
+        extract ONE product as a pre-flight gate. Failure stops the run.
+        """
+        by_domain: dict[str, list[str]] = defaultdict(list)
+        for u in product_urls:
+            by_domain[domain_from_url(u)].append(u)
+
+        seed_by_domain: dict[str, str] = {}
+        for seed in seeds:
+            su = (seed.get("url") or "").strip()
+            if not su:
+                continue
+            seed_by_domain.setdefault(domain_from_url(su), su)
+
+        domains = list(seed_by_domain.keys()) or list(by_domain.keys())
+        if not domains:
+            raise PreflightFailedError(
+                "Pre-flight failed — no seed domains to fingerprint.",
+                details={"missing": ["domain"]},
+            )
+
+        for domain in domains:
+            seed_url = seed_by_domain.get(domain) or (
+                (by_domain.get(domain) or [""])[0]
+            )
+            if not seed_url:
+                continue
+
+            html = ""
+            try:
+                html = self.http.get_text(seed_url)
+            except Exception as exc:
+                self.logger.warning(
+                    "[Fingerprint] Seed HTML fetch failed for %s: %s", seed_url, exc
+                )
+
+            fp = fingerprint_platform(
+                seed_url,
+                html=html,
+                page_source=html,
+                get_text=self.http.get_text,
+                session=getattr(self.http, "session", None),
+                output_dir=self.base_output_dir,
+                use_cache=True,
+                logger=self.logger,
+            )
+            platform = str(fp.get("platform") or "Custom")
+            confidence = int(fp.get("confidence") or 0)
+            DecisionCoordinator.remember_platform(seed_url, platform)
+            if platform == "Magento":
+                self._magento_domains.add(domain)
+            self.logger.info(
+                "[Fingerprint] %s → %s (%spts) signals=%s%s",
+                domain,
+                platform,
+                confidence,
+                fp.get("signals") or [],
+                " [cache]" if fp.get("from_cache") else "",
+            )
+
+            candidates = list(by_domain.get(domain) or [])
+            product_url = candidates[0] if candidates else ""
+            if not product_url:
+                # Try a tiny scoped discovery if seed is a category/home.
+                try:
+                    if is_category_listing_url(seed_url):
+                        disc = discover_category_seed_products(
+                            seed_url,
+                            self.http.get_text,
+                            max_products=1,
+                            max_pages=1,
+                            logger=self.logger,
+                        )
+                        product_url = (disc.get("product_urls") or [""])[0]
+                    elif is_homepage_url(seed_url):
+                        disc = discover_domain_products(
+                            seed_url,
+                            self.http.get_text,
+                            max_products=1,
+                            follow_sitemaps=(platform != "Magento"),
+                            platform=platform,
+                            logger=self.logger,
+                        )
+                        product_url = (disc.get("product_urls") or [""])[0]
+                    elif not is_homepage_url(seed_url):
+                        product_url = canonicalize_product_url(seed_url) or seed_url
+                except Exception as exc:
+                    self.logger.warning(
+                        "[Pre-flight] Could not discover sample PDP for %s: %s",
+                        domain,
+                        exc,
+                    )
+
+            if not product_url:
+                raise PreflightFailedError(
+                    f"❌ Pre-flight FAILED [{platform}] — missing: product URL. "
+                    "Stopping run. Fix extraction before proceeding.",
+                    details={
+                        "platform": platform,
+                        "confidence": confidence,
+                        "domain": domain,
+                        "missing": ["product URL"],
+                    },
+                )
+
+            def _extract(url: str, *, platform: str = platform) -> dict[str, Any]:
+                rules = self.site_rules if isinstance(self.site_rules, dict) else {}
+                coordinator = DecisionCoordinator(
+                    http=self.http,
+                    options=self.options,
+                    registry=self.registry,
+                    site_rules=rules.get("selectors") or rules,
+                    logger=self.logger,
+                )
+                return coordinator.extract(url, platform=platform)
+
+            # Surface known blockers before pre-flight extract
+            if fp.get("blockers"):
+                self.logger.info(
+                    "[Known issues] %s blockers=%s anti_bot=%s vue_pricing=%s js_heavy=%s",
+                    domain,
+                    fp.get("blockers"),
+                    fp.get("anti_bot"),
+                    fp.get("vue_pricing"),
+                    fp.get("js_heavy"),
+                )
+
+            result = run_preflight(
+                seed_url=seed_url,
+                product_url=product_url,
+                platform=platform,
+                confidence=confidence,
+                extract_fn=_extract,
+                output_dir=self.base_output_dir,
+                fingerprint=fp,
+                logger=self.logger,
+            )
+            if not result.get("passed"):
+                missing = ", ".join(result.get("missing") or []) or "unknown"
+                raise PreflightFailedError(
+                    f"❌ Pre-flight FAILED — missing: {missing} — "
+                    "full run BLOCKED. Fix extraction first.",
+                    details=result,
+                )
 
     def _discover_all(self, seeds: list[dict[str, str]]) -> list[str]:
         urls: list[str] = []
@@ -1145,9 +1348,51 @@ class UniversalCrawler:
             meta = seed_metadata(seed)
             domain = domain_from_url(url)
 
-            # CSV / seed URLs: NEVER crawl unless the URL is the site homepage.
-            # type=product|pdp, category pages, and PDPs all go straight to extraction.
-            if kind in ("product", "pdp") or not is_homepage_url(url):
+            # Seed routing:
+            #   homepage            → full domain discovery
+            #   category / listing  → crawl that category + pagination only
+            #   product / PDP       → direct extract (no crawl)
+            remaining = self._remaining_for_domain(domain, per_domain_count[domain])
+            if remaining is not None and remaining <= 0:
+                self.logger.info(
+                    "max_products_per_domain reached for %s — skipping more discovery",
+                    domain,
+                )
+                continue
+
+            card_sel = None
+            rules = self._rules_for_url(url)
+            sels = rules.get("selectors") or {}
+            if isinstance(sels.get("product_card"), list) and sels["product_card"]:
+                card_sel = sels["product_card"][0]
+
+            force_product = kind in ("product", "pdp")
+            force_category = kind in ("category", "collection", "listing")
+            is_home = is_homepage_url(url)
+            treat_as_category = (not force_product) and (
+                force_category or is_category_listing_url(url)
+            )
+
+            # Ambiguous non-homepage / non-PDP: peek HTML for a product grid.
+            if (
+                not force_product
+                and not treat_as_category
+                and not is_home
+                and not is_direct_product_page_url(url)
+            ):
+                try:
+                    peek = self.http.get_text(url)
+                    if looks_like_category_listing_html(peek):
+                        treat_as_category = True
+                except Exception as exc:  # noqa: BLE001
+                    self.logger.warning(
+                        "Category peek failed for %s: %s — treating as product",
+                        url,
+                        exc,
+                    )
+
+            # Single product seed → direct extract (existing behaviour).
+            if not is_home and not treat_as_category:
                 try:
                     self._detect_seed_platform(url, domain)
                 except Exception as exc:  # noqa: BLE001
@@ -1163,40 +1408,36 @@ class UniversalCrawler:
                 per_domain_count[domain] += 1
                 continue
 
-            remaining = self._remaining_for_domain(domain, per_domain_count[domain])
-            if remaining is not None and remaining <= 0:
-                self.logger.info(
-                    "max_products_per_domain reached for %s — skipping more discovery",
-                    domain,
-                )
-                continue
-
-            card_sel = None
-            rules = self._rules_for_url(url)
-            sels = rules.get("selectors") or {}
-            if isinstance(sels.get("product_card"), list) and sels["product_card"]:
-                card_sel = sels["product_card"][0]
-
             try:
-                # Homepage only → platform detect + category/nav discovery.
                 plat = self._detect_seed_platform(url, domain)
 
-                # Magento: skip sitemap AND robots.txt gates — nav crawl only.
                 prev_robots = getattr(self.http, "respect_robots", True)
                 if plat == "Magento":
                     self.http.respect_robots = False
 
                 try:
-                    disc = discover_domain_products(
-                        url,
-                        self.http.get_text,
-                        max_products=remaining if remaining is not None else 10**9,
-                        # Magento must never be blocked by stale sitemap failure cache.
-                        follow_sitemaps=(plat != "Magento"),
-                        card_selector=card_sel,
-                        platform=plat,
-                        logger=self.logger,
-                    )
+                    if treat_as_category and not is_home:
+                        self.logger.info(
+                            "Category seed — scoped crawl (no sitewide nav): %s", url
+                        )
+                        disc = discover_category_seed_products(
+                            url,
+                            self.http.get_text,
+                            max_products=remaining if remaining is not None else 10**9,
+                            card_selector=card_sel,
+                            logger=self.logger,
+                        )
+                    else:
+                        # Homepage → platform detect + category/nav discovery.
+                        disc = discover_domain_products(
+                            url,
+                            self.http.get_text,
+                            max_products=remaining if remaining is not None else 10**9,
+                            follow_sitemaps=(plat != "Magento"),
+                            card_selector=card_sel,
+                            platform=plat,
+                            logger=self.logger,
+                        )
                 finally:
                     if plat == "Magento":
                         self.http.respect_robots = prev_robots
@@ -1206,6 +1447,20 @@ class UniversalCrawler:
                     self.logger.error(reason)
                     self._failed_reasons.append((url, reason))
                     continue
+                # Pin WooCommerce for the domain when category seed or /product/ PDPs.
+                from sentivo_extractor.decision_engine.strategy_selector import (
+                    is_woocommerce_url_hint,
+                )
+
+                if (
+                    plat == "WooCommerce"
+                    or is_woocommerce_url_hint(url)
+                    or any(is_woocommerce_url_hint(pu) for pu in found)
+                ):
+                    plat = "WooCommerce"
+                    DecisionCoordinator.remember_platform(url, "WooCommerce")
+                    for pu in found:
+                        DecisionCoordinator.remember_platform(pu, "WooCommerce")
                 for pu in found:
                     self._url_meta[pu] = meta
                 urls.extend(found)

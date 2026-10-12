@@ -7,6 +7,8 @@ from urllib.parse import urlparse
 
 from sentivo_extractor.core.schema import empty_product
 from sentivo_extractor.core.utils import absolute_url, normalize_price
+from sentivo_extractor.core.woocommerce_images import resolve_woocommerce_product_images
+from sentivo_extractor.core.woocommerce_title import apply_woocommerce_title_and_handle
 from sentivo_extractor.extractors.base import BaseExtractor
 from sentivo_extractor.extractors.html_extractor import HtmlExtractor
 from sentivo_extractor.extractors.jsonld_extractor import JsonLdExtractor
@@ -24,21 +26,38 @@ class WooCommerceExtractor(BaseExtractor):
         context: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         ctx = context or {}
+        ctx = {**ctx, "platform": "WooCommerce"}
         client = ctx.get("http")
         if client is not None:
             api_product = self._try_store_api(url, client)
             if api_product:
-                return api_product
+                resolve_woocommerce_product_images(
+                    api_product, html, logger=ctx.get("logger"), force=True
+                )
+                return apply_woocommerce_title_and_handle(
+                    api_product,
+                    html,
+                    logger=ctx.get("logger"),
+                    force=True,
+                )
 
         # Prefer JSON-LD then HTML
         for extractor in (JsonLdExtractor(), HtmlExtractor()):
-            result = extractor.extract(url, html, context=context)
+            result = extractor.extract(url, html, context=ctx)
             if result and result.get("title"):
                 result["extraction_method"] = f"woocommerce+{extractor.name}"
                 result["confidence_score"] = max(
                     float(result.get("confidence_score") or 0), 0.7
                 )
-                return result
+                resolve_woocommerce_product_images(
+                    result, html, logger=ctx.get("logger"), force=True
+                )
+                return apply_woocommerce_title_and_handle(
+                    result,
+                    html,
+                    logger=ctx.get("logger"),
+                    force=True,
+                )
         return None
 
     def _try_store_api(self, url: str, client) -> dict[str, Any] | None:
@@ -121,4 +140,5 @@ class WooCommerceExtractor(BaseExtractor):
                 "variant_image": "",
             }
         ]
+        product["platform"] = "WooCommerce"
         return product

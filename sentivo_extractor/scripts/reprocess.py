@@ -29,6 +29,11 @@ from sentivo_extractor.core.utils import (
     normalize_price,
 )
 from sentivo_extractor.core.validator import validate_products
+from sentivo_extractor.core.woocommerce_images import (
+    apply_woocommerce_image_cap,
+    resolve_woocommerce_product_images,
+)
+from sentivo_extractor.core.woocommerce_title import apply_woocommerce_title_and_handle
 from sentivo_extractor.post_processors.variant_merger import merge_products_by_base_title
 
 # Ignore top-level "price" (£0.00 per cm² quirk). Prefer cached sqm rates.
@@ -175,6 +180,42 @@ def reprocess(input_dir: Path, *, delay: float = 0.5) -> Path:
     if not products:
         raise RuntimeError("No valid products found in raw_json_backup/")
 
+    # WooCommerce title/handle + gallery-first image cleanup (no re-scrape).
+    woo_fixed = 0
+    woo_img_fixed = 0
+    domain_key_hint = infer_domain_key_from_dir(input_dir)
+    force_woo = domain_key_hint in {
+        "thepolycarbonatestore",
+        "www.thepolycarbonatestore",
+    }
+    for product in products:
+        before_title = str(product.get("title") or "")
+        before_handle = str(product.get("handle") or "")
+        before_imgs = len(product.get("images") or [])
+        html = str(
+            product.get("page_html")
+            or product.get("html")
+            or product.get("debug_html")
+            or ""
+        )
+        method = str(product.get("extraction_method") or "").lower()
+        platform = str(product.get("platform") or "")
+        force = (
+            force_woo
+            or platform == "WooCommerce"
+            or "woocommerce" in method
+        )
+        if force:
+            resolve_woocommerce_product_images(product, html, force=True)
+            apply_woocommerce_image_cap(product)
+        apply_woocommerce_title_and_handle(product, html, force=force)
+        if product.get("title") != before_title or product.get("handle") != before_handle:
+            woo_fixed += 1
+        if len(product.get("images") or []) != before_imgs:
+            woo_img_fixed += 1
+    print(f"  WooCommerce title/handle cleaned: {woo_fixed} product(s)")
+    print(f"  WooCommerce images filtered: {woo_img_fixed} product(s)")
+
     hydrated = _hydrate_cts_prices(products)
     print(f"  CTS pricePerSqm hydrated: {hydrated} product(s)")
 
@@ -195,6 +236,22 @@ def reprocess(input_dir: Path, *, delay: float = 0.5) -> Path:
     before = len(products)
     products = merge_products_by_base_title(products, log=log, http=http)
     print(f"  merge: {before} → {len(products)} product(s)")
+
+    # Re-apply Woo image cap after merge (merged products can re-accumulate images).
+    if force_woo or any(
+        str(p.get("platform") or "") == "WooCommerce"
+        or "woocommerce" in str(p.get("extraction_method") or "").lower()
+        for p in products
+    ):
+        for product in products:
+            html = str(
+                product.get("page_html")
+                or product.get("html")
+                or product.get("debug_html")
+                or ""
+            )
+            resolve_woocommerce_product_images(product, html, force=True)
+            apply_woocommerce_image_cap(product)
 
     # After merge: only fill blank/£0.00 cm² slots — keep per-Size rates.
     hydrated = _hydrate_cts_prices(products, only_blank=True)

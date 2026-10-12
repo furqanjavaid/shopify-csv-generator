@@ -22,7 +22,10 @@ def _strip_html(text: str) -> str:
 
 
 def _has_title(data: dict[str, Any]) -> bool:
-    return bool(str(data.get("title") or data.get("name") or "").strip())
+    from sentivo_extractor.core.platform_fingerprint import is_valid_product_title
+
+    title = str(data.get("title") or data.get("name") or "").strip()
+    return is_valid_product_title(title)
 
 
 def _has_price(data: dict[str, Any]) -> bool:

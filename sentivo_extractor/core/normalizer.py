@@ -16,6 +16,15 @@ from sentivo_extractor.core.utils import (
     sanitize_sku,
     stable_handle,
 )
+from sentivo_extractor.core.woocommerce_images import (
+    WOO_MAX_IMAGES,
+    apply_woocommerce_image_cap,
+    resolve_woocommerce_product_images,
+)
+from sentivo_extractor.core.woocommerce_title import (
+    apply_woocommerce_title_and_handle,
+    looks_like_woocommerce_url,
+)
 
 
 def _clean_html_description(text: str) -> str:
@@ -127,7 +136,19 @@ def normalize_product(raw: dict[str, Any], base_url: str = "") -> dict[str, Any]
     base = base_url or source
 
     product["title"] = re.sub(r"\s+", " ", str(product.get("title") or "")).strip()
-    product["handle"] = product.get("handle") or stable_handle(product["title"], source)
+    # WooCommerce: strip " | Site Name" and always regen handle from cleaned title.
+    is_woo = (
+        str(product.get("platform") or "") == "WooCommerce"
+        or "woocommerce" in str(product.get("extraction_method") or "").lower()
+        or looks_like_woocommerce_url(source)
+    )
+    if is_woo:
+        apply_woocommerce_title_and_handle(product, force=True)
+        resolve_woocommerce_product_images(product, force=True)
+    else:
+        # Keep pre-built unique handles (e.g. thickness/SKU from CutConfigurator).
+        existing_handle = str(product.get("handle") or "").strip()
+        product["handle"] = existing_handle or stable_handle(product["title"], source)
     product["description_html"] = _clean_html_description(
         str(product.get("description_html") or "")
     )
@@ -147,6 +168,8 @@ def normalize_product(raw: dict[str, Any], base_url: str = "") -> dict[str, Any]
 
     images = _dedupe_images(product.get("images") or [], base)
     product["images"] = images
+    if is_woo:
+        apply_woocommerce_image_cap(product, max_images=WOO_MAX_IMAGES)
 
     currency = str(product.get("currency") or "")
     variants_in = list(product.get("variants") or [])

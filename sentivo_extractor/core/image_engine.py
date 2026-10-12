@@ -15,6 +15,14 @@ from bs4 import BeautifulSoup
 from sentivo_extractor.core.image_checker import verify_image_url
 from sentivo_extractor.core.image_pipeline import prefer_largest_srcset, unwrap_next_image
 from sentivo_extractor.core.utils import absolute_url, write_json
+from sentivo_extractor.core.woocommerce_images import (
+    WOO_MAX_IMAGES,
+    apply_woocommerce_image_cap,
+    extract_woocommerce_gallery_images,
+    filter_woocommerce_jsonld_images,
+    resolve_woocommerce_product_images,
+)
+from sentivo_extractor.core.woocommerce_title import looks_like_woocommerce_url
 from sentivo_extractor.extractors.jsonld_extractor import JsonLdExtractor
 
 SOURCE_DOM = "DOM"
@@ -25,12 +33,30 @@ SOURCE_PLAYWRIGHT = "Playwright"
 
 RETRY_SOURCE_ORDER = (SOURCE_DOM, SOURCE_JSON, SOURCE_NETWORK, SOURCE_PLAYWRIGHT)
 
-_JUNK_PATH = re.compile(
+# Hard chrome / tracker assets only — do NOT match bare "logo"/"icon" substrings
+# (WooCommerce CDN paths often contain those words in product filenames).
+_HARD_JUNK_PATH = re.compile(
     r"(favicon|sprite|placeholder|blank\.|1x1|pixel\.|spacer|"
-    r"logo|/icon[s]?/|/icons/|thumb(nail)?s?/|/thumb[_-]|"
-    r"badge|payment|trustpilot|klarna|paypal|visa|mastercard|"
-    r"loading\.|spinner|avatar|profile-pic)",
+    r"trustpilot|klarna|paypal[-_]?mark|visa[-_]?card|mastercard|"
+    r"loading\.gif|spinner\.|/avatar/|profile-pic)",
     re.I,
+)
+# Path-segment chrome (filename or directory), not arbitrary substrings.
+_CHROME_ASSET_PATH = re.compile(
+    r"/(?:logos?|icons?|badges?)/(?:payment|pay|cart|search|menu|social)?|"
+    r"/(?:logo|icon|badge)(?:[-_.][^/]*)?\.(?:png|jpe?g|gif|webp|svg)(?:$|\?)|"
+    r"[-_](?:site[-_]?logo|header[-_]?logo|footer[-_]?logo)\.|"
+    r"/payment[-_](?:icon|logo|badge)",
+    re.I,
+)
+# Soft-reject reasons that should not drop JSON-LD product images.
+_SOFT_VERIFY_ERRORS = frozenset(
+    {
+        "empty response",
+        "empty_body",
+        "not_image_data",
+        "too_small",
+    }
 )
 _SIZE_IN_PATH = re.compile(
     r"(_|-)(\d{2,4})x(\d{2,4})(?=\.|/|$)|"
@@ -148,40 +174,86 @@ def is_navigation_image_url(url: str) -> bool:
     if not url:
         return False
     low = url.lower()
-    if "/theme/menu/" in low or "/theme/" in low:
+    if "/theme/menu/" in low:
         return True
     # Magento: product images live under /media/catalog/product/
     if "/media/" in low and "/media/catalog/product/" not in low:
+        # Allow common Woo/WP media upload trees mistaken for Magento /media/
+        if "/wp-content/" in low or "/uploads/" in low:
+            return False
         return True
     return False
 
 
-def is_junk_image_url(url: str, alt: str = "") -> bool:
-    if not url or url.startswith("data:"):
-        return True
-    if is_navigation_image_url(url):
-        return True
+def image_reject_reason(
+    url: str,
+    alt: str = "",
+    *,
+    source: str = "",
+    soft: bool = False,
+) -> str | None:
+    """
+    Return a rejection reason, or None if the URL should be kept.
+
+    JSON-LD / structured product sources use soft=True so CDN paths containing
+    'logo'/'icon' substrings are not false-rejected.
+    """
+    if not url:
+        return "empty_url"
+    if url.startswith("data:"):
+        return "data_uri"
     low = url.lower()
-    if _JUNK_PATH.search(low):
-        return True
-    alt_low = (alt or "").lower()
-    if alt_low in {"logo", "icon"} or "logo" in alt_low and len(alt_low) < 24:
-        return True
+    if is_navigation_image_url(url):
+        return "navigation_or_theme_media"
+    if _HARD_JUNK_PATH.search(low):
+        return f"hard_junk_path:{_HARD_JUNK_PATH.search(low).group(0)}"
+    alt_low = (alt or "").lower().strip()
+    if alt_low in {"logo", "icon", "site logo", "company logo"}:
+        return f"chrome_alt:{alt_low}"
+    if soft:
+        # Structured product images: only hard chrome filenames.
+        if _CHROME_ASSET_PATH.search(low) and SOURCE_JSONLD not in (source or ""):
+            # Still allow if path also looks like a product upload (wp-content/uploads)
+            if "/uploads/" not in low and "/catalog/product/" not in low:
+                return f"chrome_asset_path:{_CHROME_ASSET_PATH.search(low).group(0)}"
+        return None
+    if _CHROME_ASSET_PATH.search(low):
+        # WooCommerce uploads often include brand words — keep /uploads/ and catalog.
+        if "/uploads/" in low or "/catalog/product/" in low or "/product" in low:
+            return None
+        return f"chrome_asset_path:{_CHROME_ASSET_PATH.search(low).group(0)}"
     parsed = urlparse(low)
-    if parsed.path.endswith(".svg") and any(
-        x in parsed.path for x in ("logo", "icon", "badge")
-    ):
-        return True
-    return False
+    if parsed.path.endswith(".svg"):
+        stem = parsed.path.rsplit("/", 1)[-1]
+        if stem.startswith(("logo", "icon", "badge")) or stem in {
+            "logo.svg",
+            "icon.svg",
+        }:
+            return "chrome_svg"
+    return None
 
 
-def _reject_at_collect(url: str, alt: str = "") -> bool:
-    """Skip non-navigation junk early; keep nav URLs for finalize count+drop."""
+def is_junk_image_url(url: str, alt: str = "", *, source: str = "") -> bool:
+    soft = (source or "") in {SOURCE_JSONLD, SOURCE_JSON, "JSON-LD", "JSON"}
+    return image_reject_reason(url, alt, source=source, soft=soft) is not None
+
+
+def _reject_at_collect(url: str, alt: str = "", source: str = "") -> bool:
+    """Skip hard junk early; keep nav URLs for finalize count+drop."""
     if not url:
         return True
     if is_navigation_image_url(url):
         return False
-    return is_junk_image_url(url, alt)
+    soft = (source or "") in {SOURCE_JSONLD, SOURCE_JSON, "JSON-LD", "JSON"}
+    reason = image_reject_reason(url, alt, source=source, soft=soft)
+    return reason is not None
+
+
+def _log_image_rejected(
+    logger: logging.Logger | None, url: str, reason: str
+) -> None:
+    log = logger or logging.getLogger(__name__)
+    log.info("Image rejected: %s — reason: %s", url, reason)
 
 
 def _width_hint_from_url(url: str) -> int:
@@ -266,13 +338,41 @@ class ProductionImageEngine:
 
         return result
 
+    @staticmethod
+    def _is_woocommerce_product(product: dict[str, Any], url: str = "") -> bool:
+        platform = str(product.get("platform") or "")
+        method = str(product.get("extraction_method") or "").lower()
+        src = str(product.get("source_url") or url or "")
+        return (
+            platform == "WooCommerce"
+            or "woocommerce" in method
+            or looks_like_woocommerce_url(src)
+        )
+
     def apply_to_product(
         self, product: dict[str, Any], result: ImageEngineResult
     ) -> dict[str, Any]:
         if not isinstance(product, dict):
             return product
-        product["images"] = list(result.images)
-        product["image_engine_report"] = result.to_report(url=product.get("source_url") or "")
+        prior = list(product.get("images") or [])
+        is_woo = self._is_woocommerce_product(product)
+        if result.images:
+            product["images"] = list(result.images)
+        elif prior:
+            # Never wipe JSON-LD / extractor images when the filter over-rejects.
+            # WooCommerce: prior must already be gallery-filtered (never restore 25+ junk).
+            self.logger.warning(
+                "Image engine returned 0 verified images — keeping %s prior image(s)",
+                len(prior),
+            )
+            product["images"] = prior
+        else:
+            product["images"] = []
+        if is_woo:
+            apply_woocommerce_image_cap(product, max_images=WOO_MAX_IMAGES)
+        product["image_engine_report"] = result.to_report(
+            url=product.get("source_url") or ""
+        )
         by_src = {m["normalized_src"]: m for m in result.variant_mappings}
         for idx, variant in enumerate(product.get("variants") or []):
             if not isinstance(variant, dict):
@@ -299,6 +399,54 @@ class ProductionImageEngine:
         network_json: list[Any],
         product: dict[str, Any],
     ) -> dict[str, list[ImageCandidate]]:
+        is_woo = self._is_woocommerce_product(product, url)
+        page_html = rendered_html or html
+
+        if is_woo:
+            # Gallery-first only — never vacuum related/banner/blog images.
+            gallery = extract_woocommerce_gallery_images(
+                page_html or html, url, max_images=WOO_MAX_IMAGES
+            )
+            dom = [
+                ImageCandidate(
+                    url=str(img.get("src") or ""),
+                    source=SOURCE_DOM,
+                    alt=str(img.get("alt") or ""),
+                    width_hint=_width_hint_from_url(str(img.get("src") or "")),
+                )
+                for img in gallery
+                if img.get("src")
+            ]
+            pw_dom = [
+                ImageCandidate(
+                    url=c.url,
+                    source=SOURCE_PLAYWRIGHT,
+                    alt=c.alt,
+                    width_hint=c.width_hint,
+                )
+                for c in dom
+            ]
+            # Embedded product images already filtered upstream; still re-filter.
+            resolve_woocommerce_product_images(
+                product, page_html or html, logger=self.logger, force=True
+            )
+            embedded = self._collect_embedded(product, html, url)[:WOO_MAX_IMAGES]
+            json_ld = self._collect_jsonld(html, url, woo=True, product=product)
+            # Prefer gallery; if empty keep at most first JSON-LD image.
+            if dom:
+                json_bucket = []
+                network = []
+            else:
+                json_bucket = (json_ld[:1] + embedded[:1])[:1]
+                network = []
+            variant_cands = self._collect_variant_images(product, url)
+            return {
+                SOURCE_DOM: dom + variant_cands,
+                SOURCE_JSON: json_bucket,
+                SOURCE_NETWORK: network,
+                SOURCE_PLAYWRIGHT: pw_dom,
+            }
+
         dom = self._collect_dom(html, url)
         json_ld = self._collect_jsonld(html, url)
         embedded = self._collect_embedded(product, html, url)
@@ -330,6 +478,7 @@ class ProductionImageEngine:
             ".product-gallery img",
             ".product__media img",
             "[data-product-gallery] img",
+            ".woocommerce-product-gallery__image img",
             ".woocommerce-product-gallery img",
             'img[itemprop="image"]',
             ".product-image img",
@@ -358,27 +507,47 @@ class ProductionImageEngine:
                         )
                         src = unwrap_next_image(src, base_url)
                 src = normalize_image_url(src, base_url)
-                if not src or src in seen or _reject_at_collect(src, node.get("alt") or ""):
+                if not src or src in seen:
+                    continue
+                alt = str(node.get("alt") or "")
+                reason = image_reject_reason(src, alt, source=SOURCE_DOM, soft=False)
+                if reason:
+                    _log_image_rejected(self.logger, src, reason)
                     continue
                 seen.add(src)
                 out.append(
                     ImageCandidate(
                         url=src,
                         source=SOURCE_DOM,
-                        alt=str(node.get("alt") or ""),
+                        alt=alt,
                         width_hint=width_hint or _width_hint_from_url(src),
                     )
                 )
         return out
 
-    def _collect_jsonld(self, html: str, base_url: str) -> list[ImageCandidate]:
+    def _collect_jsonld(
+        self,
+        html: str,
+        base_url: str,
+        *,
+        woo: bool = False,
+        product: dict[str, Any] | None = None,
+    ) -> list[ImageCandidate]:
         out: list[ImageCandidate] = []
         if not html:
             return out
-        raw = JsonLdExtractor().extract(base_url, html)
+        ctx = {"platform": "WooCommerce"} if woo else None
+        raw = JsonLdExtractor().extract(base_url, html, context=ctx)
         if not isinstance(raw, dict):
             return out
-        for img in raw.get("images") or []:
+        images = list(raw.get("images") or [])
+        if woo:
+            images = filter_woocommerce_jsonld_images(
+                images,
+                url=base_url,
+                title=str((product or {}).get("title") or raw.get("title") or ""),
+            )
+        for img in images:
             if isinstance(img, dict):
                 src = normalize_image_url(str(img.get("src") or ""), base_url)
                 alt = str(img.get("alt") or "")
@@ -387,15 +556,23 @@ class ProductionImageEngine:
                 alt = ""
             else:
                 continue
-            if src and not _reject_at_collect(src, alt):
-                out.append(
-                    ImageCandidate(
-                        url=src,
-                        source=SOURCE_JSONLD,
-                        alt=alt,
-                        width_hint=_width_hint_from_url(src),
-                    )
+            if not src:
+                continue
+            # JSON-LD product images: never drop for logo/icon substring false-positives.
+            reason = image_reject_reason(
+                src, alt, source=SOURCE_JSONLD, soft=True
+            )
+            if reason:
+                _log_image_rejected(self.logger, src, reason)
+                continue
+            out.append(
+                ImageCandidate(
+                    url=src,
+                    source=SOURCE_JSONLD,
+                    alt=alt,
+                    width_hint=_width_hint_from_url(src),
                 )
+            )
         return out
 
     def _collect_embedded(
@@ -413,15 +590,22 @@ class ProductionImageEngine:
                 alt = ""
             else:
                 continue
-            if src and not _reject_at_collect(src, alt):
-                out.append(
-                    ImageCandidate(
-                        url=src,
-                        source=SOURCE_JSON,
-                        alt=alt,
-                        width_hint=_width_hint_from_url(src),
-                    )
+            if not src:
+                continue
+            reason = image_reject_reason(
+                src, alt, source=SOURCE_JSON, soft=True
+            )
+            if reason:
+                _log_image_rejected(self.logger, src, reason)
+                continue
+            out.append(
+                ImageCandidate(
+                    url=src,
+                    source=SOURCE_JSON,
+                    alt=alt,
+                    width_hint=_width_hint_from_url(src),
                 )
+            )
 
         blobs: list[Any] = []
         try:
@@ -479,28 +663,43 @@ class ProductionImageEngine:
                     for item in imgs:
                         if isinstance(item, str):
                             src = normalize_image_url(item, base_url)
-                            if src and not _reject_at_collect(src):
-                                out.append(
-                                    ImageCandidate(
-                                        url=src,
-                                        source=source,
-                                        width_hint=_width_hint_from_url(src),
-                                    )
+                            if not src:
+                                continue
+                            reason = image_reject_reason(
+                                src, source=source, soft=True
+                            )
+                            if reason:
+                                _log_image_rejected(None, src, reason)
+                                continue
+                            out.append(
+                                ImageCandidate(
+                                    url=src,
+                                    source=source,
+                                    width_hint=_width_hint_from_url(src),
                                 )
+                            )
                         elif isinstance(item, dict):
                             src = normalize_image_url(
                                 str(item.get("src") or item.get("url") or ""),
                                 base_url,
                             )
-                            if src and not _reject_at_collect(src, str(item.get("alt") or "")):
-                                out.append(
-                                    ImageCandidate(
-                                        url=src,
-                                        source=source,
-                                        alt=str(item.get("alt") or ""),
-                                        width_hint=_width_hint_from_url(src),
-                                    )
+                            alt = str(item.get("alt") or "")
+                            if not src:
+                                continue
+                            reason = image_reject_reason(
+                                src, alt, source=source, soft=True
+                            )
+                            if reason:
+                                _log_image_rejected(None, src, reason)
+                                continue
+                            out.append(
+                                ImageCandidate(
+                                    url=src,
+                                    source=source,
+                                    alt=alt,
+                                    width_hint=_width_hint_from_url(src),
                                 )
+                            )
             if "image" in node:
                 img = node.get("image")
                 urls: list[str] = []
@@ -514,30 +713,40 @@ class ProductionImageEngine:
                         urls = [str(u)]
                 for u in urls:
                     src = normalize_image_url(u, base_url)
-                    if src and not _reject_at_collect(src):
-                        out.append(
-                            ImageCandidate(
-                                url=src,
-                                source=source,
-                                width_hint=_width_hint_from_url(src),
-                            )
+                    if not src:
+                        continue
+                    reason = image_reject_reason(src, source=source, soft=True)
+                    if reason:
+                        _log_image_rejected(None, src, reason)
+                        continue
+                    out.append(
+                        ImageCandidate(
+                            url=src,
+                            source=source,
+                            width_hint=_width_hint_from_url(src),
                         )
+                    )
             for v in node.get("variants") or []:
                 if isinstance(v, dict):
                     vi = v.get("image") or v.get("featured_image") or v.get("variant_image")
                     if isinstance(vi, dict):
                         vi = vi.get("src") or vi.get("url")
                     src = normalize_image_url(str(vi or ""), base_url)
-                    if src and not _reject_at_collect(src):
-                        key = str(v.get("sku") or v.get("id") or "")
-                        out.append(
-                            ImageCandidate(
-                                url=src,
-                                source=source,
-                                variant_key=key,
-                                width_hint=_width_hint_from_url(src),
-                            )
+                    if not src:
+                        continue
+                    reason = image_reject_reason(src, source=source, soft=True)
+                    if reason:
+                        _log_image_rejected(None, src, reason)
+                        continue
+                    key = str(v.get("sku") or v.get("id") or "")
+                    out.append(
+                        ImageCandidate(
+                            url=src,
+                            source=source,
+                            variant_key=key,
+                            width_hint=_width_hint_from_url(src),
                         )
+                    )
             for val in node.values():
                 if isinstance(val, (dict, list)):
                     out.extend(
@@ -556,15 +765,20 @@ class ProductionImageEngine:
             if not isinstance(v, dict):
                 continue
             src = normalize_image_url(str(v.get("variant_image") or ""), base_url)
-            if src and not _reject_at_collect(src):
-                out.append(
-                    ImageCandidate(
-                        url=src,
-                        source=SOURCE_DOM,
-                        variant_key=str(v.get("sku") or ""),
-                        width_hint=_width_hint_from_url(src),
-                    )
+            if not src:
+                continue
+            reason = image_reject_reason(src, source=SOURCE_DOM, soft=False)
+            if reason:
+                _log_image_rejected(self.logger, src, reason)
+                continue
+            out.append(
+                ImageCandidate(
+                    url=src,
+                    source=SOURCE_DOM,
+                    variant_key=str(v.get("sku") or ""),
+                    width_hint=_width_hint_from_url(src),
                 )
+            )
         return out
 
     def _finalize(
@@ -584,11 +798,20 @@ class ProductionImageEngine:
         if nav_filtered:
             self.logger.info("Navigation image filtered: %s", nav_filtered)
 
-        filtered = [
-            c
-            for c in candidates
-            if c.url and not is_junk_image_url(c.url, c.alt)
-        ]
+        filtered: list[ImageCandidate] = []
+        for c in candidates:
+            if not c.url:
+                continue
+            reason = image_reject_reason(
+                c.url,
+                c.alt,
+                source=c.source,
+                soft=c.source in {SOURCE_JSONLD, SOURCE_JSON},
+            )
+            if reason:
+                _log_image_rejected(self.logger, c.url, reason)
+                continue
+            filtered.append(c)
 
         groups: dict[str, list[ImageCandidate]] = {}
         for c in filtered:
@@ -612,6 +835,7 @@ class ProductionImageEngine:
         for i, cand in enumerate(picked, start=1):
             check_url = cand.url
             ok = True
+            soft_keep = False
             verify_meta: dict[str, Any] = {}
             if self.verify:
                 verify_meta = verify_image_url(
@@ -624,6 +848,37 @@ class ProductionImageEngine:
                 ok = bool(verify_meta.get("ok"))
                 if verify_meta.get("final_url"):
                     check_url = str(verify_meta["final_url"])
+                if not ok:
+                    err = str(verify_meta.get("error") or "verify_failed")
+                    err_l = err.lower()
+                    # Structured product images + proxy/dimension failures: keep URL.
+                    soft_keep = cand.source in {
+                        SOURCE_JSONLD,
+                        SOURCE_JSON,
+                    } or any(
+                        token in err_l
+                        for token in (
+                            "proxy",
+                            "timeout",
+                            "timed out",
+                            "connection",
+                            "empty response",
+                            "empty_body",
+                            "too_small",
+                            "not_image_data",
+                        )
+                    )
+                    if soft_keep:
+                        self.logger.warning(
+                            "Image verify soft-keep (proxy/dimensions): %s — reason: %s",
+                            cand.url,
+                            err,
+                        )
+                        ok = True
+                    else:
+                        _log_image_rejected(
+                            self.logger, cand.url, f"verify_failed:{err}"
+                        )
             if ok:
                 verified_urls[cand.url] = check_url
                 verified_images.append(
@@ -632,6 +887,7 @@ class ProductionImageEngine:
                         "alt": cand.alt,
                         "position": len(verified_images) + 1,
                         "source": cand.source,
+                        "verify_soft_kept": soft_keep,
                     }
                 )
             else:

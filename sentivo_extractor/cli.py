@@ -196,12 +196,23 @@ def run_extract(args: argparse.Namespace) -> int:
         options["production_validation"] = True
     if options.get("pilot") and (not args.output or args.output == "output"):
         options["output"] = "output/pilot"
+
     crawler = UniversalCrawler(options)
+    summary: dict | None = None
     try:
         summary = crawler.run(Path(args.input))
     except RuntimeError as exc:
         print(f"ERROR: {exc}")
         return 2
+    if not summary:
+        return 2
+    if summary.get("pre_flight_failed"):
+        print("\n=== Extract stopped — pre-flight failed ===")
+        pf = summary.get("pre_flight") or {}
+        print(f"Platform: {pf.get('platform') or '?'}")
+        print(f"Missing: {', '.join(pf.get('missing') or []) or '?'}")
+        print(f"Reason: {summary.get('reason') or ''}")
+        return 5
     print("\n=== Extract complete ===")
     out = Path(options["output"])
     domain_dirs = summary.get("domain_output_dirs") or {}

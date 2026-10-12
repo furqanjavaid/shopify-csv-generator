@@ -101,16 +101,24 @@ class MagentoBrowserPool:
     async def _async_start(self) -> None:
         from playwright.async_api import async_playwright
 
+        from sentivo_extractor.core.http_client import playwright_proxy
+
         self._pw = await async_playwright().start()
         args = ["--disable-blink-features=AutomationControlled"]
+        launch_kwargs: dict[str, Any] = {"headless": False, "args": args}
+        proxy = playwright_proxy()
+        if proxy:
+            launch_kwargs["proxy"] = proxy
+            self.logger.info(
+                "[Magento] Playwright launching with proxy server=%s",
+                proxy.get("server"),
+            )
         try:
             self._browser = await self._pw.chromium.launch(
-                channel="chrome", headless=False, args=args
+                channel="chrome", **launch_kwargs
             )
         except Exception:
-            self._browser = await self._pw.chromium.launch(
-                headless=False, args=args
-            )
+            self._browser = await self._pw.chromium.launch(**launch_kwargs)
         extra = {
             k: v
             for k, v in BROWSER_HEADERS.items()
@@ -197,26 +205,49 @@ class MagentoBrowserPool:
             except Exception:
                 pass
             await self._page.wait_for_timeout(settle)
-            # Give Vue CutConfiguratorWidget time to hydrate store.
+            # Widget loads AFTER networkidle — mandatory 3–5s settle then typeof check.
+            await self._page.wait_for_timeout(4000)
             try:
                 await self._page.wait_for_function(
-                    """() => {
-                        const w = window.CutConfiguratorWidget;
-                        return !!(w && w.vm && w.vm.$store
-                          && w.vm.$store.state
-                          && w.vm.$store.state.Configurator
-                          && w.vm.$store.state.Configurator.confData);
-                    }""",
-                    timeout=15000,
+                    """() => typeof CutConfiguratorWidget !== 'undefined'
+                        && !!(CutConfiguratorWidget.vm
+                          && CutConfiguratorWidget.vm.$store
+                          && CutConfiguratorWidget.vm.$store.state
+                          && CutConfiguratorWidget.vm.$store.state.Configurator
+                          && CutConfiguratorWidget.vm.$store.state.Configurator.confData)""",
+                    timeout=12000,
                 )
-                # Extra beat so selectedPathWay / thickness price settle.
-                await self._page.wait_for_timeout(1500)
+                # selectedPathWay / thickness price settle after mount.
+                await self._page.wait_for_timeout(1000)
             except Exception:
                 self.logger.warning(
                     "[Magento] CutConfiguratorWidget not ready after wait — probing keys"
                 )
             html = await self._page.content()
             pricing = await self._read_cut_configurator_pricing()
+            from sentivo_extractor.core.cloudflare import (
+                fetch_text_with_cloudscraper,
+                playwright_needs_cloudscraper,
+            )
+
+            if playwright_needs_cloudscraper(html):
+                self.logger.warning(
+                    "Cloudflare detected — falling back to cloudscraper"
+                )
+                try:
+                    # Sync cloudscraper in thread — keeps async Playwright loop free.
+                    import asyncio
+
+                    html = await asyncio.to_thread(
+                        lambda: fetch_text_with_cloudscraper(
+                            url, timeout=60.0, logger_=self.logger
+                        )
+                    )
+                    pricing = None
+                except Exception as cf_exc:  # noqa: BLE001
+                    self.logger.warning(
+                        "[Magento] cloudscraper fallback failed %s: %s", url, cf_exc
+                    )
             if html:
                 self._warmed = True
             return {"html": html or "", "configurator_pricing": pricing}

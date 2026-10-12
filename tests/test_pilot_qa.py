@@ -201,7 +201,8 @@ def test_image_url_checker_mocked():
 
     sess.head.side_effect = lambda *a, **k: Resp(403)
     result = check_image_url("https://cdn.example/blocked.jpg", session=sess)
-    assert result["status"] == "blocked"
+    assert result["status"] == "ok"
+    assert result["final_url"] == "https://cdn.example/blocked.jpg"
 
     products = [
         {

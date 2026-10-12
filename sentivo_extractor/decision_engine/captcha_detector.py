@@ -73,6 +73,24 @@ _PRODUCT_SIGNALS = (
     "shopify-section",
 )
 
+_CATEGORY_SIGNALS = (
+    "product-category",
+    "woocommerce",
+    "ul.products",
+    'class="products',
+    "class='products",
+    "products columns-",
+    "woocommerce-loop-product",
+    "woocommerce-products-header",
+)
+
+CF_SOLVE_LOG = (
+    "Cloudflare detected — please solve the challenge in the browser window"
+)
+
+# Shared visible Playwright session (CAPTCHA solve + reuse across URLs).
+_SHARED_LIVE_SESSION: "PlaywrightLiveSession | None" = None
+
 
 class CaptchaBlockedError(RuntimeError):
     """Raised when a CAPTCHA / rate-limit / Cloudflare challenge is detected."""
@@ -282,6 +300,42 @@ class PlaywrightLiveSession:
                 pass
         self._pw = None
         self._manager = None
+
+
+def get_shared_live_session(
+    logger: logging.Logger | None = None,
+) -> PlaywrightLiveSession:
+    """Return the process-wide visible Playwright session (create if needed)."""
+    global _SHARED_LIVE_SESSION
+    if _SHARED_LIVE_SESSION is None or not _SHARED_LIVE_SESSION.alive:
+        _SHARED_LIVE_SESSION = PlaywrightLiveSession(logger=logger)
+    elif logger is not None:
+        _SHARED_LIVE_SESSION.logger = logger
+    return _SHARED_LIVE_SESSION
+
+
+def peek_shared_live_session() -> PlaywrightLiveSession | None:
+    """Return the shared session only if it already exists and is alive."""
+    if _SHARED_LIVE_SESSION is not None and _SHARED_LIVE_SESSION.alive:
+        return _SHARED_LIVE_SESSION
+    return None
+
+
+def close_shared_live_session() -> None:
+    global _SHARED_LIVE_SESSION
+    if _SHARED_LIVE_SESSION is not None:
+        try:
+            _SHARED_LIVE_SESSION.close()
+        except Exception:
+            pass
+        _SHARED_LIVE_SESSION = None
+
+
+def has_category_content(html: str) -> bool:
+    low = (html or "").lower()
+    if len(low) < 400:
+        return False
+    return any(sig in low for sig in _CATEGORY_SIGNALS)
 
 
 class CaptchaDetector:
@@ -550,12 +604,13 @@ class CaptchaDetector:
             if title and title != last_title:
                 log.info("CAPTCHA poll title=%s", title[:80])
                 last_title = title
-            if self.page_is_clear(
+            cleared = self.page_is_clear(
                 html=html,
                 title=title,
                 visible_challenge_iframe=visible,
                 cf_clearance=clearance,
-            ):
+            )
+            if cleared:
                 done = (
                     f"{CAPTCHA_CLEARED_MARKER} CAPTCHA cleared at {url} — resuming scrape."
                 )

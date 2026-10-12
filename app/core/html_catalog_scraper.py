@@ -1819,7 +1819,13 @@ def probe_category_product_cards(
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            from sentivo_extractor.core.http_client import playwright_proxy
+
+            _launch: dict = {"headless": True}
+            _proxy = playwright_proxy()
+            if _proxy:
+                _launch["proxy"] = _proxy
+            browser = p.chromium.launch(**_launch)
             try:
                 page = browser.new_page(viewport={"width": 1440, "height": 900})
                 page.set_extra_http_headers({"Accept-Language": "en-US,en;q=0.9"})
@@ -3267,7 +3273,13 @@ class HtmlCatalogScraper:
         best_card_selector: str = ""
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            from sentivo_extractor.core.http_client import playwright_proxy
+
+            _launch: dict = {"headless": True}
+            _proxy = playwright_proxy()
+            if _proxy:
+                _launch["proxy"] = _proxy
+            browser = p.chromium.launch(**_launch)
             page = browser.new_page(viewport={"width": 1440, "height": 900})
             page.set_extra_http_headers({"Accept-Language": "en-US,en;q=0.9"})
 

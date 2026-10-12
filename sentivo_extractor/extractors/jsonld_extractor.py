@@ -10,6 +10,14 @@ from bs4 import BeautifulSoup
 
 from sentivo_extractor.core.schema import empty_product
 from sentivo_extractor.core.utils import absolute_url, detect_currency, normalize_price
+from sentivo_extractor.core.woocommerce_images import (
+    filter_woocommerce_jsonld_images,
+    resolve_woocommerce_product_images,
+)
+from sentivo_extractor.core.woocommerce_title import (
+    apply_woocommerce_title_and_handle,
+    looks_like_woocommerce_url,
+)
 from sentivo_extractor.extractors.base import BaseExtractor
 
 
@@ -30,7 +38,30 @@ class JsonLdExtractor(BaseExtractor):
         product_node = self._find_product(blocks)
         if not product_node:
             return None
-        return self._map(product_node, url)
+        product = self._map(product_node, url)
+        ctx = context or {}
+        platform = str(ctx.get("platform") or "")
+        is_woo = platform == "WooCommerce" or looks_like_woocommerce_url(url)
+        if is_woo:
+            # Prefer gallery; else strict JSON-LD filter (max 5 / first-only fallback).
+            product["images"] = filter_woocommerce_jsonld_images(
+                product.get("images") or [],
+                url=url,
+                title=str(product.get("title") or ""),
+            )
+            resolve_woocommerce_product_images(
+                product,
+                html,
+                logger=ctx.get("logger"),
+                force=platform == "WooCommerce",
+            )
+            apply_woocommerce_title_and_handle(
+                product,
+                html,
+                logger=ctx.get("logger"),
+                force=platform == "WooCommerce",
+            )
+        return product
 
     def _parse_jsonld(self, html: str) -> list[Any]:
         soup = BeautifulSoup(html, "lxml")

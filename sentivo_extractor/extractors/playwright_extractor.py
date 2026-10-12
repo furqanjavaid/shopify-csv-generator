@@ -9,6 +9,16 @@ from typing import Any
 
 from sentivo_extractor.core.schema import empty_product, empty_variant
 from sentivo_extractor.core.utils import absolute_url, canonicalize_option_name, normalize_price
+from sentivo_extractor.core.woocommerce_images import (
+    WOO_MAX_IMAGES,
+    extract_woocommerce_gallery_from_page,
+    extract_woocommerce_gallery_images,
+    resolve_woocommerce_product_images,
+)
+from sentivo_extractor.core.woocommerce_title import (
+    apply_woocommerce_title_and_handle,
+    looks_like_woocommerce_url,
+)
 from sentivo_extractor.extractors.base import BaseExtractor
 from sentivo_extractor.extractors.html_extractor import HtmlExtractor
 from sentivo_extractor.extractors.jsonld_extractor import JsonLdExtractor
@@ -19,13 +29,28 @@ class PlaywrightExtractor(BaseExtractor):
     name = "playwright"
     platforms = ("Custom", "Next.js", "Nuxt", "React", "WooCommerce", "Magento")
 
-    # WooCommerce price selectors (ordered) when API/JSON leave price empty.
+    # WooCommerce PDP DOM selectors (DecisionEngine Playwright strategy).
+    WOO_TITLE_SELECTORS = (
+        "h1.product_title",
+        "h1.entry-title",
+    )
     WOO_PRICE_SELECTORS = (
         ".woocommerce-Price-amount bdi",
+        "p.price .amount",
         ".price ins .woocommerce-Price-amount",
         ".price .woocommerce-Price-amount",
         "[data-product_id] .price",
     )
+    WOO_IMAGE_SELECTORS = (
+        ".woocommerce-product-gallery__image img",
+        ".woocommerce-product-gallery__image img[src]",
+    )
+    WOO_DESCRIPTION_SELECTORS = (
+        ".woocommerce-product-details__short-description",
+        "#tab-description .woocommerce-Tabs-panel",
+        "#tab-description",
+    )
+    WOO_SKU_SELECTORS = (".sku",)
 
     def supports(self, platform: str, html: str = "", url: str = "") -> bool:
         return True
@@ -44,7 +69,11 @@ class PlaywrightExtractor(BaseExtractor):
         # Offline / pre-rendered path (tests)
         if ctx.get("rendered_html") is not None and not ctx.get("force_browser"):
             return self._extract_from_rendered(
-                url, ctx["rendered_html"], ctx.get("network_json") or [], ctx
+                url,
+                ctx["rendered_html"],
+                ctx.get("network_json") or [],
+                ctx,
+                gallery_images=list(ctx.get("gallery_images") or []),
             )
 
         bundle = self._render_with_capture(url, ctx)
@@ -58,6 +87,7 @@ class PlaywrightExtractor(BaseExtractor):
             bundle.get("network_json") or [],
             ctx,
             variant_probe=bundle.get("variant_probe"),
+            gallery_images=list(bundle.get("gallery_images") or []),
         )
 
     def _extract_from_rendered(
@@ -67,8 +97,52 @@ class PlaywrightExtractor(BaseExtractor):
         network_json: list[Any],
         ctx: dict[str, Any],
         variant_probe: dict[str, Any] | None = None,
+        gallery_images: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any] | None:
         logger = logging.getLogger(__name__)
+        platform = str((ctx or {}).get("platform") or "")
+        woo_context = platform == "WooCommerce" or looks_like_woocommerce_url(url)
+        page_gallery = list(gallery_images or [])
+
+        def _finalize(product: dict[str, Any] | None) -> dict[str, Any] | None:
+            if not isinstance(product, dict):
+                return product
+            priced = self._ensure_woocommerce_price(product, rendered, logger=logger)
+            if not isinstance(priced, dict):
+                return priced
+            if woo_context or "woocommerce" in str(
+                priced.get("extraction_method") or ""
+            ).lower():
+                if page_gallery:
+                    priced["images"] = page_gallery
+                resolve_woocommerce_product_images(
+                    priced,
+                    rendered,
+                    gallery_images=page_gallery or None,
+                    logger=logger,
+                    force=woo_context,
+                )
+                apply_woocommerce_title_and_handle(
+                    priced,
+                    rendered,
+                    logger=logger,
+                    force=woo_context,
+                )
+            return priced
+
+        # WooCommerce: dedicated CSS selectors before generic Magento/Next paths.
+        if platform == "WooCommerce":
+            woo = self._extract_woocommerce_dom(
+                url,
+                rendered,
+                logger=logger,
+                gallery_images=page_gallery,
+            )
+            if woo and woo.get("title"):
+                if variant_probe:
+                    woo = self._merge_variant_probe(woo, variant_probe)
+                return _finalize(woo)
+
         # Prefer structured network JSON
         net_product = self._product_from_network(network_json, url)
         if isinstance(net_product, str):
@@ -80,11 +154,7 @@ class PlaywrightExtractor(BaseExtractor):
             )
             if variant_probe:
                 net_product = self._merge_variant_probe(net_product, variant_probe)
-            return self._ensure_woocommerce_price(
-                net_product if isinstance(net_product, dict) else None,
-                rendered,
-                logger=logger,
-            )
+            return _finalize(net_product if isinstance(net_product, dict) else None)
 
         for extractor in (NextJsExtractor(), JsonLdExtractor(), HtmlExtractor()):
             result = extractor.extract(url, rendered, context=ctx)
@@ -103,11 +173,13 @@ class PlaywrightExtractor(BaseExtractor):
                     if options:
                         result["options"] = options
                         result["variants"] = []
-                return self._ensure_woocommerce_price(
-                    result if isinstance(result, dict) else None,
-                    rendered,
-                    logger=logger,
-                )
+                return _finalize(result if isinstance(result, dict) else None)
+
+        if platform != "WooCommerce":
+            # Last chance Woo DOM when platform was mis-labeled but markup is Woo.
+            woo = self._extract_woocommerce_dom(url, rendered, logger=logger)
+            if woo and woo.get("title"):
+                return _finalize(woo)
 
         product = empty_product()
         product["source_url"] = url
@@ -138,7 +210,7 @@ class PlaywrightExtractor(BaseExtractor):
             return None
         if not product.get("title"):
             return None
-        return self._ensure_woocommerce_price(product, rendered, logger=logger)
+        return _finalize(product)
 
     @staticmethod
     def _product_has_price(product: dict[str, Any] | None) -> bool:
@@ -150,6 +222,113 @@ class PlaywrightExtractor(BaseExtractor):
             if isinstance(v, dict) and str(v.get("price") or "").strip():
                 return True
         return False
+
+    def _extract_woocommerce_dom(
+        self,
+        url: str,
+        html: str,
+        *,
+        logger: logging.Logger | None = None,
+        gallery_images: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any] | None:
+        """WooCommerce Playwright DOM extractor (title/price/images/description/SKU)."""
+        if not html:
+            return None
+        log = logger or logging.getLogger(__name__)
+        try:
+            from bs4 import BeautifulSoup
+
+            soup = BeautifulSoup(html, "lxml")
+        except Exception:
+            return None
+
+        def _text(selectors: tuple[str, ...]) -> str:
+            for sel in selectors:
+                try:
+                    el = soup.select_one(sel)
+                except Exception:
+                    continue
+                if not el:
+                    continue
+                content = el.get("content")
+                if content:
+                    return str(content).strip()
+                text = el.get_text(" ", strip=True)
+                if text:
+                    return text
+            return ""
+
+        def _html(selectors: tuple[str, ...]) -> str:
+            for sel in selectors:
+                try:
+                    el = soup.select_one(sel)
+                except Exception:
+                    continue
+                if el:
+                    return str(
+                        el.decode_contents() if hasattr(el, "decode_contents") else el
+                    )
+            return ""
+
+        title = _text(self.WOO_TITLE_SELECTORS)
+        if not title:
+            return None
+
+        price = self._woocommerce_css_price(html)
+        if not price:
+            price = normalize_price(_text(self.WOO_PRICE_SELECTORS))
+
+        sku = _text(self.WOO_SKU_SELECTORS)
+        description = _html(self.WOO_DESCRIPTION_SELECTORS)
+
+        # Prefer gallery from the same Playwright page that fetched HTML (proxy).
+        images = list(gallery_images or [])[:WOO_MAX_IMAGES]
+        if not images:
+            images = extract_woocommerce_gallery_images(
+                html, url, max_images=WOO_MAX_IMAGES
+            )
+        if not images:
+            # Fall back: first JSON-LD image only (shared Woo filter).
+            jl = JsonLdExtractor().extract(
+                url, html, context={"platform": "WooCommerce", "logger": log}
+            )
+            if isinstance(jl, dict) and jl.get("images"):
+                images = list(jl.get("images") or [])[:1]
+
+        product = empty_product()
+        product["source_url"] = url
+        product["platform"] = "WooCommerce"
+        product["title"] = title
+        product["description_html"] = description
+        product["images"] = images[:WOO_MAX_IMAGES]
+        product["extraction_method"] = "playwright+woocommerce"
+        product["confidence_score"] = 0.82
+        product["options"] = [{"name": "Title", "values": ["Default Title"]}]
+        product["variants"] = [
+            {
+                "sku": sku,
+                "barcode": "",
+                "option1": "Default Title",
+                "option2": "",
+                "option3": "",
+                "price": price or "",
+                "compare_at_price": "",
+                "inventory_qty": "",
+                "available": True,
+                "weight_grams": "",
+                "variant_image": "",
+            }
+        ]
+        if price:
+            product["price"] = price
+        log.info(
+            "[WooCommerce] Playwright DOM extract title=%r price=%r images=%s sku=%r",
+            title[:80],
+            price,
+            len(images),
+            sku,
+        )
+        return product
 
     def _ensure_woocommerce_price(
         self,
@@ -259,7 +438,13 @@ class PlaywrightExtractor(BaseExtractor):
                 )
                 if live is not None:
                     headless = False
-                browser = p.chromium.launch(headless=headless)
+                from sentivo_extractor.core.http_client import playwright_proxy
+
+                launch_kwargs: dict[str, Any] = {"headless": headless}
+                proxy = playwright_proxy()
+                if proxy:
+                    launch_kwargs["proxy"] = proxy
+                browser = p.chromium.launch(**launch_kwargs)
                 browser_ctx = None
                 from sentivo_extractor.core.utils import BROWSER_HEADERS, BROWSER_USER_AGENT
 
@@ -302,12 +487,37 @@ class PlaywrightExtractor(BaseExtractor):
 
                 try:
                     page.goto(url, wait_until="domcontentloaded", timeout=timeout)
-                    page.wait_for_timeout(1500)
+                    page.wait_for_timeout(3000)
                     variant_probe = None
                     # Render-only: never click variant controls (probe_variants defaults False).
                     if ctx.get("probe_variants") is True:
                         variant_probe = self._probe_variants(page)
-                    html = page.content()
+                    # WooCommerce: pull gallery srcs from THIS proxied page (no 2nd browser).
+                    gallery_images: list[dict[str, Any]] = []
+                    platform_l = str(ctx.get("platform") or "").lower()
+                    if platform_l == "woocommerce" or looks_like_woocommerce_url(url):
+                        gallery_images = extract_woocommerce_gallery_from_page(
+                            page,
+                            url,
+                            logger=logging.getLogger("sentivo_extractor"),
+                        )
+                    html = page.content() or ""
+                    from sentivo_extractor.core.cloudflare import (
+                        fetch_text_with_cloudscraper,
+                        playwright_needs_cloudscraper,
+                    )
+
+                    if playwright_needs_cloudscraper(html):
+                        log = logging.getLogger("sentivo_extractor")
+                        log.warning(
+                            "Cloudflare detected — falling back to cloudscraper"
+                        )
+                        try:
+                            html = fetch_text_with_cloudscraper(
+                                url, timeout=60.0, logger_=log
+                            )
+                        except Exception:
+                            pass
                     screenshot_png = None
                     try:
                         screenshot_png = page.screenshot(type="png", full_page=False)
@@ -318,6 +528,7 @@ class PlaywrightExtractor(BaseExtractor):
                         "network_json": network_json,
                         "variant_probe": variant_probe,
                         "screenshot_png": screenshot_png,
+                        "gallery_images": gallery_images,
                     }
                 finally:
                     try:

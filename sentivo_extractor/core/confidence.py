@@ -28,7 +28,13 @@ def score_product(product: dict[str, Any]) -> float:
     """
     score = 0.0
     title = (product.get("title") or "").strip()
-    if title:
+    try:
+        from sentivo_extractor.core.platform_fingerprint import is_valid_product_title
+
+        title_ok = is_valid_product_title(title)
+    except Exception:
+        title_ok = bool(title) and len(title) >= 4
+    if title_ok:
         score += 0.25
 
     variants = [v for v in (product.get("variants") or []) if isinstance(v, dict)]

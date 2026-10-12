@@ -15,12 +15,20 @@ from sentivo_extractor.core.pdp_pipeline import (
     PDPExtractionPipeline,
 )
 from sentivo_extractor.core.schema import ensure_product
+from sentivo_extractor.core.woocommerce_images import (
+    apply_woocommerce_image_cap,
+    resolve_woocommerce_product_images,
+)
+from sentivo_extractor.core.woocommerce_title import apply_woocommerce_title_and_handle
 from sentivo_extractor.decision_engine.captcha_detector import (
     CAPTCHA_WAIT_MARKER,
     CaptchaBlockedError,
     CaptchaDetector,
     CaptchaTimeoutError,
     PlaywrightLiveSession,
+    close_shared_live_session,
+    get_shared_live_session,
+    peek_shared_live_session,
 )
 from sentivo_extractor.decision_engine.confidence_scorer import ConfidenceScorer
 from sentivo_extractor.decision_engine.fallback_manager import FallbackManager
@@ -69,10 +77,11 @@ class DecisionCoordinator:
         self.retry = RetryHandler(logger=self.logger)
         self.fallback = FallbackManager(scorer=self.scorer, logger=self.logger)
         self._last_configurator_pricing: dict[str, Any] | None = None
+        self._woo_gallery_images: list[dict[str, Any]] = []
 
     @classmethod
     def shared_playwright(cls) -> PlaywrightLiveSession | None:
-        return _SHARED_PW_SESSION
+        return peek_shared_live_session() or _SHARED_PW_SESSION
 
     @classmethod
     def shared_selector(cls) -> StrategySelector:
@@ -85,19 +94,15 @@ class DecisionCoordinator:
     @classmethod
     def close_shared_session(cls) -> None:
         global _SHARED_PW_SESSION
-        if _SHARED_PW_SESSION is not None:
-            try:
-                _SHARED_PW_SESSION.close()
-            except Exception:
-                pass
-            _SHARED_PW_SESSION = None
+        close_shared_live_session()
+        _SHARED_PW_SESSION = None
         close_shared_magento_pool()
 
     def _live_session(self) -> PlaywrightLiveSession:
         global _SHARED_PW_SESSION
-        if _SHARED_PW_SESSION is None or not _SHARED_PW_SESSION.alive:
-            _SHARED_PW_SESSION = PlaywrightLiveSession(logger=self.logger)
-        return _SHARED_PW_SESSION
+        session = get_shared_live_session(self.logger)
+        _SHARED_PW_SESSION = session
+        return session
 
     def extract(
         self,
@@ -164,14 +169,27 @@ class DecisionCoordinator:
             logger=self.logger,
         )
 
-        # Prefer pinned / remembered Magento — never re-detect on 502 failures.
+        # Prefer pinned / remembered platform — never re-detect Magento on Woo domains.
+        from sentivo_extractor.decision_engine.strategy_selector import (
+            is_woocommerce_url_hint,
+        )
+
         remembered = self.selector.platform_for(url)
         if platform:
             resolved_platform = str(platform)
-            if resolved_platform == "Magento":
-                self.selector.remember_platform(url, "Magento")
+            if resolved_platform in (
+                "Magento",
+                "Shopify",
+                "WooCommerce",
+                "BigCommerce",
+                "Next.js",
+            ):
+                self.selector.remember_platform(url, resolved_platform)
         elif remembered:
             resolved_platform = remembered
+        elif is_woocommerce_url_hint(url):
+            resolved_platform = "WooCommerce"
+            self.selector.remember_platform(url, "WooCommerce")
         else:
             detected = self.selector.detect(
                 url,
@@ -180,13 +198,30 @@ class DecisionCoordinator:
                 live_fallback=not bool(html),
             )
             resolved_platform = detected["platform"]
+            if resolved_platform in (
+                "Magento",
+                "Shopify",
+                "WooCommerce",
+                "BigCommerce",
+                "Next.js",
+            ):
+                self.selector.remember_platform(url, resolved_platform)
 
         platform = resolved_platform
+        # WooCommerce domain lock: never flip to Magento mid-run.
+        if remembered == "WooCommerce" or is_woocommerce_url_hint(url):
+            platform = "WooCommerce"
+            self.selector.remember_platform(url, "WooCommerce")
+
         price_optional = platform == "Magento"
         strategies = self.selector.strategies_for(platform, url=url)
         # Pre-fetched Vue CutConfigurator pricing (sheetplastics) — apply before score.
         if configurator_pricing and isinstance(configurator_pricing, dict):
             self._last_configurator_pricing = configurator_pricing
+        if platform == "WooCommerce":
+            self.logger.info(
+                "[WooCommerce] Extracting with WooCommerce strategies"
+            )
         self.logger.info(
             "DecisionEngine platform=%s strategies=%s url=%s",
             platform,
@@ -201,6 +236,10 @@ class DecisionCoordinator:
             fetch_blocked = not bool(html.strip())
         elif platform == "Magento":
             html, fetch_blocked = self._magento_playwright_fetch(url)
+        elif platform == "WooCommerce":
+            # Hard CF sites (e.g. thepolycarbonatestore): Playwright+proxy works;
+            # requests/cloudscraper get blocked. Same path as category crawl.
+            html, fetch_blocked = self._woocommerce_fetch(url)
         else:
             html, fetch_blocked = self._soft_fetch(url)
             # Refine platform from fetched HTML when initial probe was Custom.
@@ -220,6 +259,8 @@ class DecisionCoordinator:
                         url,
                     )
                     html, fetch_blocked = self._magento_playwright_fetch(url)
+                elif platform == "WooCommerce":
+                    html, fetch_blocked = self._woocommerce_fetch(url)
 
         context: dict[str, Any] = {
             "http": self.http,
@@ -232,6 +273,8 @@ class DecisionCoordinator:
             "logger": self.logger,
             "browser_headers": platform == "Magento",
             "playwright_headless": False,
+            # Gallery URLs from the same proxied Playwright page as `html`.
+            "gallery_images": list(getattr(self, "_woo_gallery_images", None) or []),
         }
         if platform == "Magento" and hasattr(self.http, "apply_browser_headers"):
             try:
@@ -362,6 +405,30 @@ class DecisionCoordinator:
             "price_optional": price_optional,
         }
 
+        # WooCommerce: strip " | Site Name", prefer H1 thickness, regen handle.
+        # Gallery images come from the same proxied Playwright page used for HTML.
+        if platform == "WooCommerce":
+            page_html = engine_html or html or ""
+            woo_gallery = list(getattr(self, "_woo_gallery_images", None) or [])
+            if woo_gallery:
+                product["images"] = woo_gallery
+                values["images"] = woo_gallery
+            resolve_woocommerce_product_images(
+                product,
+                page_html,
+                gallery_images=woo_gallery or None,
+                logger=self.logger,
+                force=True,
+            )
+            apply_woocommerce_title_and_handle(
+                product,
+                page_html,
+                logger=self.logger,
+                force=True,
+            )
+            values["title"] = product.get("title") or values.get("title")
+            values["images"] = product.get("images") or values.get("images")
+
         product, variant_report = pipeline._apply_variant_engine(  # noqa: SLF001
             product, url, engine_html, context
         )
@@ -371,6 +438,17 @@ class DecisionCoordinator:
         product, image_report = pipeline._apply_image_engine(  # noqa: SLF001
             product, url, engine_html, context
         )
+        if platform == "WooCommerce":
+            woo_gallery = list(getattr(self, "_woo_gallery_images", None) or [])
+            resolve_woocommerce_product_images(
+                product,
+                engine_html or html or "",
+                gallery_images=woo_gallery or None,
+                logger=self.logger,
+                force=True,
+            )
+            apply_woocommerce_image_cap(product)
+            self._woo_gallery_images = []
 
         # Sheet Plastics Vue CutConfiguratorWidget → structured pricing fields.
         pricing = getattr(self, "_last_configurator_pricing", None)
@@ -552,6 +630,23 @@ class DecisionCoordinator:
                 session.apply_cookies_to_requests(
                     getattr(self.http, "session", None)
                 )
+            from sentivo_extractor.core.cloudflare import (
+                fetch_text_with_cloudscraper,
+                playwright_needs_cloudscraper,
+            )
+
+            if playwright_needs_cloudscraper(html):
+                self.logger.warning(
+                    "Cloudflare detected — falling back to cloudscraper"
+                )
+                try:
+                    html = fetch_text_with_cloudscraper(
+                        url, timeout=60.0, logger_=self.logger
+                    )
+                except Exception as cf_exc:
+                    self.logger.warning(
+                        "[Magento] cloudscraper fallback failed %s: %s", url, cf_exc
+                    )
             if not (html or "").strip():
                 self.logger.warning(
                     "[Magento] Playwright returned empty HTML for %s", url
@@ -585,6 +680,90 @@ class DecisionCoordinator:
         )
         session.apply_cookies_to_requests(getattr(self.http, "session", None))
         return str(snap.get("html") or "")
+
+    def _woocommerce_fetch(self, url: str) -> tuple[str, bool]:
+        """
+        Fetch WooCommerce PDP HTML for JSON-LD / OpenGraph strategies.
+
+        When proxy is set: Playwright first (handles HTTPS via proxy; CF
+        hard blocks break requests/cloudscraper). Gallery image URLs are
+        extracted from that same page object (no second browser / navigation).
+        Empty Playwright → cloudscraper.
+        """
+        from sentivo_extractor.core.cloudflare import fetch_text_with_cloudscraper
+        from sentivo_extractor.core.http_client import (
+            fetch_woocommerce_with_playwright,
+            get_proxy,
+        )
+
+        self._woo_gallery_images = []
+        proxy = get_proxy()
+        html = ""
+        if proxy:
+            self.logger.info(
+                "[WooCommerce] Fetching product via Playwright (proxy): %s",
+                url,
+            )
+            try:
+                html, gallery = fetch_woocommerce_with_playwright(
+                    url, logger_=self.logger
+                )
+                self._woo_gallery_images = list(gallery or [])
+            except Exception as exc:
+                self.logger.warning(
+                    "[WooCommerce] Playwright fetch failed %s: %s", url, exc
+                )
+                html = ""
+                self._woo_gallery_images = []
+            if (html or "").strip():
+                probe = self.captcha.inspect(
+                    html=html, url=url, logger=self.logger
+                )
+                if probe.get("blocked"):
+                    self._woo_gallery_images = []
+                    return (
+                        self._wait_out_captcha(
+                            url, reasons=list(probe.get("reasons") or [])
+                        ),
+                        False,
+                    )
+                return html, False
+            self.logger.warning(
+                "[WooCommerce] Playwright returned empty for %s — "
+                "falling back to cloudscraper",
+                url,
+            )
+            try:
+                html = fetch_text_with_cloudscraper(
+                    url, timeout=60.0, logger_=self.logger
+                )
+            except Exception as cf_exc:
+                self.logger.warning(
+                    "[WooCommerce] cloudscraper fallback failed %s: %s",
+                    url,
+                    cf_exc,
+                )
+                html = ""
+            if not (html or "").strip():
+                return "", True
+            return html, False
+
+        # No proxy — still prefer Playwright gallery extract when available.
+        try:
+            html, gallery = fetch_woocommerce_with_playwright(
+                url, logger_=self.logger
+            )
+            self._woo_gallery_images = list(gallery or [])
+            if (html or "").strip():
+                return html, False
+        except Exception as exc:
+            self.logger.info(
+                "[WooCommerce] Playwright fetch (no proxy) failed %s: %s",
+                url,
+                exc,
+            )
+        self._woo_gallery_images = []
+        return self._soft_fetch(url)
 
     def _soft_fetch(self, url: str) -> tuple[str, bool]:
         """Fetch HTML without raising on HTTP errors; wait out CAPTCHA in-browser."""
@@ -656,11 +835,37 @@ class DecisionCoordinator:
             self.logger.warning("GET failed %s: %s", url, exc)
             return "", True
 
+        if resp is None:
+            self.logger.warning("GET returned None for %s", url)
+            return "", True
+
         html = resp.text or ""
-        headers = {k: v for k, v in resp.headers.items()}
+        from sentivo_extractor.core.cloudflare import (
+            fetch_text_with_cloudscraper,
+            is_cloudflare_challenge,
+        )
+
+        status = getattr(resp, "status_code", None)
+        if is_cloudflare_challenge(html, status_code=status):
+            try:
+                html = fetch_text_with_cloudscraper(
+                    url,
+                    timeout=max(timeout, 60.0),
+                    logger_=self.logger,
+                )
+                resp = None  # cloudscraper path — no response object retained
+            except Exception as cf_exc:
+                self.logger.warning(
+                    "cloudscraper fallback failed %s: %s", url, cf_exc
+                )
+        headers = {
+            k: v for k, v in (resp.headers.items() if resp is not None else [])
+        }
         cookie_jar = getattr(session, "cookies", None)
         probe = self.captcha.inspect(
-            status_code=resp.status_code,
+            status_code=(
+                getattr(resp, "status_code", None) if resp is not None else 200
+            ),
             html=html,
             url=url,
             headers=headers,
@@ -678,11 +883,13 @@ class DecisionCoordinator:
                 False,
             )
 
-        if resp.status_code >= 400:
+        if resp is not None and getattr(resp, "status_code", 0) >= 400:
             self.logger.warning(
                 "HTTP %s for %s — treating as fetch_blocked",
                 resp.status_code,
                 url,
             )
             return html, True
+        if not (html or "").strip():
+            return "", True
         return html, False

@@ -174,7 +174,7 @@ def _discover_shopify(base: str, session: requests.Session) -> list[dict[str, st
                 timeout=15,
                 allow_redirects=True,
             )
-            if resp.status_code >= 400:
+            if resp is None or getattr(resp, "status_code", 400) >= 400:
                 break
             data = resp.json()
         except Exception as exc:
@@ -216,7 +216,7 @@ def _discover_woocommerce(base: str, session: requests.Session) -> list[dict[str
                 timeout=15,
                 allow_redirects=True,
             )
-            if resp.status_code >= 400:
+            if resp is None or getattr(resp, "status_code", 400) >= 400:
                 continue
             data = resp.json()
         except Exception as exc:

@@ -19,7 +19,11 @@ from bs4 import BeautifulSoup
 
 from sentivo_extractor.core.product_discovery import (
     canonicalize_product_url,
+    discover_category_seed_products,
+    is_category_listing_url,
+    is_direct_product_page_url,
     is_homepage_url,
+    looks_like_category_listing_html,
     unique_preserve,
 )
 from sentivo_extractor.core.utils import BROWSER_HEADERS
@@ -89,6 +93,21 @@ class _PlaywrightSession:
             except Exception:
                 pass
             text = self._page.content() or ""
+        from sentivo_extractor.core.cloudflare import (
+            fetch_text_with_cloudscraper,
+            playwright_needs_cloudscraper,
+        )
+
+        if playwright_needs_cloudscraper(text):
+            log = getattr(self, "logger", None)
+            if log is not None:
+                log.warning("Cloudflare detected — falling back to cloudscraper")
+            try:
+                text = fetch_text_with_cloudscraper(
+                    url, timeout=60.0, logger_=log
+                )
+            except Exception:
+                pass
         return text
 
     def __exit__(self, *exc: object) -> None:
@@ -183,7 +202,51 @@ class MagentoCategoryCrawler:
         origin = self._origin(seed)
         domain = urlparse(origin).netloc.lower().removeprefix("www.")
 
-        # Non-homepage seeds must never trigger nav/category crawl.
+        # Category listing seed → crawl ONLY that category (+ pagination).
+        if not is_homepage_url(seed) and (
+            is_category_listing_url(seed) or not is_direct_product_page_url(seed)
+        ):
+            # Confirm ambiguous paths via HTML when URL markers are weak.
+            if not is_category_listing_url(seed) and not is_direct_product_page_url(
+                seed
+            ):
+                try:
+                    peek = self.get_text(seed)
+                    if not looks_like_category_listing_html(peek):
+                        cu = canonicalize_product_url(seed) or seed
+                        notes.append("magento_direct_product_url")
+                        self.logger.info(
+                            "[Magento] Non-homepage seed — direct product: %s", cu
+                        )
+                        return {
+                            "product_urls": [cu],
+                            "category_urls": [],
+                            "notes": notes,
+                            "platform": "Magento",
+                        }
+                except Exception:
+                    pass
+
+            self.logger.info(
+                "[Magento] Category seed — scoped crawl (no sitewide nav): %s", seed
+            )
+            scoped = discover_category_seed_products(
+                seed,
+                self.get_text,
+                max_products=self.max_products,
+                max_pages=self.max_pages_per_category,
+                logger=self.logger,
+            )
+            notes.extend(list(scoped.get("notes") or []))
+            notes.append("magento_scoped_category_crawl")
+            return {
+                "product_urls": list(scoped.get("product_urls") or []),
+                "category_urls": [seed],
+                "notes": notes,
+                "platform": "Magento",
+            }
+
+        # Explicit product PDP seed → no crawl.
         if not is_homepage_url(seed):
             cu = canonicalize_product_url(seed) or seed
             notes.append("magento_direct_product_url")

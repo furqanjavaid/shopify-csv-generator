@@ -3,6 +3,7 @@ pandas==2.1.4
 numpy>=1.26.0,<2
 openpyxl==3.1.2
 requests==2.31.0
+cloudscraper>=1.2.71
 beautifulsoup4==4.12.3
 pyinstaller==6.3.0
 lxml==5.1.0
@@ -11,3 +12,5 @@ python-docx
 matplotlib
 Pillow
 colorama
+PyYAML>=6.0
+plyer>=2.1.0

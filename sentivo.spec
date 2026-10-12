@@ -3,7 +3,7 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = [('app', 'app'), ('assets', 'assets'), ('version.json', '.')]
 binaries = []
-hiddenimports = ['customtkinter', 'pandas', 'openpyxl', 'bs4', 'lxml', 'PIL', 'PIL.Image', 'docx', 'requests', 'playwright']
+hiddenimports = ['customtkinter', 'pandas', 'openpyxl', 'bs4', 'lxml', 'PIL', 'PIL.Image', 'docx', 'requests', 'cloudscraper', 'playwright']
 tmp_ret = collect_all('customtkinter')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('playwright')

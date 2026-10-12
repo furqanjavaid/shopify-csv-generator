@@ -57,6 +57,8 @@ def build():
             "--hidden-import",
             "requests",
             "--hidden-import",
+            "cloudscraper",
+            "--hidden-import",
             "playwright",
             "--hidden-import",
             "yaml",

@@ -26,11 +26,14 @@ DEFAULT_STRATEGY_CHAIN: tuple[str, ...] = (
 )
 
 # Platforms whose chain is exclusive (do NOT append Shopify/Woo from DEFAULT).
-_EXCLUSIVE_PLATFORMS = frozenset({"Magento", "Shopify", "WooCommerce", "Next.js"})
+_EXCLUSIVE_PLATFORMS = frozenset(
+    {"Magento", "Shopify", "WooCommerce", "BigCommerce", "Next.js"}
+)
 
 # Platform → preferred strategies.
 # Magento: Magento Config → JSON-LD → OpenGraph → Playwright ONLY
 # (Shopify JS / Woo API never work on Magento and must not run).
+# WooCommerce: JSON-LD → OpenGraph → Playwright ONLY (never Magento Config).
 _PLATFORM_PRIORITY: dict[str, tuple[str, ...]] = {
     "Shopify": (SOURCE_SHOPIFY, SOURCE_JSONLD, SOURCE_OPENGRAPH, SOURCE_PLAYWRIGHT),
     "Magento": (
@@ -39,7 +42,9 @@ _PLATFORM_PRIORITY: dict[str, tuple[str, ...]] = {
         SOURCE_OPENGRAPH,
         SOURCE_PLAYWRIGHT,
     ),
-    "WooCommerce": (SOURCE_WOO, SOURCE_JSONLD, SOURCE_OPENGRAPH, SOURCE_PLAYWRIGHT),
+    "WooCommerce": (SOURCE_JSONLD, SOURCE_OPENGRAPH, SOURCE_PLAYWRIGHT),
+    "BigCommerce": (SOURCE_JSONLD, SOURCE_OPENGRAPH, SOURCE_PLAYWRIGHT),
+    "Next.js": (SOURCE_JSONLD, SOURCE_OPENGRAPH, SOURCE_PLAYWRIGHT),
     "Custom": (
         SOURCE_JSONLD,
         SOURCE_OPENGRAPH,
@@ -48,9 +53,23 @@ _PLATFORM_PRIORITY: dict[str, tuple[str, ...]] = {
         SOURCE_MAGENTO,
         SOURCE_PLAYWRIGHT,
     ),
-    "Next.js": (SOURCE_JSONLD, SOURCE_OPENGRAPH, SOURCE_PLAYWRIGHT),
     "Unknown": DEFAULT_STRATEGY_CHAIN,
 }
+
+
+def is_woocommerce_url_hint(url: str) -> bool:
+    """
+    True for WooCommerce path patterns:
+      /product-category/…  or  /product/slug
+    Excludes Magento /catalog/product/….
+    """
+    path = (urlparse(url or "").path or "").lower()
+    if "/product-category/" in path or "/product_category/" in path:
+        return True
+    if "/catalog/product/" in path:
+        return False
+    parts = [p for p in path.split("/") if p]
+    return len(parts) >= 2 and parts[0] == "product"
 
 
 def _domain_of(url: str) -> str:
@@ -99,6 +118,15 @@ class StrategySelector:
             # Never re-run live Magento detection (or 502 retries) once confirmed.
             return {"platform": cached, "signals": ["domain_memory"]}
 
+        # WooCommerce URL patterns pin the domain — never Magento live re-detect.
+        if is_woocommerce_url_hint(url):
+            if domain:
+                self._platforms[domain] = "WooCommerce"
+            return {
+                "platform": "WooCommerce",
+                "signals": ["woocommerce_url_path"],
+            }
+
         # If caller already knows Magento, do not open a detection browser.
         effective_fallback = live_fallback
         detected = detect_platform(
@@ -108,7 +136,13 @@ class StrategySelector:
         if platform in ("", "Unknown"):
             platform = "Custom"
         # Remember strong platform hits so Magento PDPs skip Shopify/Woo forever.
-        if domain and platform in ("Magento", "Shopify", "WooCommerce"):
+        if domain and platform in (
+            "Magento",
+            "Shopify",
+            "WooCommerce",
+            "BigCommerce",
+            "Next.js",
+        ):
             self._platforms[domain] = platform
         return {
             "platform": platform,
@@ -129,6 +163,17 @@ class StrategySelector:
             for name in DEFAULT_STRATEGY_CHAIN:
                 if name not in preferred:
                     preferred.append(name)
+
+        # Hard rule: WooCommerce never runs Magento Config (or Store API).
+        if platform == "WooCommerce":
+            preferred = [
+                s
+                for s in preferred
+                if s not in (SOURCE_MAGENTO, SOURCE_WOO, SOURCE_SHOPIFY)
+            ]
+            # Restore canonical Woo order if filtering emptied / scrambled the list.
+            if not preferred:
+                preferred = list(_PLATFORM_PRIORITY["WooCommerce"])
 
         domain = _domain_of(url)
         winner = self._winners.get(domain) if domain else None

@@ -39,10 +39,10 @@ def detect_shopify(base_url: str, session: requests.Session | None = None) -> bo
             timeout=12,
             allow_redirects=True,
         )
-        if resp.status_code >= 400:
+        if resp is None or getattr(resp, "status_code", 400) >= 400:
             return False
         ctype = (resp.headers.get("Content-Type") or "").lower()
-        if "json" not in ctype and not resp.text.strip().startswith("{"):
+        if "json" not in ctype and not (resp.text or "").strip().startswith("{"):
             return False
         data = resp.json()
         return isinstance(data, dict) and "products" in data
@@ -51,6 +51,17 @@ def detect_shopify(base_url: str, session: requests.Session | None = None) -> bo
 
 
 def detect_woocommerce(html: str, base_url: str = "", session: requests.Session | None = None) -> bool:
+    # URL patterns alone are strong WooCommerce signals (before Magento heuristics).
+    path = (urlparse(base_url or "").path or "").lower()
+    parts = [p for p in path.split("/") if p]
+    if "/product-category/" in path or "/product_category/" in path:
+        return True
+    if (
+        "/catalog/product/" not in path
+        and len(parts) >= 2
+        and parts[0] == "product"
+    ):
+        return True
     low = (html or "").lower()
     if any(
         token in low
@@ -60,8 +71,13 @@ def detect_woocommerce(html: str, base_url: str = "", session: requests.Session 
             "wc-block",
             "product-type-simple",
             'generator" content="woocommerce',
+            "woocommerce-loop-product__link",
+            "products columns-",
         )
     ):
+        return True
+    # Permalink structure /product/slug with WordPress assets
+    if "/product/" in low and ("wp-content" in low or "wp-includes" in low):
         return True
     if base_url:
         sess = session or requests.Session()
@@ -72,7 +88,11 @@ def detect_woocommerce(html: str, base_url: str = "", session: requests.Session 
                 timeout=8,
                 allow_redirects=True,
             )
-            if resp.status_code == 200 and resp.text.strip().startswith("["):
+            if (
+                resp is not None
+                and getattr(resp, "status_code", None) == 200
+                and (resp.text or "").strip().startswith("[")
+            ):
                 return True
         except Exception:
             pass
@@ -184,6 +204,11 @@ def _fetch_homepage_html(
     *,
     browser_headers: bool = False,
 ) -> str:
+    from sentivo_extractor.core.cloudflare import (
+        fetch_text_with_cloudscraper,
+        is_cloudflare_challenge,
+    )
+
     sess = session or requests.Session()
     headers = dict(BROWSER_HEADERS) if browser_headers else {
         "User-Agent": DEFAULT_USER_AGENT,
@@ -193,14 +218,34 @@ def _fetch_homepage_html(
         headers.setdefault("User-Agent", BROWSER_USER_AGENT)
     try:
         resp = sess.get(url, headers=headers, timeout=20, allow_redirects=True)
-        if resp.status_code >= 400:
-            return ""
-        text = (resp.text or "")[:300_000]
+        if resp is None:
+            text = ""
+            status = None
+        else:
+            text = (resp.text or "")[:300_000]
+            status = getattr(resp, "status_code", None)
+        if is_cloudflare_challenge(text, status_code=status) or (
+            status is not None and status >= 400
+        ):
+            try:
+                text = fetch_text_with_cloudscraper(
+                    url, timeout=60.0, headers=headers, logger_=logger
+                )[:300_000]
+            except Exception:
+                return ""
         if _is_error_or_challenge_html(text):
             return ""
         return text
     except Exception:
-        return ""
+        try:
+            text = fetch_text_with_cloudscraper(
+                url, timeout=60.0, headers=headers, logger_=logger
+            )[:300_000]
+            if _is_error_or_challenge_html(text):
+                return ""
+            return text
+        except Exception:
+            return ""
 
 
 def _launch_chromium_for_cloudflare(p: Any) -> Any:
@@ -209,11 +254,17 @@ def _launch_chromium_for_cloudflare(p: Any) -> Any:
     Prefer headed system Chrome; fall back to headed bundled Chromium.
     Window opens normally on screen so the user can see navigation.
     """
+    from sentivo_extractor.core.http_client import playwright_proxy
+
     args = ["--disable-blink-features=AutomationControlled"]
+    launch_kwargs: dict[str, Any] = {"headless": False, "args": args}
+    proxy = playwright_proxy()
+    if proxy:
+        launch_kwargs["proxy"] = proxy
     try:
-        return p.chromium.launch(channel="chrome", headless=False, args=args)
+        return p.chromium.launch(channel="chrome", **launch_kwargs)
     except Exception:
-        return p.chromium.launch(headless=False, args=args)
+        return p.chromium.launch(**launch_kwargs)
 
 
 def fetch_html_playwright(
@@ -266,13 +317,32 @@ def fetch_html_playwright(
                     except Exception:
                         pass
                     text = (page.content() or "")[:300_000]
-                if _is_error_or_challenge_html(text):
-                    logger.info(
-                        "Playwright fetched error/challenge HTML for %s (len=%s)",
-                        url,
-                        len(text),
+                from sentivo_extractor.core.cloudflare import (
+                    fetch_text_with_cloudscraper,
+                    playwright_needs_cloudscraper,
+                )
+
+                if playwright_needs_cloudscraper(text) or _is_error_or_challenge_html(
+                    text
+                ):
+                    logger.warning(
+                        "Cloudflare detected — falling back to cloudscraper"
                     )
-                    return ""
+                    try:
+                        text = fetch_text_with_cloudscraper(
+                            url, timeout=60.0, logger_=logger
+                        )[:300_000]
+                    except Exception as cf_exc:
+                        logger.info(
+                            "Playwright fetched error/challenge HTML for %s "
+                            "(len=%s); cloudscraper failed: %s",
+                            url,
+                            len(text),
+                            cf_exc,
+                        )
+                        return ""
+                    if _is_error_or_challenge_html(text):
+                        return ""
                 return text
             finally:
                 browser.close()
@@ -314,6 +384,22 @@ def detect_platform(
         signals.append("products.json")
         return {"platform": "Shopify", "signals": signals, "html": html or ""}
 
+    # WooCommerce path patterns on the seed URL (e.g. /product-category/…, /product/…) —
+    # check before Magento so category crawls use WooCommerce selectors.
+    seed_path = (parsed.path or "").lower()
+    path_parts = [p for p in seed_path.split("/") if p]
+    if (
+        "/product-category/" in seed_path
+        or "/product_category/" in seed_path
+        or (
+            "/catalog/product/" not in seed_path
+            and len(path_parts) >= 2
+            and path_parts[0] == "product"
+        )
+    ):
+        signals.append("woocommerce_url_path")
+        return {"platform": "WooCommerce", "signals": signals, "html": html or ""}
+
     body = html or ""
     if body and _is_error_or_challenge_html(body):
         body = ""
@@ -322,7 +408,7 @@ def detect_platform(
         if body:
             signals.append("fetched_default")
 
-    if body and detect_woocommerce(body, base, sess):
+    if detect_woocommerce(body, url, sess) or detect_woocommerce(body, base, sess):
         signals.append("woocommerce")
         return {"platform": "WooCommerce", "signals": signals, "html": body}
 
