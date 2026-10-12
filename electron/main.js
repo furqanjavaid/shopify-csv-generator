@@ -1,7 +1,14 @@
 const { app, BrowserWindow, Menu } = require("electron");
+const fs = require("fs");
 const path = require("path");
 
-const ICON_PATH = path.join(__dirname, "..", "assets", "icon.ico");
+function resolveAppIcon() {
+  const png = path.join(__dirname, "..", "assets", "sentivo icon.png");
+  const ico = path.join(__dirname, "..", "assets", "icon.ico");
+  if (fs.existsSync(png)) return png;
+  if (fs.existsSync(ico)) return ico;
+  return undefined;
+}
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -9,7 +16,7 @@ function createWindow() {
     height: 800,
     minWidth: 900,
     minHeight: 600,
-    icon: ICON_PATH,
+    icon: resolveAppIcon(),
     autoHideMenuBar: true,
     webPreferences: {
       contextIsolation: true,

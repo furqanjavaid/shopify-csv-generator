@@ -52,6 +52,35 @@
       padding: 24px 16px 16px;
     }
 
+    .sidebar nav {
+      flex: 1;
+    }
+
+    .sidebar-footer {
+      margin-top: auto;
+      padding-top: 16px;
+      border-top: 2px solid #8A94B8;
+    }
+
+    .sidebar-version {
+      margin: 0;
+      font-size: 12px;
+      color: var(--sidebar-muted);
+    }
+
+    .sidebar-app-name {
+      margin: 4px 0 0;
+      font-size: 13px;
+      font-weight: 600;
+      color: #fff;
+    }
+
+    .sidebar-company {
+      margin: 4px 0 0;
+      font-size: 11px;
+      color: #8B1A2E;
+    }
+
     .logo {
       width: 180px;
       max-width: 100%;
@@ -290,6 +319,11 @@
       line-height: 1.5;
       white-space: pre-wrap;
     }
+
+    .log-line { display: block; color: var(--log-text); }
+    .log-line.info { color: #4CAF50; }
+    .log-line.warning { color: #FFC107; }
+    .log-line.error { color: #F44336; }
 
     .scraper-layout, .split-layout {
       display: grid;
@@ -561,6 +595,11 @@
         <button class="nav-item" type="button" data-page="converter">Image Converter</button>
         <button class="nav-item" type="button" data-page="settings">Settings</button>
       </nav>
+      <div class="sidebar-footer">
+        <p class="sidebar-version">v1.3.3</p>
+        <p class="sidebar-app-name">Sentivo Tools</p>
+        <p class="sidebar-company">by Sentivo Limited</p>
+      </div>
     </aside>
 
     <main class="main">
@@ -723,7 +762,7 @@
                 <div>
                   <label class="field-label" for="scraper-output">Output Folder</label>
                   <div class="row">
-                    <input class="input" id="scraper-output" type="text" placeholder="Select output folder…" value="output" />
+                    <input class="input" id="scraper-output" type="text" placeholder="Select output folder…" value="" />
                     <button class="btn-outline fixed" type="button" id="scraper-browse">Browse</button>
                   </div>
                 </div>
@@ -769,7 +808,7 @@
             <section class="card">
               <h2 class="card-title">Log Area</h2>
               <p class="card-caption">Live scraper output (UI demo).</p>
-              <div class="log" id="scraper-log">Ready. Enter seed URLs and click Run Scraper.</div>
+              <div class="log" id="scraper-log"><span class="log-line">Ready. Enter seed URLs and click Run Scraper.</span></div>
             </section>
           </div>
 
@@ -813,7 +852,7 @@
         <section class="card">
           <h2 class="card-title">Audit Results</h2>
           <p class="card-caption">Findings appear here after an audit completes.</p>
-          <div class="log" id="audit-results">No audit run yet.</div>
+          <div class="log" id="audit-results"><span class="log-line">No audit run yet.</span></div>
           <button class="btn-outline btn-block mt-12" type="button" id="audit-download" disabled>Download Report →</button>
         </section>
       </section>
@@ -867,7 +906,7 @@
 
         <section class="card">
           <h2 class="card-title">Results Log</h2>
-          <div class="log" id="converter-log">Ready. Select folders and click Convert.</div>
+          <div class="log" id="converter-log"><span class="log-line">Ready. Select folders and click Convert.</span></div>
         </section>
       </section>
 
@@ -882,7 +921,7 @@
           <h2 class="card-title">General</h2>
           <label class="field-label" for="settings-output">Default output folder</label>
           <div class="row">
-            <input class="input" id="settings-output" type="text" value="output" />
+            <input class="input" id="settings-output" type="text" value="" placeholder="Select output folder…" />
             <button class="btn-outline fixed" type="button" id="settings-browse-output">Browse</button>
           </div>
           <label class="field-label" for="settings-jobs">Max concurrent jobs</label>
@@ -934,9 +973,26 @@
       btn.addEventListener("click", () => showPage(btn.dataset.nav));
     });
 
+    function logLevelClass(line) {
+      if (line.includes("[ERROR]")) return "error";
+      if (line.includes("[WARNING]")) return "warning";
+      if (line.includes("[INFO]")) return "info";
+      return "";
+    }
+
+    function clearLog(el, line) {
+      el.innerHTML = "";
+      if (line) appendLog(el, line);
+    }
+
     function appendLog(el, line) {
       const stamp = new Date().toLocaleTimeString();
-      el.textContent += `\n[${stamp}] ${line}`;
+      const text = `[${stamp}] ${line}`;
+      const row = document.createElement("span");
+      row.className = "log-line" + (logLevelClass(line) ? " " + logLevelClass(line) : "");
+      row.textContent = text;
+      el.appendChild(row);
+      el.appendChild(document.createTextNode("\n"));
       el.scrollTop = el.scrollHeight;
     }
 
@@ -954,7 +1010,7 @@
         if (i >= labels.length) {
           clearInterval(timer);
           setProgress(fillEl, pctEl, labelEl, 100, "Complete");
-          if (logEl) appendLog(logEl, "Done.");
+          if (logEl) appendLog(logEl, "[INFO] Done.");
           if (onDone) onDone();
           return;
         }
@@ -1026,8 +1082,8 @@
     });
 
     document.getElementById("scraper-browse").addEventListener("click", () => {
-      const folder = prompt("Output folder path", document.getElementById("scraper-output").value || "output");
-      if (folder) document.getElementById("scraper-output").value = folder;
+      const folder = prompt("Output folder path", document.getElementById("scraper-output").value || "");
+      if (folder !== null) document.getElementById("scraper-output").value = folder;
     });
 
     function resetScraperUi() {
@@ -1046,8 +1102,8 @@
         return;
       }
       const seedCount = seeds.split(/\r?\n/).map((s) => s.trim()).filter(Boolean).length;
-      const output = document.getElementById("scraper-output").value || "output";
-      scraperLog.textContent = "Starting scraper…";
+      const output = document.getElementById("scraper-output").value.trim() || "—";
+      clearLog(scraperLog, "[INFO] Starting scraper…");
       scraperRun.disabled = true;
       scraperStop.disabled = false;
       scraperCsv.disabled = true;
@@ -1070,13 +1126,15 @@
         labelEl: document.getElementById("scraper-progress-label"),
         logEl: scraperLog,
         labels: [
-          "Validating seed URLs…",
-          "Detecting platform…",
-          "Discovering products…",
-          "Extracting product pages…",
-          "Writing shopify_import.csv…",
+          "[INFO] Validating seed URLs…",
+          "[INFO] Detecting platform…",
+          "[INFO] Discovering products…",
+          "[WARNING] Slow response from store — retrying…",
+          "[INFO] Extracting product pages…",
+          "[INFO] Writing shopify_import.csv…",
         ],
         onDone: () => {
+          appendLog(scraperLog, "[INFO] Scrape complete.");
           document.getElementById("scraper-stat-seeds").textContent = String(seedCount);
           document.getElementById("scraper-stat-products").textContent = String(seedCount * 12);
           document.getElementById("scraper-stat-status").textContent = "Complete";
@@ -1087,20 +1145,20 @@
     });
 
     scraperStop.addEventListener("click", () => {
-      appendLog(scraperLog, "Stopped by user.");
+      appendLog(scraperLog, "[WARNING] Stopped by user.");
       document.getElementById("scraper-stat-status").textContent = "Stopped";
       document.getElementById("scraper-progress-label").textContent = "Stopped";
       resetScraperUi();
     });
 
     document.getElementById("scraper-reprocess").addEventListener("click", () => {
-      scraperLog.textContent = "Reprocess requested (UI demo).";
-      appendLog(scraperLog, "Looking for existing domain output…");
-      appendLog(scraperLog, "No backend connected yet.");
+      clearLog(scraperLog, "[INFO] Reprocess requested (UI demo).");
+      appendLog(scraperLog, "[INFO] Looking for existing domain output…");
+      appendLog(scraperLog, "[WARNING] No backend connected yet.");
     });
 
     scraperCsv.addEventListener("click", () => {
-      appendLog(scraperLog, "Generate Final CSV clicked (UI demo).");
+      appendLog(scraperLog, "[INFO] Generate Final CSV clicked (UI demo).");
       alert("CSV generation is UI-only until the backend is wired.");
     });
 
@@ -1114,7 +1172,7 @@
       }
       const results = document.getElementById("audit-results");
       const download = document.getElementById("audit-download");
-      results.textContent = "Starting audit for " + url;
+      clearLog(results, "[INFO] Starting audit for " + url);
       download.disabled = true;
       clearInterval(auditTimer);
       auditTimer = fakeProgress({
@@ -1123,14 +1181,15 @@
         labelEl: document.getElementById("audit-progress-label"),
         logEl: results,
         labels: [
-          "Fetching homepage…",
-          "Checking technical SEO…",
-          "Scoring CRO signals…",
-          "Compiling recommendations…",
+          "[INFO] Fetching homepage…",
+          "[INFO] Checking technical SEO…",
+          "[WARNING] Missing meta description on some pages…",
+          "[INFO] Scoring CRO signals…",
+          "[INFO] Compiling recommendations…",
         ],
         onDone: () => {
-          appendLog(results, "Overall score: 78 / 100");
-          appendLog(results, "Priority: Improve product image quality and PDP trust blocks.");
+          appendLog(results, "[INFO] Overall score: 78 / 100");
+          appendLog(results, "[WARNING] Priority: Improve product image quality and PDP trust blocks.");
           download.disabled = false;
         },
       });
@@ -1162,7 +1221,7 @@
       const format = document.getElementById("converter-format").value;
       const quality = document.getElementById("converter-quality").value;
       const log = document.getElementById("converter-log");
-      log.textContent = `Converting to ${format} at quality ${quality}…`;
+      clearLog(log, `[INFO] Converting to ${format} at quality ${quality}…`);
       clearInterval(converterTimer);
       converterTimer = fakeProgress({
         fillEl: document.getElementById("converter-progress-fill"),
@@ -1170,17 +1229,18 @@
         labelEl: document.getElementById("converter-progress-label"),
         logEl: log,
         labels: [
-          "Scanning input folder…",
-          "Converting images…",
-          "Writing output files…",
+          "[INFO] Scanning input folder…",
+          "[INFO] Converting images…",
+          "[WARNING] Skipping unsupported file types…",
+          "[INFO] Writing output files…",
         ],
       });
     });
 
     // Settings
     document.getElementById("settings-browse-output").addEventListener("click", () => {
-      const folder = prompt("Default output folder", document.getElementById("settings-output").value || "output");
-      if (folder) document.getElementById("settings-output").value = folder;
+      const folder = prompt("Default output folder", document.getElementById("settings-output").value || "");
+      if (folder !== null) document.getElementById("settings-output").value = folder;
     });
     document.getElementById("settings-save").addEventListener("click", () => {
       alert("Settings saved locally in the UI (not persisted yet).");
