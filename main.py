@@ -15,8 +15,8 @@ from pathlib import Path
 
 
 def _wants_extractor_cli(argv: list[str]) -> bool:
-    """Route to sentivo_extractor when CLI flags / subcommands are present."""
-    if len(argv) > 1 and argv[1] in ("audit", "extract"):
+    """Route to sentivo_extractor / tool CLIs when subcommands are present."""
+    if len(argv) > 1 and argv[1] in ("audit", "extract", "upload"):
         return True
     flags = {"--input", "--output", "--download-images", "--use-playwright"}
     return any(a == "--input" or a.startswith("--input=") for a in argv) or (
@@ -24,7 +24,134 @@ def _wants_extractor_cli(argv: list[str]) -> bool:
     )
 
 
+def _run_store_audit_url_cli(argv: list[str]) -> int:
+    """Electron: python main.py audit --url <storeUrl> [--mode cro|full]."""
+    import argparse
+    import asyncio
+
+    parser = argparse.ArgumentParser(description="Store auditor (URL mode)")
+    parser.add_argument("--url", required=True, help="Storefront URL")
+    parser.add_argument("--mode", default="cro", help="cro or full")
+    args = parser.parse_args(argv)
+
+    from app.core.audit_report import generate_report
+    from app.core.store_auditor import run_audit
+
+    def progress(msg: str) -> None:
+        print(f"[INFO] {msg}")
+
+    print(f"[INFO] Starting store audit for {args.url}")
+    try:
+        audit_data, output_dir = asyncio.run(
+            run_audit(args.url, mode=str(args.mode or "cro"), progress=progress)
+        )
+        report_path = generate_report(audit_data, output_dir)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ERROR] Audit failed: {exc}")
+        return 2
+
+    findings = len(audit_data.get("findings") or [])
+    print(f"[INFO] Findings: {findings}")
+    print(f"[INFO] Output Path: {output_dir}")
+    print(f"[INFO] Report: {report_path}")
+    print("[INFO] progress=100%")
+    print("[INFO] Audit complete.")
+    return 0
+
+
+def _run_upload_cli(argv: list[str]) -> int:
+    """Electron: python main.py upload --input <file> [--mapping json] [--output path]."""
+    import argparse
+    import json
+    from pathlib import Path as _Path
+
+    parser = argparse.ArgumentParser(description="Spreadsheet → Shopify CSV")
+    parser.add_argument("--input", required=True, help="CSV/XLSX path")
+    parser.add_argument(
+        "--mapping",
+        default="",
+        help="JSON list of {client_col, shopify_field} (optional; auto-map if empty)",
+    )
+    parser.add_argument(
+        "--output",
+        default="",
+        help="Output CSV path (default: <input>_shopify.csv beside input)",
+    )
+    args = parser.parse_args(argv)
+
+    from app.core.column_mapper import SKIP_LABEL, ColumnMapper
+    from app.core.file_parser import FileParser
+    from app.core.shopify_generator import ShopifyGenerator
+
+    input_path = _Path(args.input)
+    if not input_path.is_file():
+        print(f"[ERROR] File not found: {input_path}")
+        return 2
+
+    print(f"[INFO] Parsing {input_path.name}…")
+    print("[INFO] progress=10%")
+    try:
+        parsed = FileParser().parse(str(input_path))
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ERROR] Parse failed: {exc}")
+        return 2
+
+    headers = list(parsed.get("headers") or [])
+    print(f"[INFO] Columns: {len(headers)} · Rows: {parsed.get('row_count', 0)}")
+    print("[INFO] progress=35%")
+
+    mapping: list[dict] = []
+    raw_map = (args.mapping or "").strip()
+    if raw_map:
+        try:
+            mapping = json.loads(raw_map)
+            if not isinstance(mapping, list):
+                raise ValueError("mapping must be a JSON list")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[ERROR] Invalid --mapping JSON: {exc}")
+            return 2
+    else:
+        print("[INFO] Auto-mapping columns…")
+        mapping = ColumnMapper().auto_map(headers)
+
+    mapped_fields = {
+        m.get("shopify_field")
+        for m in mapping
+        if m.get("shopify_field") and m.get("shopify_field") != SKIP_LABEL
+    }
+    if "Title" not in mapped_fields:
+        print("[ERROR] Mapping must include Title. Adjust column mapping and retry.")
+        return 2
+
+    out = _Path(args.output) if str(args.output or "").strip() else None
+    if out is None:
+        out = input_path.with_name(f"{input_path.stem}_shopify.csv")
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    print(f"[INFO] Generating Shopify CSV → {out}")
+    print("[INFO] progress=70%")
+    try:
+        result = ShopifyGenerator().generate(parsed, mapping, str(out))
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ERROR] Generate failed: {exc}")
+        return 2
+
+    print(f"[INFO] Products: {result.get('product_count', result.get('products', '?'))}")
+    print(f"[INFO] Output Path: {out.resolve()}")
+    print("[INFO] progress=100%")
+    print("[INFO] Upload conversion complete.")
+    return 0
+
+
 if __name__ == "__main__" and _wants_extractor_cli(sys.argv):
+    command = sys.argv[1]
+    rest = sys.argv[2:]
+    if command == "upload":
+        raise SystemExit(_run_upload_cli(rest))
+    if command == "audit" and any(
+        a == "--url" or a.startswith("--url=") for a in rest
+    ):
+        raise SystemExit(_run_store_audit_url_cli(rest))
     from sentivo_extractor.cli import run_cli
 
     raise SystemExit(run_cli(sys.argv[1:]))

@@ -681,25 +681,25 @@
 
         <section class="card">
           <h2 class="card-title">Upload Spreadsheet</h2>
-          <p class="card-caption">Drag and drop a CSV or Excel file, or click to browse.</p>
+          <p class="card-caption">Drag and drop a CSV or Excel file, or browse to select one.</p>
           <div class="dropzone" id="upload-dropzone">
             <strong>Drop file here</strong>
             Click to browse · .csv, .xlsx, .xls
-            <input id="upload-file-input" class="hidden" type="file" accept=".csv,.xlsx,.xls" />
           </div>
+          <button class="btn-outline btn-block mt-12" type="button" id="upload-browse-file">Browse File →</button>
         </section>
 
         <section class="card hidden" id="upload-file-card">
           <h2 class="card-title">Selected File</h2>
           <div class="result-row"><span>Name</span><strong id="upload-file-name">—</strong></div>
+          <div class="result-row"><span>Path</span><strong id="upload-file-path">—</strong></div>
           <div class="result-row"><span>Size</span><strong id="upload-file-size">—</strong></div>
-          <div class="result-row"><span>Type</span><strong id="upload-file-type">—</strong></div>
           <button class="btn-outline mt-12" type="button" id="upload-clear-file">Clear File</button>
         </section>
 
         <section class="card">
           <h2 class="card-title">Column Mapping</h2>
-          <p class="card-caption">Map source columns to Shopify fields. UI-only for now.</p>
+          <p class="card-caption">Leave as Auto-detect to let Python auto-map columns, or set hints below.</p>
           <div class="mapping-grid">
             <div class="mapping-item">
               <label>Title</label>
@@ -726,15 +726,26 @@
               <select class="select" id="map-image"><option>Auto-detect</option><option>Image</option><option>Image URL</option></select>
             </div>
           </div>
-          <button class="btn-primary btn-block mt-16" type="button" id="upload-generate-btn">Generate CSV →</button>
+          <div class="btn-row">
+            <button class="btn-primary" type="button" id="upload-generate-btn">Generate CSV →</button>
+            <button class="btn-stop" type="button" id="upload-stop" disabled>Stop →</button>
+          </div>
+          <div class="progress-wrap">
+            <div class="progress-meta">
+              <span id="upload-progress-label">Idle</span>
+              <span id="upload-progress-pct">0%</span>
+            </div>
+            <div class="progress-track"><div class="progress-fill" id="upload-progress-fill"></div></div>
+          </div>
+          <div class="log mt-12" id="upload-log"><span class="log-line">Ready. Select a spreadsheet and click Generate CSV.</span></div>
         </section>
 
         <section class="card hidden" id="upload-download-card">
           <h2 class="card-title">Download Result</h2>
-          <p class="card-caption">Your Shopify-ready CSV is ready (demo UI).</p>
-          <div class="result-row"><span>Output</span><strong id="upload-output-name">shopify_import.csv</strong></div>
-          <div class="result-row"><span>Status</span><strong class="status-pill">Ready</strong></div>
-          <button class="btn-primary btn-block mt-12" type="button" id="upload-download-btn">Download CSV →</button>
+          <p class="card-caption">Open the generated Shopify CSV in Explorer.</p>
+          <div class="result-row"><span>Output</span><strong id="upload-output-name">—</strong></div>
+          <div class="result-row"><span>Status</span><strong id="upload-status" class="status-pill">Ready</strong></div>
+          <button class="btn-primary btn-block mt-12" type="button" id="upload-download-btn">Open Output CSV →</button>
         </section>
       </section>
 
@@ -839,7 +850,10 @@
           <p class="card-caption">Enter a storefront URL to run a CRO and technical audit.</p>
           <label class="field-label" for="audit-url">Store URL</label>
           <input class="input" id="audit-url" type="url" placeholder="https://your-store.com" />
-          <button class="btn-primary btn-block mt-16" type="button" id="audit-run">Run Audit →</button>
+          <div class="btn-row">
+            <button class="btn-primary" type="button" id="audit-run">Run Audit →</button>
+            <button class="btn-stop" type="button" id="audit-stop" disabled>Stop →</button>
+          </div>
           <div class="progress-wrap">
             <div class="progress-meta">
               <span id="audit-progress-label">Idle</span>
@@ -851,7 +865,7 @@
 
         <section class="card">
           <h2 class="card-title">Audit Results</h2>
-          <p class="card-caption">Findings appear here after an audit completes.</p>
+          <p class="card-caption">Live audit log and findings.</p>
           <div class="log" id="audit-results"><span class="log-line">No audit run yet.</span></div>
           <button class="btn-outline btn-block mt-12" type="button" id="audit-download" disabled>Download Report →</button>
         </section>
@@ -893,7 +907,10 @@
             <span class="range-value" id="converter-quality-value">85</span>
           </div>
 
-          <button class="btn-primary btn-block mt-16" type="button" id="converter-run">Convert →</button>
+          <div class="btn-row">
+            <button class="btn-primary" type="button" id="converter-run">Convert →</button>
+            <button class="btn-stop" type="button" id="converter-stop" disabled>Stop →</button>
+          </div>
 
           <div class="progress-wrap">
             <div class="progress-meta">
@@ -1029,50 +1046,211 @@
       return timer;
     }
 
-    // Upload
-    const dropzone = document.getElementById("upload-dropzone");
-    const fileInput = document.getElementById("upload-file-input");
-    const fileCard = document.getElementById("upload-file-card");
-    const downloadCard = document.getElementById("upload-download-card");
-
-    function setUploadFile(file) {
-      if (!file) return;
-      document.getElementById("upload-file-name").textContent = file.name;
-      document.getElementById("upload-file-size").textContent = (file.size / 1024).toFixed(1) + " KB";
-      document.getElementById("upload-file-type").textContent = file.type || "spreadsheet";
-      fileCard.classList.remove("hidden");
-      downloadCard.classList.add("hidden");
+    function api() {
+      return window.sentivo || null;
     }
 
-    dropzone.addEventListener("click", () => fileInput.click());
+    function parseProgressFromLine(line, fillEl, pctEl, labelEl) {
+      const text = String(line || "");
+      const pctMatch =
+        text.match(/progress[=:]\s*(\d{1,3})/i) ||
+        text.match(/\b(\d{1,3})\s*%/);
+      if (!pctMatch) return;
+      const pct = Math.max(0, Math.min(100, parseInt(pctMatch[1], 10)));
+      setProgress(fillEl, pctEl, labelEl, pct, text.slice(0, 80));
+    }
+
+    function basename(p) {
+      const s = String(p || "");
+      const parts = s.split(/[/\\]/);
+      return parts[parts.length - 1] || s;
+    }
+
+    // Upload → Python backend
+    const dropzone = document.getElementById("upload-dropzone");
+    const fileCard = document.getElementById("upload-file-card");
+    const downloadCard = document.getElementById("upload-download-card");
+    const uploadLog = document.getElementById("upload-log");
+    const uploadGenerate = document.getElementById("upload-generate-btn");
+    const uploadStop = document.getElementById("upload-stop");
+    let uploadSelectedPath = "";
+    let uploadOutputPath = "";
+    let uploadRunning = false;
+
+    function setUploadPath(filePath) {
+      if (!filePath) return;
+      uploadSelectedPath = filePath;
+      uploadOutputPath = "";
+      document.getElementById("upload-file-name").textContent = basename(filePath);
+      document.getElementById("upload-file-path").textContent = filePath;
+      document.getElementById("upload-file-size").textContent = "—";
+      fileCard.classList.remove("hidden");
+      downloadCard.classList.add("hidden");
+      document.getElementById("upload-status").textContent = "Ready";
+    }
+
+    async function browseUploadFile() {
+      const bridge = api();
+      if (!bridge) {
+        alert("Electron bridge unavailable. Restart the app.");
+        return;
+      }
+      const filePath = await bridge.browseFile();
+      if (filePath) setUploadPath(filePath);
+    }
+
+    dropzone.addEventListener("click", () => browseUploadFile());
+    document.getElementById("upload-browse-file").addEventListener("click", () => browseUploadFile());
     dropzone.addEventListener("dragover", (e) => {
       e.preventDefault();
       dropzone.classList.add("dragover");
     });
     dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover"));
-    dropzone.addEventListener("drop", (e) => {
+    dropzone.addEventListener("drop", async (e) => {
       e.preventDefault();
       dropzone.classList.remove("dragover");
       const file = e.dataTransfer.files && e.dataTransfer.files[0];
-      setUploadFile(file);
+      if (!file) return;
+      // Electron File may expose .path
+      if (file.path) {
+        setUploadPath(file.path);
+        return;
+      }
+      await browseUploadFile();
     });
-    fileInput.addEventListener("change", () => setUploadFile(fileInput.files[0]));
     document.getElementById("upload-clear-file").addEventListener("click", () => {
-      fileInput.value = "";
+      uploadSelectedPath = "";
+      uploadOutputPath = "";
       fileCard.classList.add("hidden");
       downloadCard.classList.add("hidden");
     });
-    document.getElementById("upload-generate-btn").addEventListener("click", () => {
-      if (fileCard.classList.contains("hidden")) {
+
+    function buildUploadMapping() {
+      const pairs = [
+        ["map-title", "Title"],
+        ["map-handle", "Handle"],
+        ["map-price", "Variant Price"],
+        ["map-sku", "Variant SKU"],
+        ["map-description", "Body (HTML)"],
+        ["map-image", "Image Src"],
+      ];
+      const mapping = [];
+      for (const [id, shopifyField] of pairs) {
+        const val = document.getElementById(id).value;
+        if (!val || val === "Auto-detect") continue;
+        mapping.push({ client_col: val, shopify_field: shopifyField });
+      }
+      return mapping;
+    }
+
+    function resetUploadUi() {
+      uploadRunning = false;
+      uploadGenerate.disabled = false;
+      uploadStop.disabled = true;
+    }
+
+    if (api()) {
+      api().onUploadLogLine((line) => {
+        appendLog(uploadLog, line);
+        parseProgressFromLine(
+          line,
+          document.getElementById("upload-progress-fill"),
+          document.getElementById("upload-progress-pct"),
+          document.getElementById("upload-progress-label")
+        );
+        const outMatch = String(line || "").match(/Output Path:\s*(.+)$/i);
+        if (outMatch) {
+          uploadOutputPath = outMatch[1].trim();
+          document.getElementById("upload-output-name").textContent = basename(uploadOutputPath);
+        }
+      });
+      api().onUploadDone((payload) => {
+        const stopped = Boolean(payload && payload.stopped);
+        const code = payload && typeof payload.code === "number" ? payload.code : -1;
+        if (payload && payload.outputPath) uploadOutputPath = payload.outputPath;
+        resetUploadUi();
+        if (stopped) {
+          document.getElementById("upload-progress-label").textContent = "Stopped";
+          document.getElementById("upload-status").textContent = "Stopped";
+          appendLog(uploadLog, "[WARNING] Upload job stopped.");
+        } else if (code === 0) {
+          setProgress(
+            document.getElementById("upload-progress-fill"),
+            document.getElementById("upload-progress-pct"),
+            document.getElementById("upload-progress-label"),
+            100,
+            "Complete"
+          );
+          document.getElementById("upload-status").textContent = "Ready";
+          if (uploadOutputPath) {
+            document.getElementById("upload-output-name").textContent = basename(uploadOutputPath);
+            downloadCard.classList.remove("hidden");
+          }
+          appendLog(uploadLog, "[INFO] Upload conversion finished.");
+        } else {
+          document.getElementById("upload-progress-label").textContent = "Failed";
+          document.getElementById("upload-status").textContent = "Failed";
+          appendLog(uploadLog, `[ERROR] Upload exited with code ${code}.`);
+        }
+      });
+    }
+
+    uploadGenerate.addEventListener("click", async () => {
+      const bridge = api();
+      if (!bridge) {
+        alert("Electron bridge unavailable. Restart with npm start from electron/.");
+        return;
+      }
+      if (!uploadSelectedPath) {
         alert("Select a spreadsheet first.");
         return;
       }
-      const name = document.getElementById("upload-file-name").textContent.replace(/\.[^.]+$/, "") + "_shopify.csv";
-      document.getElementById("upload-output-name").textContent = name;
-      downloadCard.classList.remove("hidden");
+      clearLog(uploadLog, "[INFO] Starting upload conversion…");
+      uploadRunning = true;
+      uploadGenerate.disabled = true;
+      uploadStop.disabled = false;
+      downloadCard.classList.add("hidden");
+      uploadOutputPath = "";
+      setProgress(
+        document.getElementById("upload-progress-fill"),
+        document.getElementById("upload-progress-pct"),
+        document.getElementById("upload-progress-label"),
+        0,
+        "Running"
+      );
+      try {
+        const mapping = buildUploadMapping();
+        await bridge.runUpload({
+          inputPath: uploadSelectedPath,
+          mapping: mapping.length ? mapping : "",
+        });
+      } catch (err) {
+        appendLog(uploadLog, `[ERROR] ${err && err.message ? err.message : err}`);
+        resetUploadUi();
+      }
     });
-    document.getElementById("upload-download-btn").addEventListener("click", () => {
-      alert("Download is UI-only until the backend is wired.");
+
+    uploadStop.addEventListener("click", async () => {
+      const bridge = api();
+      if (!bridge) return;
+      appendLog(uploadLog, "[WARNING] Stop requested…");
+      try {
+        await bridge.stopUpload();
+      } catch (err) {
+        appendLog(uploadLog, `[ERROR] Stop failed: ${err && err.message ? err.message : err}`);
+      }
+    });
+
+    document.getElementById("upload-download-btn").addEventListener("click", async () => {
+      const bridge = api();
+      if (!bridge || !uploadOutputPath) {
+        alert("No output file yet.");
+        return;
+      }
+      const result = await bridge.openPath(uploadOutputPath);
+      if (result && result.ok === false) {
+        alert(result.error || "Could not open output file.");
+      }
     });
 
     // Scraper → Python backend via preload IPC
@@ -1085,10 +1263,6 @@
     let scraperSeedCount = 0;
     let scraperProducts = 0;
     let scraperRunning = false;
-
-    function api() {
-      return window.sentivo || null;
-    }
 
     document.getElementById("scraper-vendor-toggle").addEventListener("change", (e) => {
       document.getElementById("scraper-vendor-wrap").classList.toggle("hidden", !e.target.checked);
@@ -1279,44 +1453,158 @@
       alert("Open the Output Path folder for shopify_import.csv.");
     });
 
-    // Auditor
-    let auditTimer = null;
-    document.getElementById("audit-run").addEventListener("click", () => {
+    // Auditor → Python backend
+    const auditResults = document.getElementById("audit-results");
+    const auditRun = document.getElementById("audit-run");
+    const auditStop = document.getElementById("audit-stop");
+    const auditDownload = document.getElementById("audit-download");
+    let auditReportPath = "";
+    let auditRunning = false;
+    let auditStep = 0;
+
+    function resetAuditUi() {
+      auditRunning = false;
+      auditRun.disabled = false;
+      auditStop.disabled = true;
+    }
+
+    if (api()) {
+      api().onAuditorLogLine((line) => {
+        appendLog(auditResults, line);
+        parseProgressFromLine(
+          line,
+          document.getElementById("audit-progress-fill"),
+          document.getElementById("audit-progress-pct"),
+          document.getElementById("audit-progress-label")
+        );
+        // Soft progress when Python only emits step messages
+        if (auditRunning && !/progress[=:]/i.test(String(line || ""))) {
+          auditStep += 1;
+          const soft = Math.min(95, 8 + auditStep * 7);
+          setProgress(
+            document.getElementById("audit-progress-fill"),
+            document.getElementById("audit-progress-pct"),
+            document.getElementById("audit-progress-label"),
+            soft,
+            String(line || "").slice(0, 80)
+          );
+        }
+        const reportMatch = String(line || "").match(/Report:\s*(.+)$/i);
+        if (reportMatch) {
+          auditReportPath = reportMatch[1].trim();
+          auditDownload.disabled = false;
+        }
+      });
+      api().onAuditorDone((payload) => {
+        const stopped = Boolean(payload && payload.stopped);
+        const code = payload && typeof payload.code === "number" ? payload.code : -1;
+        if (payload && payload.reportPath) {
+          auditReportPath = payload.reportPath;
+          auditDownload.disabled = false;
+        }
+        resetAuditUi();
+        if (stopped) {
+          document.getElementById("audit-progress-label").textContent = "Stopped";
+          appendLog(auditResults, "[WARNING] Audit stopped.");
+        } else if (code === 0) {
+          setProgress(
+            document.getElementById("audit-progress-fill"),
+            document.getElementById("audit-progress-pct"),
+            document.getElementById("audit-progress-label"),
+            100,
+            "Complete"
+          );
+          appendLog(auditResults, "[INFO] Audit finished successfully.");
+          if (auditReportPath) auditDownload.disabled = false;
+        } else {
+          document.getElementById("audit-progress-label").textContent = "Failed";
+          appendLog(auditResults, `[ERROR] Audit exited with code ${code}.`);
+        }
+      });
+    }
+
+    auditRun.addEventListener("click", async () => {
+      const bridge = api();
+      if (!bridge) {
+        alert("Electron bridge unavailable. Restart with npm start from electron/.");
+        return;
+      }
       const url = document.getElementById("audit-url").value.trim();
       if (!url) {
         alert("Enter a store URL.");
         return;
       }
-      const results = document.getElementById("audit-results");
-      const download = document.getElementById("audit-download");
-      clearLog(results, "[INFO] Starting audit for " + url);
-      download.disabled = true;
-      clearInterval(auditTimer);
-      auditTimer = fakeProgress({
-        fillEl: document.getElementById("audit-progress-fill"),
-        pctEl: document.getElementById("audit-progress-pct"),
-        labelEl: document.getElementById("audit-progress-label"),
-        logEl: results,
-        labels: [
-          "[INFO] Fetching homepage…",
-          "[INFO] Checking technical SEO…",
-          "[WARNING] Missing meta description on some pages…",
-          "[INFO] Scoring CRO signals…",
-          "[INFO] Compiling recommendations…",
-        ],
-        onDone: () => {
-          appendLog(results, "[INFO] Overall score: 78 / 100");
-          appendLog(results, "[WARNING] Priority: Improve product image quality and PDP trust blocks.");
-          download.disabled = false;
-        },
-      });
-    });
-    document.getElementById("audit-download").addEventListener("click", () => {
-      alert("Report download is UI-only until the backend is wired.");
+      auditReportPath = "";
+      auditStep = 0;
+      clearLog(auditResults, "[INFO] Starting audit for " + url);
+      auditDownload.disabled = true;
+      auditRunning = true;
+      auditRun.disabled = true;
+      auditStop.disabled = false;
+      setProgress(
+        document.getElementById("audit-progress-fill"),
+        document.getElementById("audit-progress-pct"),
+        document.getElementById("audit-progress-label"),
+        0,
+        "Running"
+      );
+      try {
+        await bridge.runAuditor({ url, mode: "cro" });
+      } catch (err) {
+        appendLog(auditResults, `[ERROR] ${err && err.message ? err.message : err}`);
+        resetAuditUi();
+      }
     });
 
-    // Converter
-    let converterTimer = null;
+    auditStop.addEventListener("click", async () => {
+      const bridge = api();
+      if (!bridge) return;
+      appendLog(auditResults, "[WARNING] Stop requested…");
+      try {
+        await bridge.stopAuditor();
+      } catch (err) {
+        appendLog(auditResults, `[ERROR] Stop failed: ${err && err.message ? err.message : err}`);
+      }
+    });
+
+    auditDownload.addEventListener("click", async () => {
+      const bridge = api();
+      if (!bridge) return;
+      if (!auditReportPath) {
+        alert("No report available yet.");
+        return;
+      }
+      const dest = await bridge.saveFile({
+        title: "Save audit report",
+        defaultPath: basename(auditReportPath),
+        filters: [
+          { name: "Documents", extensions: ["docx", "pdf", "html", "md", "txt"] },
+          { name: "All Files", extensions: ["*"] },
+        ],
+      });
+      if (!dest) return;
+      try {
+        await bridge.copyFile(auditReportPath, dest);
+        appendLog(auditResults, `[INFO] Report saved to ${dest}`);
+        await bridge.openPath(dest);
+      } catch (err) {
+        appendLog(auditResults, `[ERROR] Save failed: ${err && err.message ? err.message : err}`);
+        alert(err && err.message ? err.message : String(err));
+      }
+    });
+
+    // Converter → Python backend
+    const converterLog = document.getElementById("converter-log");
+    const converterRun = document.getElementById("converter-run");
+    const converterStop = document.getElementById("converter-stop");
+    let converterRunning = false;
+
+    function resetConverterUi() {
+      converterRunning = false;
+      converterRun.disabled = false;
+      converterStop.disabled = true;
+    }
+
     document.getElementById("converter-quality").addEventListener("input", (e) => {
       document.getElementById("converter-quality-value").textContent = e.target.value;
     });
@@ -1332,7 +1620,46 @@
       const folder = await bridge.browseFolder();
       if (folder) document.getElementById("converter-output").value = folder;
     });
-    document.getElementById("converter-run").addEventListener("click", () => {
+
+    if (api()) {
+      api().onConverterLogLine((line) => {
+        appendLog(converterLog, line);
+        parseProgressFromLine(
+          line,
+          document.getElementById("converter-progress-fill"),
+          document.getElementById("converter-progress-pct"),
+          document.getElementById("converter-progress-label")
+        );
+      });
+      api().onConverterDone((payload) => {
+        const stopped = Boolean(payload && payload.stopped);
+        const code = payload && typeof payload.code === "number" ? payload.code : -1;
+        resetConverterUi();
+        if (stopped) {
+          document.getElementById("converter-progress-label").textContent = "Stopped";
+          appendLog(converterLog, "[WARNING] Converter stopped.");
+        } else if (code === 0) {
+          setProgress(
+            document.getElementById("converter-progress-fill"),
+            document.getElementById("converter-progress-pct"),
+            document.getElementById("converter-progress-label"),
+            100,
+            "Complete"
+          );
+          appendLog(converterLog, "[INFO] Conversion finished successfully.");
+        } else {
+          document.getElementById("converter-progress-label").textContent = "Failed";
+          appendLog(converterLog, `[ERROR] Converter exited with code ${code}.`);
+        }
+      });
+    }
+
+    converterRun.addEventListener("click", async () => {
+      const bridge = api();
+      if (!bridge) {
+        alert("Electron bridge unavailable. Restart with npm start from electron/.");
+        return;
+      }
       const input = document.getElementById("converter-input").value.trim();
       const output = document.getElementById("converter-output").value.trim();
       if (!input || !output) {
@@ -1341,21 +1668,39 @@
       }
       const format = document.getElementById("converter-format").value;
       const quality = document.getElementById("converter-quality").value;
-      const log = document.getElementById("converter-log");
-      clearLog(log, `[INFO] Converting to ${format} at quality ${quality}…`);
-      clearInterval(converterTimer);
-      converterTimer = fakeProgress({
-        fillEl: document.getElementById("converter-progress-fill"),
-        pctEl: document.getElementById("converter-progress-pct"),
-        labelEl: document.getElementById("converter-progress-label"),
-        logEl: log,
-        labels: [
-          "[INFO] Scanning input folder…",
-          "[INFO] Converting images…",
-          "[WARNING] Skipping unsupported file types…",
-          "[INFO] Writing output files…",
-        ],
-      });
+      clearLog(converterLog, `[INFO] Converting to ${format} at quality ${quality}…`);
+      converterRunning = true;
+      converterRun.disabled = true;
+      converterStop.disabled = false;
+      setProgress(
+        document.getElementById("converter-progress-fill"),
+        document.getElementById("converter-progress-pct"),
+        document.getElementById("converter-progress-label"),
+        0,
+        "Running"
+      );
+      try {
+        await bridge.runConverter({
+          inputFolder: input,
+          outputFolder: output,
+          format: String(format).toUpperCase(),
+          quality,
+        });
+      } catch (err) {
+        appendLog(converterLog, `[ERROR] ${err && err.message ? err.message : err}`);
+        resetConverterUi();
+      }
+    });
+
+    converterStop.addEventListener("click", async () => {
+      const bridge = api();
+      if (!bridge) return;
+      appendLog(converterLog, "[WARNING] Stop requested…");
+      try {
+        await bridge.stopConverter();
+      } catch (err) {
+        appendLog(converterLog, `[ERROR] Stop failed: ${err && err.message ? err.message : err}`);
+      }
     });
 
     // Settings
