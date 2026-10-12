@@ -24,17 +24,9 @@ GITHUB_RELEASES_PAGE = (
 
 
 def get_current_version() -> str:
-    # Check next to .exe first (installed version)
-    if getattr(sys, "frozen", False):
-        # Running as PyInstaller .exe
-        exe_dir = os.path.dirname(sys.executable)
-        version_file = os.path.join(exe_dir, "version.json")
-    else:
-        # Running as Python script
-        version_file = os.path.join(
-            os.path.dirname(__file__), "../../version.json"
-        )
+    from app.utils.helpers import resource_path
 
+    version_file = resource_path("version.json")
     try:
         with open(version_file, encoding="utf-8") as f:
             return json.load(f)["version"]

@@ -39,23 +39,23 @@ from app.utils.helpers import resource_path
 from app.utils.updater import check_for_update, download_and_install, get_current_version
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-ICON_ICO = Path(resource_path("assets/icon.ico"))
-ICON_PNG = Path(resource_path("assets/sentivo icon.png"))
 
 
 def _apply_window_icon(app: ctk.CTk) -> None:
     """Set taskbar / window icon from assets."""
+    icon_ico = Path(resource_path("assets/icon.ico"))
+    icon_png = Path(resource_path("assets/sentivo icon.png"))
     try:
-        if ICON_ICO.exists():
-            app.iconbitmap(default=str(ICON_ICO))
-            app.iconbitmap(str(ICON_ICO))
+        if icon_ico.exists():
+            app.iconbitmap(default=str(icon_ico))
+            app.iconbitmap(str(icon_ico))
     except Exception:
         pass
     try:
-        if ICON_PNG.exists():
+        if icon_png.exists():
             from PIL import Image, ImageTk
 
-            img = Image.open(ICON_PNG)
+            img = Image.open(icon_png)
             photo = ImageTk.PhotoImage(img)
             app.iconphoto(True, photo)
             app._icon_photo = photo  # prevent GC

@@ -94,13 +94,13 @@ def fetch_with_playwright(
     timeout_ms: int = 60_000,
     logger_: logging.Logger | None = None,
     extract_woo_gallery: bool = False,
-    headless: bool = True,
+    headless: bool = False,
 ) -> str | tuple[str, list[dict[str, Any]]]:
     """
     Fetch HTML via Chromium, optional HTTP(S) proxy.
 
-    Default headless=True (product fetches). Category crawling may pass
-    headless=False when no proxy is set.
+    Default headless=False so product pages (and gallery/JS) load through
+    the system VPN. Category crawling may pass headless explicitly.
     """
     log = logger_ or logging.getLogger("sentivo_extractor")
 
@@ -182,6 +182,7 @@ def fetch_woocommerce_with_playwright(
         timeout_ms=timeout_ms,
         logger_=logger_,
         extract_woo_gallery=True,
+        headless=False,
     )
     if isinstance(result, tuple):
         return result[0] or "", list(result[1] or [])

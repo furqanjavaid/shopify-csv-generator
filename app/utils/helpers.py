@@ -11,15 +11,29 @@ from urllib.parse import urlparse
 
 
 def resource_path(relative_path: str) -> str:
-    """Resolve path to resource — works for dev and PyInstaller --onefile."""
+    """Resolve a project asset for dev and for a PyInstaller bundle (sys._MEIPASS)."""
+    rel = relative_path.replace("\\", "/").lstrip("/")
+    parts = [p for p in rel.split("/") if p]
+    bases: list[str] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        bases.append(str(meipass))
     if getattr(sys, "frozen", False):
-        base = sys._MEIPASS  # type: ignore[attr-defined]
+        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+        bases.append(exe_dir)
+        bases.append(os.path.join(exe_dir, "_internal"))
     else:
-        # helpers.py is in app/utils/ — project root is two levels up from utils/
+        # helpers.py is in app/utils/ — project root is two levels up.
         base = os.path.dirname(os.path.abspath(__file__))
         base = os.path.dirname(base)  # app/
         base = os.path.dirname(base)  # project root
-    return os.path.normpath(os.path.join(base, relative_path.replace("/", os.sep)))
+        bases.append(base)
+    for base in bases:
+        full = os.path.normpath(os.path.join(base, *parts))
+        if os.path.exists(full):
+            return full
+    fallback = bases[0] if bases else os.getcwd()
+    return os.path.normpath(os.path.join(fallback, *parts))
 
 
 def slugify(text: str) -> str:

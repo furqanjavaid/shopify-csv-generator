@@ -13,7 +13,6 @@ from app.ui.theme import current_colors
 from app.utils.helpers import resource_path
 from app.utils.updater import get_current_version
 
-LOGO_PATH = Path(resource_path("assets/sentivo-tools-logo.png"))
 LOGO_MAX_WIDTH = 180
 
 # page_id, label, lucide icon stem
@@ -28,10 +27,11 @@ NAV_ITEMS = [
 
 
 def _load_sidebar_logo() -> ctk.CTkImage | None:
-    if not LOGO_PATH.exists():
+    logo_path = Path(resource_path("assets/sentivo-tools-logo.png"))
+    if not logo_path.exists():
         return None
     try:
-        img = Image.open(LOGO_PATH)
+        img = Image.open(logo_path)
         w, h = img.size
         if w <= 0 or h <= 0:
             return None

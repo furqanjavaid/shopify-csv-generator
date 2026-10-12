@@ -1,7 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('app', 'app'), ('assets', 'assets'), ('version.json', '.')]
+datas = [
+    ('app', 'app'),
+    ('assets/icons', 'assets/icons'),
+    ('assets/sentivo-tools-logo.png', 'assets'),
+    ('assets/sentivo icon.png', 'assets'),
+    ('assets/icon.ico', 'assets'),
+    ('version.json', '.'),
+]
 binaries = []
 hiddenimports = ['customtkinter', 'pandas', 'openpyxl', 'bs4', 'lxml', 'PIL', 'PIL.Image', 'docx', 'requests', 'cloudscraper', 'playwright']
 tmp_ret = collect_all('customtkinter')

@@ -11,7 +11,10 @@ from PIL import Image
 from app.ui import theme as T
 from app.utils.helpers import resource_path
 
-ICONS_DIR = Path(resource_path("assets/icons"))
+
+def icons_dir() -> Path:
+    """assets/icons, resolved for dev and PyInstaller."""
+    return Path(resource_path("assets/icons"))
 
 # White outlines for navy sidebar; dark/navy for light content surfaces.
 _COLOR_WHITE = (240, 237, 232, 255)  # near #F0EDE8
@@ -48,7 +51,7 @@ def load_icon(
     Load assets/icons/<name>.png tinted for UI use.
     color: white | navy | muted | burgundy | gold
     """
-    path = ICONS_DIR / f"{name}.png"
+    path = icons_dir() / f"{name}.png"
     if not path.exists():
         return None
     try:
@@ -69,4 +72,4 @@ def load_icon(
 
 
 def icon_names() -> list[str]:
-    return sorted(p.stem for p in ICONS_DIR.glob("*.png"))
+    return sorted(p.stem for p in icons_dir().glob("*.png"))
