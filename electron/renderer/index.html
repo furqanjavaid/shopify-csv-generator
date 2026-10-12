@@ -1,0 +1,1190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sentivo Tools</title>
+  <style>
+    :root {
+      --sidebar: #0D1B2A;
+      --button: #8B1A2E;
+      --button-hover: #A02138;
+      --sidebar-text: #F0EDE8;
+      --sidebar-muted: #9AA3B2;
+      --main-bg: #F5F0EB;
+      --card: #FFFFFF;
+      --heading: #0D1B4B;
+      --text: #1F2937;
+      --text-secondary: #6B7280;
+      --border: #D8D5D0;
+      --accent-dim: #F3E6EA;
+      --gold: #C9A84C;
+      --success: #22A55B;
+      --stop: #6B7280;
+      --stop-hover: #4B5563;
+      --log-bg: #111827;
+      --log-text: #E5E7EB;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      height: 100%;
+      font-family: "Segoe UI", sans-serif;
+      background: var(--main-bg);
+      color: var(--text);
+    }
+
+    .app {
+      display: flex;
+      height: 100%;
+      min-height: 100%;
+    }
+
+    .sidebar {
+      width: 240px;
+      flex: 0 0 240px;
+      background: var(--sidebar);
+      color: var(--sidebar-text);
+      display: flex;
+      flex-direction: column;
+      padding: 24px 16px 16px;
+    }
+
+    .logo {
+      width: 180px;
+      max-width: 100%;
+      height: auto;
+      display: block;
+      margin: 0 0 28px 4px;
+    }
+
+    nav {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .nav-item {
+      appearance: none;
+      border: 0;
+      background: transparent;
+      color: var(--sidebar-text);
+      text-align: left;
+      font: inherit;
+      font-size: 14px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+
+    .nav-item:hover { background: rgba(255, 255, 255, 0.06); }
+    .nav-item.active { background: var(--button); color: #fff; }
+
+    .main {
+      flex: 1;
+      min-width: 0;
+      background: var(--main-bg);
+      overflow: auto;
+    }
+
+    .page {
+      display: none;
+      padding: 28px 32px 40px;
+      max-width: 1180px;
+    }
+
+    .page.active { display: block; }
+
+    .page-title {
+      margin: 0;
+      font-size: 28px;
+      font-weight: 700;
+      color: var(--heading);
+      line-height: 1.2;
+    }
+
+    .page-subtitle {
+      margin: 6px 0 0;
+      font-size: 14px;
+      color: var(--text-secondary);
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px 20px;
+      margin-top: 16px;
+    }
+
+    .card-title {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--heading);
+    }
+
+    .card-caption {
+      margin: 4px 0 0;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .field-label {
+      display: block;
+      margin: 14px 0 6px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-secondary);
+    }
+
+    .field-label:first-of-type { margin-top: 12px; }
+
+    .input, .select, .textarea {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--text);
+      font: inherit;
+      font-size: 14px;
+      padding: 10px 12px;
+      outline: none;
+    }
+
+    .input:focus, .select:focus, .textarea:focus {
+      border-color: var(--button);
+      box-shadow: 0 0 0 3px rgba(139, 26, 46, 0.12);
+    }
+
+    .textarea {
+      min-height: 120px;
+      resize: vertical;
+      line-height: 1.4;
+    }
+
+    .row {
+      display: flex;
+      gap: 12px;
+      align-items: end;
+    }
+
+    .row > * { flex: 1; min-width: 0; }
+    .row .fixed { flex: 0 0 auto; }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    .checkbox {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 14px;
+      font-size: 13px;
+      color: var(--text-secondary);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .checkbox input {
+      width: 16px;
+      height: 16px;
+      accent-color: var(--button);
+    }
+
+    .btn-primary, .btn-secondary, .btn-stop, .btn-outline {
+      appearance: none;
+      border: 0;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      height: 40px;
+      border-radius: 8px;
+      cursor: pointer;
+      padding: 0 16px;
+    }
+
+    .btn-primary {
+      background: var(--button);
+      color: #fff;
+    }
+
+    .btn-primary:hover { background: var(--button-hover); }
+    .btn-primary:disabled {
+      background: #C4A0A8;
+      cursor: not-allowed;
+    }
+
+    .btn-stop {
+      background: var(--stop);
+      color: #fff;
+    }
+
+    .btn-stop:hover { background: var(--stop-hover); }
+    .btn-stop:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    .btn-outline {
+      background: transparent;
+      color: var(--heading);
+      border: 1px solid var(--border);
+    }
+
+    .btn-outline:hover { border-color: var(--button); color: var(--button); }
+
+    .btn-secondary {
+      background: var(--accent-dim);
+      color: var(--heading);
+    }
+
+    .btn-block { width: 100%; }
+    .btn-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .progress-wrap { margin-top: 14px; }
+    .progress-meta {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-bottom: 6px;
+    }
+
+    .progress-track {
+      height: 10px;
+      border-radius: 6px;
+      background: var(--border);
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      width: 0%;
+      height: 100%;
+      background: var(--gold);
+      border-radius: 6px;
+      transition: width 0.25s ease;
+    }
+
+    .log {
+      margin-top: 12px;
+      background: var(--log-bg);
+      color: var(--log-text);
+      border-radius: 10px;
+      min-height: 220px;
+      max-height: 320px;
+      overflow: auto;
+      padding: 14px;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 12px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+
+    .scraper-layout, .split-layout {
+      display: grid;
+      grid-template-columns: 1.7fr 1fr;
+      gap: 16px;
+      align-items: start;
+    }
+
+    .result-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+    }
+
+    .result-row:last-of-type { border-bottom: 0; }
+    .result-row span:first-child { color: var(--text-secondary); }
+    .result-row strong { color: var(--heading); text-align: right; }
+
+    .dropzone {
+      margin-top: 14px;
+      border: 2px dashed var(--border);
+      border-radius: 12px;
+      background: #FBF8F4;
+      padding: 36px 20px;
+      text-align: center;
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: border-color 0.15s ease, background 0.15s ease;
+    }
+
+    .dropzone.dragover {
+      border-color: var(--button);
+      background: var(--accent-dim);
+    }
+
+    .dropzone strong {
+      display: block;
+      color: var(--heading);
+      font-size: 16px;
+      margin-bottom: 6px;
+    }
+
+    .hidden { display: none !important; }
+
+    .mapping-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px 16px;
+      margin-top: 12px;
+    }
+
+    .mapping-item label {
+      display: block;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-secondary);
+      margin-bottom: 4px;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--success);
+    }
+
+    .status-pill::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+    }
+
+    .range-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .range-row input[type="range"] { flex: 1; accent-color: var(--button); }
+    .range-value {
+      min-width: 40px;
+      font-weight: 700;
+      color: var(--heading);
+    }
+
+    .link {
+      color: var(--button);
+      text-decoration: none;
+      font-weight: 600;
+    }
+
+    .link:hover { text-decoration: underline; }
+
+    .about-list {
+      margin-top: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .about-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+
+    .about-row strong { color: var(--heading); }
+
+    .job-ready {
+      margin: 12px 0 10px;
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+    }
+
+    .stat-label {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-secondary);
+    }
+
+    .stat-value {
+      margin-top: 4px;
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--heading);
+    }
+
+    .actions {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .action-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .action-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 24px;
+      background: var(--accent-dim);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      color: var(--heading);
+      font-weight: 700;
+    }
+
+    .action-card h3 {
+      margin: 10px 0 0;
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--heading);
+    }
+
+    .action-card p {
+      margin: 8px 0 16px;
+      font-size: 13px;
+      color: var(--text-secondary);
+      line-height: 1.4;
+      flex: 1;
+    }
+
+    .bottom-row {
+      display: grid;
+      grid-template-columns: 7fr 3fr;
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+    }
+
+    .table th {
+      text-align: left;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-secondary);
+      padding: 0 8px 8px 0;
+    }
+
+    .empty-row {
+      color: var(--text-secondary);
+      font-size: 13px;
+      padding: 12px 0 4px;
+    }
+
+    .status-list {
+      margin-top: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .status-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+
+    .status-dot {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--success);
+      font-weight: 600;
+      font-size: 12px;
+    }
+
+    .status-dot::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+    }
+
+    .mt-0 { margin-top: 0; }
+    .mt-12 { margin-top: 12px; }
+    .mt-16 { margin-top: 16px; }
+
+    @media (max-width: 980px) {
+      .stats, .actions, .grid-2, .scraper-layout, .split-layout, .mapping-grid {
+        grid-template-columns: 1fr;
+      }
+      .bottom-row { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <img class="logo" src="../../assets/sentivo-tools-logo.png" alt="Sentivo Tools" />
+      <nav>
+        <button class="nav-item active" type="button" data-page="home">Home</button>
+        <button class="nav-item" type="button" data-page="upload">File Upload</button>
+        <button class="nav-item" type="button" data-page="scraper">URL Scraper</button>
+        <button class="nav-item" type="button" data-page="audit">Store Auditor</button>
+        <button class="nav-item" type="button" data-page="converter">Image Converter</button>
+        <button class="nav-item" type="button" data-page="settings">Settings</button>
+      </nav>
+    </aside>
+
+    <main class="main">
+      <!-- HOME -->
+      <section id="page-home" class="page active">
+        <header>
+          <h1 class="page-title">Home</h1>
+          <p class="page-subtitle">Welcome to Sentivo Tools</p>
+        </header>
+
+        <section class="card">
+          <h2 class="card-title">Job Status</h2>
+          <p class="card-caption">Overview of your recent and current jobs across all tools.</p>
+          <div class="job-ready">Ready</div>
+          <div class="stats">
+            <div><div class="stat-label">Running</div><div class="stat-value">0</div></div>
+            <div><div class="stat-label">Completed</div><div class="stat-value">0</div></div>
+            <div><div class="stat-label">Pending</div><div class="stat-value">0</div></div>
+            <div><div class="stat-label">Success Rate</div><div class="stat-value">--</div></div>
+          </div>
+          <div class="progress-track mt-16"><div class="progress-fill"></div></div>
+        </section>
+
+        <section class="actions">
+          <article class="action-card">
+            <div class="action-icon">↑</div>
+            <h3>Upload File</h3>
+            <p>Convert any client spreadsheet to Shopify-ready CSV</p>
+            <button class="btn-primary" type="button" data-nav="upload">Upload File →</button>
+          </article>
+          <article class="action-card">
+            <div class="action-icon">↗</div>
+            <h3>Scrape Store</h3>
+            <p>Extract products and metadata from ecommerce store URLs</p>
+            <button class="btn-primary" type="button" data-nav="scraper">Start Scraping →</button>
+          </article>
+          <article class="action-card">
+            <div class="action-icon">≡</div>
+            <h3>Audit Store</h3>
+            <p>Run CRO and technical audits with scored recommendations</p>
+            <button class="btn-primary" type="button" data-nav="audit">Start Audit →</button>
+          </article>
+        </section>
+
+        <section class="bottom-row">
+          <article class="card mt-0">
+            <h2 class="card-title">Recent Tasks</h2>
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Tool</th>
+                  <th>Name</th>
+                  <th>Status</th>
+                  <th>Progress</th>
+                  <th>Started At</th>
+                </tr>
+              </thead>
+            </table>
+            <div class="empty-row">No tasks yet</div>
+          </article>
+          <article class="card mt-0">
+            <h2 class="card-title">System Status</h2>
+            <p class="card-caption">Live status of core components.</p>
+            <div class="status-list">
+              <div class="status-row"><span>Python Environment</span><span class="status-dot">Healthy</span></div>
+              <div class="status-row"><span>Job Queue</span><span class="status-dot">Ready</span></div>
+              <div class="status-row"><span>Storage</span><span class="status-dot">Available</span></div>
+            </div>
+          </article>
+        </section>
+      </section>
+
+      <!-- FILE UPLOAD -->
+      <section id="page-upload" class="page">
+        <header>
+          <h1 class="page-title">File Upload</h1>
+          <p class="page-subtitle">Convert client spreadsheets to Shopify-ready CSV</p>
+        </header>
+
+        <section class="card">
+          <h2 class="card-title">Upload Spreadsheet</h2>
+          <p class="card-caption">Drag and drop a CSV or Excel file, or click to browse.</p>
+          <div class="dropzone" id="upload-dropzone">
+            <strong>Drop file here</strong>
+            Click to browse · .csv, .xlsx, .xls
+            <input id="upload-file-input" class="hidden" type="file" accept=".csv,.xlsx,.xls" />
+          </div>
+        </section>
+
+        <section class="card hidden" id="upload-file-card">
+          <h2 class="card-title">Selected File</h2>
+          <div class="result-row"><span>Name</span><strong id="upload-file-name">—</strong></div>
+          <div class="result-row"><span>Size</span><strong id="upload-file-size">—</strong></div>
+          <div class="result-row"><span>Type</span><strong id="upload-file-type">—</strong></div>
+          <button class="btn-outline mt-12" type="button" id="upload-clear-file">Clear File</button>
+        </section>
+
+        <section class="card">
+          <h2 class="card-title">Column Mapping</h2>
+          <p class="card-caption">Map source columns to Shopify fields. UI-only for now.</p>
+          <div class="mapping-grid">
+            <div class="mapping-item">
+              <label>Title</label>
+              <select class="select" id="map-title"><option>Auto-detect</option><option>Title</option><option>Name</option><option>Product</option></select>
+            </div>
+            <div class="mapping-item">
+              <label>Handle</label>
+              <select class="select" id="map-handle"><option>Auto-detect</option><option>Handle</option><option>Slug</option></select>
+            </div>
+            <div class="mapping-item">
+              <label>Price</label>
+              <select class="select" id="map-price"><option>Auto-detect</option><option>Price</option><option>Unit Price</option></select>
+            </div>
+            <div class="mapping-item">
+              <label>SKU</label>
+              <select class="select" id="map-sku"><option>Auto-detect</option><option>SKU</option><option>Product Code</option></select>
+            </div>
+            <div class="mapping-item">
+              <label>Description</label>
+              <select class="select" id="map-description"><option>Auto-detect</option><option>Description</option><option>Body</option></select>
+            </div>
+            <div class="mapping-item">
+              <label>Image URL</label>
+              <select class="select" id="map-image"><option>Auto-detect</option><option>Image</option><option>Image URL</option></select>
+            </div>
+          </div>
+          <button class="btn-primary btn-block mt-16" type="button" id="upload-generate-btn">Generate CSV →</button>
+        </section>
+
+        <section class="card hidden" id="upload-download-card">
+          <h2 class="card-title">Download Result</h2>
+          <p class="card-caption">Your Shopify-ready CSV is ready (demo UI).</p>
+          <div class="result-row"><span>Output</span><strong id="upload-output-name">shopify_import.csv</strong></div>
+          <div class="result-row"><span>Status</span><strong class="status-pill">Ready</strong></div>
+          <button class="btn-primary btn-block mt-12" type="button" id="upload-download-btn">Download CSV →</button>
+        </section>
+      </section>
+
+      <!-- URL SCRAPER -->
+      <section id="page-scraper" class="page">
+        <header>
+          <h1 class="page-title">URL Scraper</h1>
+          <p class="page-subtitle">Scrape products and metadata from ecommerce stores using seed URLs</p>
+        </header>
+
+        <div class="scraper-layout">
+          <div>
+            <section class="card">
+              <h2 class="card-title">Scraper Configuration</h2>
+              <p class="card-caption">Configure your scraping settings and provide seed URLs to start.</p>
+
+              <div class="grid-2">
+                <div>
+                  <label class="field-label" for="scraper-mode">Mode</label>
+                  <select class="select" id="scraper-mode">
+                    <option>Universal Extractor Full</option>
+                    <option>Universal Extractor Lite</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="field-label" for="scraper-output">Output Folder</label>
+                  <div class="row">
+                    <input class="input" id="scraper-output" type="text" placeholder="Select output folder…" value="output" />
+                    <button class="btn-outline fixed" type="button" id="scraper-browse">Browse</button>
+                  </div>
+                </div>
+              </div>
+
+              <label class="checkbox">
+                <input type="checkbox" id="scraper-fresh" checked />
+                Fresh Start (overwrite previous data)
+              </label>
+              <label class="checkbox">
+                <input type="checkbox" id="scraper-vendor-toggle" />
+                Use Custom Vendor Name
+              </label>
+              <div id="scraper-vendor-wrap" class="hidden">
+                <label class="field-label" for="scraper-vendor">Vendor Name</label>
+                <input class="input" id="scraper-vendor" type="text" placeholder="Vendor name for all products…" />
+              </div>
+
+              <label class="field-label" for="scraper-max">Max Products</label>
+              <input class="input" id="scraper-max" type="text" placeholder="empty = unlimited" />
+
+              <label class="field-label" for="scraper-seeds">Seed URLs</label>
+              <textarea class="textarea" id="scraper-seeds" placeholder="https://store.example.com/collections/all&#10;https://another-store.com/product-category/sheets/"></textarea>
+
+              <label class="field-label" for="scraper-proxy">Proxy URL (optional)</label>
+              <input class="input" id="scraper-proxy" type="text" placeholder="http://user:pass@host:port" />
+
+              <div class="btn-row">
+                <button class="btn-primary" type="button" id="scraper-run">Run Scraper →</button>
+                <button class="btn-stop" type="button" id="scraper-stop" disabled>Stop →</button>
+              </div>
+              <button class="btn-outline btn-block mt-12" type="button" id="scraper-reprocess">Reprocess Existing Data →</button>
+
+              <div class="progress-wrap">
+                <div class="progress-meta">
+                  <span id="scraper-progress-label">Idle</span>
+                  <span id="scraper-progress-pct">0%</span>
+                </div>
+                <div class="progress-track"><div class="progress-fill" id="scraper-progress-fill"></div></div>
+              </div>
+            </section>
+
+            <section class="card">
+              <h2 class="card-title">Log Area</h2>
+              <p class="card-caption">Live scraper output (UI demo).</p>
+              <div class="log" id="scraper-log">Ready. Enter seed URLs and click Run Scraper.</div>
+            </section>
+          </div>
+
+          <aside>
+            <section class="card">
+              <h2 class="card-title">Results & Status</h2>
+              <p class="card-caption">Summary of the current scrape job.</p>
+              <div class="result-row"><span>Seed URLs Processed</span><strong id="scraper-stat-seeds">0</strong></div>
+              <div class="result-row"><span>Products Found</span><strong id="scraper-stat-products">0</strong></div>
+              <div class="result-row"><span>Output Path</span><strong id="scraper-stat-output">—</strong></div>
+              <div class="result-row"><span>Elapsed Time</span><strong id="scraper-stat-elapsed">00:00</strong></div>
+              <div class="result-row"><span>Status</span><strong id="scraper-stat-status">Idle</strong></div>
+              <button class="btn-primary btn-block mt-16" type="button" id="scraper-generate-csv" disabled>Generate Final CSV →</button>
+            </section>
+          </aside>
+        </div>
+      </section>
+
+      <!-- STORE AUDITOR -->
+      <section id="page-audit" class="page">
+        <header>
+          <h1 class="page-title">Store Auditor</h1>
+          <p class="page-subtitle">Run CRO and technical audits on ecommerce stores</p>
+        </header>
+
+        <section class="card">
+          <h2 class="card-title">Audit Configuration</h2>
+          <p class="card-caption">Enter a storefront URL to run a CRO and technical audit.</p>
+          <label class="field-label" for="audit-url">Store URL</label>
+          <input class="input" id="audit-url" type="url" placeholder="https://your-store.com" />
+          <button class="btn-primary btn-block mt-16" type="button" id="audit-run">Run Audit →</button>
+          <div class="progress-wrap">
+            <div class="progress-meta">
+              <span id="audit-progress-label">Idle</span>
+              <span id="audit-progress-pct">0%</span>
+            </div>
+            <div class="progress-track"><div class="progress-fill" id="audit-progress-fill"></div></div>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2 class="card-title">Audit Results</h2>
+          <p class="card-caption">Findings appear here after an audit completes.</p>
+          <div class="log" id="audit-results">No audit run yet.</div>
+          <button class="btn-outline btn-block mt-12" type="button" id="audit-download" disabled>Download Report →</button>
+        </section>
+      </section>
+
+      <!-- IMAGE CONVERTER -->
+      <section id="page-converter" class="page">
+        <header>
+          <h1 class="page-title">Image Converter</h1>
+          <p class="page-subtitle">Convert images between WebP, PNG, and JPG formats</p>
+        </header>
+
+        <section class="card">
+          <h2 class="card-title">Conversion Settings</h2>
+          <p class="card-caption">Choose folders, output format, and quality.</p>
+
+          <label class="field-label" for="converter-input">Input Folder</label>
+          <div class="row">
+            <input class="input" id="converter-input" type="text" placeholder="Select input folder…" />
+            <button class="btn-outline fixed" type="button" id="converter-browse-input">Browse</button>
+          </div>
+
+          <label class="field-label" for="converter-output">Output Folder</label>
+          <div class="row">
+            <input class="input" id="converter-output" type="text" placeholder="Select output folder…" />
+            <button class="btn-outline fixed" type="button" id="converter-browse-output">Browse</button>
+          </div>
+
+          <label class="field-label" for="converter-format">Format</label>
+          <select class="select" id="converter-format">
+            <option>WebP</option>
+            <option>PNG</option>
+            <option>JPG</option>
+          </select>
+
+          <label class="field-label" for="converter-quality">Quality</label>
+          <div class="range-row">
+            <input id="converter-quality" type="range" min="10" max="100" value="85" />
+            <span class="range-value" id="converter-quality-value">85</span>
+          </div>
+
+          <button class="btn-primary btn-block mt-16" type="button" id="converter-run">Convert →</button>
+
+          <div class="progress-wrap">
+            <div class="progress-meta">
+              <span id="converter-progress-label">Idle</span>
+              <span id="converter-progress-pct">0%</span>
+            </div>
+            <div class="progress-track"><div class="progress-fill" id="converter-progress-fill"></div></div>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2 class="card-title">Results Log</h2>
+          <div class="log" id="converter-log">Ready. Select folders and click Convert.</div>
+        </section>
+      </section>
+
+      <!-- SETTINGS -->
+      <section id="page-settings" class="page">
+        <header>
+          <h1 class="page-title">Settings</h1>
+          <p class="page-subtitle">App preferences and defaults</p>
+        </header>
+
+        <section class="card">
+          <h2 class="card-title">General</h2>
+          <label class="field-label" for="settings-output">Default output folder</label>
+          <div class="row">
+            <input class="input" id="settings-output" type="text" value="output" />
+            <button class="btn-outline fixed" type="button" id="settings-browse-output">Browse</button>
+          </div>
+          <label class="field-label" for="settings-jobs">Max concurrent jobs</label>
+          <input class="input" id="settings-jobs" type="number" min="1" max="8" value="1" />
+        </section>
+
+        <section class="card">
+          <h2 class="card-title">Scraper</h2>
+          <label class="field-label" for="settings-mode">Default mode</label>
+          <select class="select" id="settings-mode">
+            <option>Universal Extractor Full</option>
+            <option>Universal Extractor Lite</option>
+          </select>
+          <label class="field-label" for="settings-timeout">Default timeout (seconds)</label>
+          <input class="input" id="settings-timeout" type="number" min="10" max="600" value="60" />
+          <button class="btn-primary mt-16" type="button" id="settings-save">Save Settings</button>
+        </section>
+
+        <section class="card">
+          <h2 class="card-title">About</h2>
+          <div class="about-list">
+            <div class="about-row"><span>Version</span><strong>v1.3.3</strong></div>
+            <div class="about-row"><span>Company</span><strong>Sentivo Limited</strong></div>
+            <div class="about-row">
+              <span>GitHub</span>
+              <a class="link" href="https://github.com/furqanjavaid/shopify-csv-generator" target="_blank" rel="noopener noreferrer">shopify-csv-generator</a>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    function showPage(pageId) {
+      document.querySelectorAll(".page").forEach((el) => {
+        el.classList.toggle("active", el.id === "page-" + pageId);
+      });
+      document.querySelectorAll(".nav-item").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.page === pageId);
+      });
+    }
+
+    document.querySelectorAll(".nav-item").forEach((btn) => {
+      btn.addEventListener("click", () => showPage(btn.dataset.page));
+    });
+
+    document.querySelectorAll("[data-nav]").forEach((btn) => {
+      btn.addEventListener("click", () => showPage(btn.dataset.nav));
+    });
+
+    function appendLog(el, line) {
+      const stamp = new Date().toLocaleTimeString();
+      el.textContent += `\n[${stamp}] ${line}`;
+      el.scrollTop = el.scrollHeight;
+    }
+
+    function setProgress(fillEl, pctEl, labelEl, pct, label) {
+      const clamped = Math.max(0, Math.min(100, pct));
+      fillEl.style.width = clamped + "%";
+      pctEl.textContent = clamped + "%";
+      if (labelEl) labelEl.textContent = label;
+    }
+
+    function fakeProgress({ fillEl, pctEl, labelEl, logEl, labels, onDone }) {
+      let i = 0;
+      const step = Math.floor(100 / labels.length);
+      const timer = setInterval(() => {
+        if (i >= labels.length) {
+          clearInterval(timer);
+          setProgress(fillEl, pctEl, labelEl, 100, "Complete");
+          if (logEl) appendLog(logEl, "Done.");
+          if (onDone) onDone();
+          return;
+        }
+        const pct = Math.min(100, (i + 1) * step);
+        setProgress(fillEl, pctEl, labelEl, pct, labels[i]);
+        if (logEl) appendLog(logEl, labels[i]);
+        i += 1;
+      }, 450);
+      return timer;
+    }
+
+    // Upload
+    const dropzone = document.getElementById("upload-dropzone");
+    const fileInput = document.getElementById("upload-file-input");
+    const fileCard = document.getElementById("upload-file-card");
+    const downloadCard = document.getElementById("upload-download-card");
+
+    function setUploadFile(file) {
+      if (!file) return;
+      document.getElementById("upload-file-name").textContent = file.name;
+      document.getElementById("upload-file-size").textContent = (file.size / 1024).toFixed(1) + " KB";
+      document.getElementById("upload-file-type").textContent = file.type || "spreadsheet";
+      fileCard.classList.remove("hidden");
+      downloadCard.classList.add("hidden");
+    }
+
+    dropzone.addEventListener("click", () => fileInput.click());
+    dropzone.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      dropzone.classList.add("dragover");
+    });
+    dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover"));
+    dropzone.addEventListener("drop", (e) => {
+      e.preventDefault();
+      dropzone.classList.remove("dragover");
+      const file = e.dataTransfer.files && e.dataTransfer.files[0];
+      setUploadFile(file);
+    });
+    fileInput.addEventListener("change", () => setUploadFile(fileInput.files[0]));
+    document.getElementById("upload-clear-file").addEventListener("click", () => {
+      fileInput.value = "";
+      fileCard.classList.add("hidden");
+      downloadCard.classList.add("hidden");
+    });
+    document.getElementById("upload-generate-btn").addEventListener("click", () => {
+      if (fileCard.classList.contains("hidden")) {
+        alert("Select a spreadsheet first.");
+        return;
+      }
+      const name = document.getElementById("upload-file-name").textContent.replace(/\.[^.]+$/, "") + "_shopify.csv";
+      document.getElementById("upload-output-name").textContent = name;
+      downloadCard.classList.remove("hidden");
+    });
+    document.getElementById("upload-download-btn").addEventListener("click", () => {
+      alert("Download is UI-only until the backend is wired.");
+    });
+
+    // Scraper
+    const scraperLog = document.getElementById("scraper-log");
+    const scraperRun = document.getElementById("scraper-run");
+    const scraperStop = document.getElementById("scraper-stop");
+    const scraperCsv = document.getElementById("scraper-generate-csv");
+    let scraperTimer = null;
+    let scraperStartedAt = null;
+    let scraperElapsedTimer = null;
+
+    document.getElementById("scraper-vendor-toggle").addEventListener("change", (e) => {
+      document.getElementById("scraper-vendor-wrap").classList.toggle("hidden", !e.target.checked);
+    });
+
+    document.getElementById("scraper-browse").addEventListener("click", () => {
+      const folder = prompt("Output folder path", document.getElementById("scraper-output").value || "output");
+      if (folder) document.getElementById("scraper-output").value = folder;
+    });
+
+    function resetScraperUi() {
+      scraperRun.disabled = false;
+      scraperStop.disabled = true;
+      clearInterval(scraperTimer);
+      clearInterval(scraperElapsedTimer);
+      scraperTimer = null;
+      scraperElapsedTimer = null;
+    }
+
+    scraperRun.addEventListener("click", () => {
+      const seeds = document.getElementById("scraper-seeds").value.trim();
+      if (!seeds) {
+        alert("Enter at least one seed URL.");
+        return;
+      }
+      const seedCount = seeds.split(/\r?\n/).map((s) => s.trim()).filter(Boolean).length;
+      const output = document.getElementById("scraper-output").value || "output";
+      scraperLog.textContent = "Starting scraper…";
+      scraperRun.disabled = true;
+      scraperStop.disabled = false;
+      scraperCsv.disabled = true;
+      document.getElementById("scraper-stat-seeds").textContent = "0";
+      document.getElementById("scraper-stat-products").textContent = "0";
+      document.getElementById("scraper-stat-output").textContent = output;
+      document.getElementById("scraper-stat-status").textContent = "Running";
+      document.getElementById("scraper-stat-elapsed").textContent = "00:00";
+      scraperStartedAt = Date.now();
+      scraperElapsedTimer = setInterval(() => {
+        const secs = Math.floor((Date.now() - scraperStartedAt) / 1000);
+        const mm = String(Math.floor(secs / 60)).padStart(2, "0");
+        const ss = String(secs % 60).padStart(2, "0");
+        document.getElementById("scraper-stat-elapsed").textContent = mm + ":" + ss;
+      }, 1000);
+
+      scraperTimer = fakeProgress({
+        fillEl: document.getElementById("scraper-progress-fill"),
+        pctEl: document.getElementById("scraper-progress-pct"),
+        labelEl: document.getElementById("scraper-progress-label"),
+        logEl: scraperLog,
+        labels: [
+          "Validating seed URLs…",
+          "Detecting platform…",
+          "Discovering products…",
+          "Extracting product pages…",
+          "Writing shopify_import.csv…",
+        ],
+        onDone: () => {
+          document.getElementById("scraper-stat-seeds").textContent = String(seedCount);
+          document.getElementById("scraper-stat-products").textContent = String(seedCount * 12);
+          document.getElementById("scraper-stat-status").textContent = "Complete";
+          scraperCsv.disabled = false;
+          resetScraperUi();
+        },
+      });
+    });
+
+    scraperStop.addEventListener("click", () => {
+      appendLog(scraperLog, "Stopped by user.");
+      document.getElementById("scraper-stat-status").textContent = "Stopped";
+      document.getElementById("scraper-progress-label").textContent = "Stopped";
+      resetScraperUi();
+    });
+
+    document.getElementById("scraper-reprocess").addEventListener("click", () => {
+      scraperLog.textContent = "Reprocess requested (UI demo).";
+      appendLog(scraperLog, "Looking for existing domain output…");
+      appendLog(scraperLog, "No backend connected yet.");
+    });
+
+    scraperCsv.addEventListener("click", () => {
+      appendLog(scraperLog, "Generate Final CSV clicked (UI demo).");
+      alert("CSV generation is UI-only until the backend is wired.");
+    });
+
+    // Auditor
+    let auditTimer = null;
+    document.getElementById("audit-run").addEventListener("click", () => {
+      const url = document.getElementById("audit-url").value.trim();
+      if (!url) {
+        alert("Enter a store URL.");
+        return;
+      }
+      const results = document.getElementById("audit-results");
+      const download = document.getElementById("audit-download");
+      results.textContent = "Starting audit for " + url;
+      download.disabled = true;
+      clearInterval(auditTimer);
+      auditTimer = fakeProgress({
+        fillEl: document.getElementById("audit-progress-fill"),
+        pctEl: document.getElementById("audit-progress-pct"),
+        labelEl: document.getElementById("audit-progress-label"),
+        logEl: results,
+        labels: [
+          "Fetching homepage…",
+          "Checking technical SEO…",
+          "Scoring CRO signals…",
+          "Compiling recommendations…",
+        ],
+        onDone: () => {
+          appendLog(results, "Overall score: 78 / 100");
+          appendLog(results, "Priority: Improve product image quality and PDP trust blocks.");
+          download.disabled = false;
+        },
+      });
+    });
+    document.getElementById("audit-download").addEventListener("click", () => {
+      alert("Report download is UI-only until the backend is wired.");
+    });
+
+    // Converter
+    let converterTimer = null;
+    document.getElementById("converter-quality").addEventListener("input", (e) => {
+      document.getElementById("converter-quality-value").textContent = e.target.value;
+    });
+    document.getElementById("converter-browse-input").addEventListener("click", () => {
+      const folder = prompt("Input folder path", document.getElementById("converter-input").value || "");
+      if (folder !== null) document.getElementById("converter-input").value = folder;
+    });
+    document.getElementById("converter-browse-output").addEventListener("click", () => {
+      const folder = prompt("Output folder path", document.getElementById("converter-output").value || "");
+      if (folder !== null) document.getElementById("converter-output").value = folder;
+    });
+    document.getElementById("converter-run").addEventListener("click", () => {
+      const input = document.getElementById("converter-input").value.trim();
+      const output = document.getElementById("converter-output").value.trim();
+      if (!input || !output) {
+        alert("Select input and output folders.");
+        return;
+      }
+      const format = document.getElementById("converter-format").value;
+      const quality = document.getElementById("converter-quality").value;
+      const log = document.getElementById("converter-log");
+      log.textContent = `Converting to ${format} at quality ${quality}…`;
+      clearInterval(converterTimer);
+      converterTimer = fakeProgress({
+        fillEl: document.getElementById("converter-progress-fill"),
+        pctEl: document.getElementById("converter-progress-pct"),
+        labelEl: document.getElementById("converter-progress-label"),
+        logEl: log,
+        labels: [
+          "Scanning input folder…",
+          "Converting images…",
+          "Writing output files…",
+        ],
+      });
+    });
+
+    // Settings
+    document.getElementById("settings-browse-output").addEventListener("click", () => {
+      const folder = prompt("Default output folder", document.getElementById("settings-output").value || "output");
+      if (folder) document.getElementById("settings-output").value = folder;
+    });
+    document.getElementById("settings-save").addEventListener("click", () => {
+      alert("Settings saved locally in the UI (not persisted yet).");
+    });
+  </script>
+</body>
+</html>
