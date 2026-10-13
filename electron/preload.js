@@ -31,6 +31,9 @@ contextBridge.exposeInMainWorld("sentivo", {
   readInvoices: () => ipcRenderer.invoke("invoices:read-invoices"),
   writeInvoices: (invoices) =>
     ipcRenderer.invoke("invoices:write-invoices", invoices),
+  readInvoiceSettings: () => ipcRenderer.invoke("invoices:read-settings"),
+  writeInvoiceSettings: (settings) =>
+    ipcRenderer.invoke("invoices:write-settings", settings),
   exportInvoicePdf: (invoice) =>
     ipcRenderer.invoke("invoices:export-pdf", invoice),
   onLogLine: (callback) => subscribe("log-line", callback),

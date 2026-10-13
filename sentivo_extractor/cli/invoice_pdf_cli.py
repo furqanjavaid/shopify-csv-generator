@@ -23,12 +23,47 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+_CURRENCY_SYMBOLS = {
+    "GBP": "£",
+    "USD": "$",
+    "EUR": "€",
+    "PKR": "₨",
+    "AUD": "A$",
+    "CAD": "C$",
+    "SAR": "SAR ",
+    "AED": "AED ",
+}
 
-def _money(value: Any) -> str:
+_CURRENCY_LABELS = {
+    "GBP": "GBP (£)",
+    "USD": "USD ($)",
+    "EUR": "EUR (€)",
+    "PKR": "PKR (₨)",
+    "AUD": "AUD (A$)",
+    "CAD": "CAD (C$)",
+    "SAR": "SAR",
+    "AED": "AED",
+}
+
+
+def _load_invoice_settings() -> dict[str, Any]:
+    path = _ROOT / "data" / "invoice-settings.json"
+    if not path.is_file():
+        return {}
     try:
-        return f"£{float(value):,.2f}"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _money(value: Any, currency: str = "GBP") -> str:
+    code = (currency or "GBP").upper()
+    symbol = _CURRENCY_SYMBOLS.get(code, f"{code} ")
+    try:
+        return f"{symbol}{float(value):,.2f}"
     except (TypeError, ValueError):
-        return "£0.00"
+        return f"{symbol}0.00"
 
 
 def _resolve_logo() -> Path | None:
@@ -266,6 +301,8 @@ def generate_invoice_pdf(invoice: dict[str, Any], output_path: str) -> str:
     number = str(invoice.get("number") or "INV-000")
     inv_date = str(invoice.get("date") or "")
     due_date = str(invoice.get("dueDate") or invoice.get("due_date") or "")
+    currency = str(invoice.get("currency") or "GBP").upper()
+    currency_label = _CURRENCY_LABELS.get(currency, currency)
 
     # --- Section 1: Header ---
     left_rows: list[list[Any]] = []
@@ -353,7 +390,7 @@ def generate_invoice_pdf(invoice: dict[str, Any], output_path: str) -> str:
         Paragraph(f"Invoice: {number}", styles["InvBody"]),
         Paragraph(f"Invoice date: {inv_date}", styles["InvBody"]),
         Paragraph(f"Due date: {due_date or '—'}", styles["InvBody"]),
-        Paragraph("Currency: GBP (£)", styles["InvBody"]),
+        Paragraph(f"Currency: {currency_label}", styles["InvBody"]),
     ]
 
     info = Table([[bill_to, details]], colWidths=[257, 257])
@@ -396,8 +433,8 @@ def generate_invoice_pdf(invoice: dict[str, Any], output_path: str) -> str:
             [
                 Paragraph(desc.replace("\n", "<br/>") or "—", styles["InvCell"]),
                 Paragraph(qty_s, styles["InvCellRight"]),
-                Paragraph(_money(unit), styles["InvCellRight"]),
-                Paragraph(_money(amount), styles["InvCellRight"]),
+                Paragraph(_money(unit, currency), styles["InvCellRight"]),
+                Paragraph(_money(amount, currency), styles["InvCellRight"]),
             ]
         )
 
@@ -434,20 +471,20 @@ def generate_invoice_pdf(invoice: dict[str, Any], output_path: str) -> str:
     totals_rows: list[list[Any]] = [
         [
             Paragraph("Subtotal", styles["InvTotalLabel"]),
-            Paragraph(_money(subtotal), styles["InvTotalValue"]),
+            Paragraph(_money(subtotal, currency), styles["InvTotalValue"]),
         ]
     ]
     if vat_enabled:
         totals_rows.append(
             [
                 Paragraph("VAT (20%)", styles["InvTotalLabel"]),
-                Paragraph(_money(vat_amount), styles["InvTotalValue"]),
+                Paragraph(_money(vat_amount, currency), styles["InvTotalValue"]),
             ]
         )
     totals_rows.append(
         [
             Paragraph("Total", styles["InvTotalLabelBold"]),
-            Paragraph(_money(total), styles["InvTotalValueBold"]),
+            Paragraph(_money(total, currency), styles["InvTotalValueBold"]),
         ]
     )
     totals = Table(totals_rows, colWidths=[370, 145])
@@ -474,15 +511,65 @@ def generate_invoice_pdf(invoice: dict[str, Any], output_path: str) -> str:
         story.append(Spacer(1, 12))
 
     # --- Section 6: Payment ---
-    paypal = str(invoice.get("paypalLink") or invoice.get("paypal_link") or "").strip()
-    if paypal:
-        story.append(Paragraph("PAYMENT", styles["InvSectionLabel"]))
-        story.append(
-            Paragraph(
-                f'Pay via PayPal: <link href="{paypal}" color="#8B1A2E"><u>{paypal}</u></link>',
-                styles["InvBody"],
+    settings = _load_invoice_settings()
+    bank_name = str(settings.get("bankName") or "").strip()
+    account_name = str(settings.get("accountName") or "").strip()
+    sort_code = str(settings.get("sortCode") or "").strip()
+    account_number = str(settings.get("accountNumber") or "").strip()
+    iban = str(settings.get("iban") or "").strip()
+    payoneer = str(settings.get("payoneerLink") or "").strip()
+    settings_paypal = str(settings.get("paypalLink") or "").strip()
+    invoice_paypal = str(
+        invoice.get("paypalLink") or invoice.get("paypal_link") or ""
+    ).strip()
+    paypal = settings_paypal or invoice_paypal
+
+    payment_lines: list[Any] = []
+    has_bank = any([bank_name, account_name, sort_code, account_number, iban])
+    if has_bank:
+        payment_lines.append(Paragraph("PAYMENT DETAILS", styles["InvSectionLabel"]))
+        if bank_name:
+            payment_lines.append(Paragraph(f"Bank: {bank_name}", styles["InvBody"]))
+        if account_name:
+            payment_lines.append(
+                Paragraph(f"Account Name: {account_name}", styles["InvBody"])
             )
-        )
+        if sort_code:
+            payment_lines.append(
+                Paragraph(f"Sort Code: {sort_code}", styles["InvBody"])
+            )
+        if account_number:
+            payment_lines.append(
+                Paragraph(f"Account Number: {account_number}", styles["InvBody"])
+            )
+        if iban:
+            payment_lines.append(Paragraph(f"IBAN: {iban}", styles["InvBody"]))
+
+    if payoneer or paypal:
+        if not has_bank:
+            payment_lines.append(Paragraph("PAYMENT", styles["InvSectionLabel"]))
+        else:
+            payment_lines.append(Spacer(1, 8))
+        if payoneer:
+            payment_lines.append(
+                Paragraph(
+                    f'Pay via Payoneer: <link href="{payoneer}" color="#8B1A2E">'
+                    f"<u>{payoneer}</u></link>",
+                    styles["InvBody"],
+                )
+            )
+        if paypal:
+            payment_lines.append(
+                Paragraph(
+                    f'Pay via PayPal: <link href="{paypal}" color="#8B1A2E">'
+                    f"<u>{paypal}</u></link>",
+                    styles["InvBody"],
+                )
+            )
+
+    if payment_lines:
+        for bit in payment_lines:
+            story.append(bit)
         story.append(Spacer(1, 30))
     else:
         story.append(Spacer(1, 30))

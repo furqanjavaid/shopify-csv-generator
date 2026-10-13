@@ -2476,6 +2476,18 @@
     let invClients = [];
     let invInvoices = [];
     let invLineSeq = 1;
+    let invFxTimer = null;
+    let invFxLastUpdated = "";
+    const INV_CURRENCY_SYMBOLS = {
+      GBP: "£",
+      USD: "$",
+      EUR: "€",
+      PKR: "₨",
+      AUD: "A$",
+      CAD: "C$",
+      SAR: "SAR ",
+      AED: "AED ",
+    };
 
     function invToday() {
       const d = new Date();
@@ -2484,10 +2496,29 @@
       return d.getFullYear() + "-" + mm + "-" + dd;
     }
 
-    function invMoney(n) {
+    function invSelectedCurrency() {
+      const el = document.getElementById("inv-currency");
+      return (el && el.value) || "GBP";
+    }
+
+    function invCurrencySymbol(code) {
+      return INV_CURRENCY_SYMBOLS[code] || (code ? code + " " : "£");
+    }
+
+    function invMoney(n, currency) {
+      const code = currency || invSelectedCurrency();
+      const symbol = invCurrencySymbol(code);
       const v = Number(n);
-      if (!Number.isFinite(v)) return "£0.00";
-      return "£" + v.toFixed(2);
+      if (!Number.isFinite(v)) return symbol + "0.00";
+      return symbol + v.toFixed(2);
+    }
+
+    function updateInvoiceCurrencyLabels() {
+      const code = invSelectedCurrency();
+      const symbol = invCurrencySymbol(code);
+      const unitLabel = document.getElementById("inv-unit-price-label");
+      if (unitLabel) unitLabel.textContent = "Unit Price (" + symbol.trim() + ")";
+      recalcInvoiceTotals();
     }
 
     function invUid() {
@@ -2663,10 +2694,131 @@
       document.getElementById("inv-paypal").value = "";
       document.getElementById("inv-vat-toggle").checked = false;
       document.getElementById("inv-client-select").value = "";
+      const currencyEl = document.getElementById("inv-currency");
+      if (currencyEl) currencyEl.value = "GBP";
+      updateInvoiceCurrencyLabels();
       const body = document.getElementById("inv-lines-body");
       body.innerHTML = "";
       addLineRow({ description: "", qty: 1, unitPrice: "" });
       recalcInvoiceTotals();
+    }
+
+    function collectPaymentSettingsFromForm() {
+      return {
+        bankName: (document.getElementById("inv-set-bank-name").value || "").trim(),
+        accountName: (document.getElementById("inv-set-account-name").value || "").trim(),
+        sortCode: (document.getElementById("inv-set-sort-code").value || "").trim(),
+        accountNumber: (document.getElementById("inv-set-account-number").value || "").trim(),
+        iban: (document.getElementById("inv-set-iban").value || "").trim(),
+        payoneerLink: (document.getElementById("inv-set-payoneer").value || "").trim(),
+        paypalLink: (document.getElementById("inv-set-paypal").value || "").trim(),
+      };
+    }
+
+    function fillPaymentSettingsForm(settings) {
+      const s = settings || {};
+      const set = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.value = val || "";
+      };
+      set("inv-set-bank-name", s.bankName);
+      set("inv-set-account-name", s.accountName);
+      set("inv-set-sort-code", s.sortCode);
+      set("inv-set-account-number", s.accountNumber);
+      set("inv-set-iban", s.iban);
+      set("inv-set-payoneer", s.payoneerLink);
+      set("inv-set-paypal", s.paypalLink);
+    }
+
+    async function loadPaymentSettings() {
+      const bridge = api();
+      if (!bridge || !bridge.readInvoiceSettings) return;
+      try {
+        const settings = await bridge.readInvoiceSettings();
+        fillPaymentSettingsForm(settings);
+      } catch (_err) {
+        fillPaymentSettingsForm({});
+      }
+    }
+
+    async function fetchFxRate(from, to) {
+      if (from === to) return { rate: 1, source: "same" };
+      try {
+        const url =
+          "https://api.frankfurter.app/latest?from=" +
+          encodeURIComponent(from) +
+          "&to=" +
+          encodeURIComponent(to);
+        const res = await fetch(url);
+        if (res.ok) {
+          const data = await res.json();
+          const rate = data && data.rates && data.rates[to];
+          if (Number.isFinite(Number(rate))) {
+            return { rate: Number(rate), source: "frankfurter" };
+          }
+        }
+      } catch (_err) {
+        /* try fallback */
+      }
+      // Fallback for currencies Frankfurter/ECB does not list (PKR, SAR, AED, …)
+      const res2 = await fetch(
+        "https://open.er-api.com/v6/latest/" + encodeURIComponent(from)
+      );
+      if (!res2.ok) throw new Error("Rate fetch failed");
+      const data2 = await res2.json();
+      const rate2 = data2 && data2.rates && data2.rates[to];
+      if (!Number.isFinite(Number(rate2))) throw new Error("Rate unavailable");
+      return { rate: Number(rate2), source: "fallback" };
+    }
+
+    async function updateCurrencyConverter() {
+      const amountEl = document.getElementById("inv-fx-amount");
+      const fromEl = document.getElementById("inv-fx-from");
+      const toEl = document.getElementById("inv-fx-to");
+      const resultEl = document.getElementById("inv-fx-result");
+      const metaEl = document.getElementById("inv-fx-meta");
+      if (!amountEl || !fromEl || !toEl || !resultEl || !metaEl) return;
+
+      const amount = parseFloat(amountEl.value);
+      const from = fromEl.value;
+      const to = toEl.value;
+      resultEl.textContent = "Fetching...";
+      metaEl.textContent = "Rate: —  •  Last updated: —";
+
+      try {
+        const { rate } = await fetchFxRate(from, to);
+        const safeAmount = Number.isFinite(amount) ? amount : 0;
+        const converted = safeAmount * rate;
+        resultEl.textContent =
+          invCurrencySymbol(to) +
+          converted.toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 4,
+          });
+        invFxLastUpdated = "just now";
+        metaEl.textContent =
+          "Rate: 1 " +
+          from +
+          " = " +
+          rate.toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 6,
+          }) +
+          " " +
+          to +
+          "  •  Last updated: " +
+          invFxLastUpdated;
+      } catch (_err) {
+        resultEl.textContent = "—";
+        metaEl.textContent = "Rate unavailable for this pair  •  Last updated: —";
+      }
+    }
+
+    function scheduleCurrencyConverter() {
+      if (invFxTimer) clearTimeout(invFxTimer);
+      invFxTimer = setTimeout(() => {
+        updateCurrencyConverter();
+      }, 250);
     }
 
     function collectInvoiceFromForm(status) {
@@ -2708,7 +2860,7 @@
         total: totals.total,
         notes: document.getElementById("inv-notes").value.trim(),
         paypalLink: document.getElementById("inv-paypal").value.trim(),
-        currency: "GBP",
+        currency: invSelectedCurrency(),
         status: status || "Draft",
       };
     }
@@ -2734,7 +2886,7 @@
         tr.innerHTML =
           `<td>${escapeHtml(inv.number || "")}</td>` +
           `<td>${escapeHtml(inv.clientName || "")}</td>` +
-          `<td>${invMoney(inv.total)}</td>` +
+          `<td>${invMoney(inv.total, inv.currency || "GBP")}</td>` +
           `<td>${escapeHtml(inv.date || "")}</td>` +
           `<td>${escapeHtml(inv.dueDate || "")}</td>` +
           `<td><select class="select inv-status" data-id="${inv.id}">${statusOpts}</select></td>` +
@@ -2789,9 +2941,12 @@
       renderClientsTable();
       populateClientSelect();
       renderInvoicesTable();
+      await loadPaymentSettings();
       if (document.getElementById("inv-number")) {
         document.getElementById("inv-number").value = nextInvoiceNumber();
       }
+      updateInvoiceCurrencyLabels();
+      scheduleCurrencyConverter();
     }
 
     function wireInvoicesUi() {
@@ -2805,9 +2960,11 @@
             } else {
               document.getElementById("inv-number").value = nextInvoiceNumber();
             }
+            scheduleCurrencyConverter();
           }
           if (btn.dataset.invTab === "all") renderInvoicesTable();
           if (btn.dataset.invTab === "clients") renderClientsTable();
+          if (btn.dataset.invTab === "settings") loadPaymentSettings();
         });
       });
 
@@ -2840,6 +2997,37 @@
 
       document.getElementById("inv-add-line").addEventListener("click", () => addLineRow(null));
       document.getElementById("inv-vat-toggle").addEventListener("change", () => recalcInvoiceTotals());
+
+      const currencyEl = document.getElementById("inv-currency");
+      if (currencyEl) {
+        currencyEl.addEventListener("change", () => updateInvoiceCurrencyLabels());
+      }
+
+      ["inv-fx-amount", "inv-fx-from", "inv-fx-to"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener("input", scheduleCurrencyConverter);
+        el.addEventListener("change", scheduleCurrencyConverter);
+      });
+
+      const settingsSave = document.getElementById("inv-settings-save");
+      if (settingsSave) {
+        settingsSave.addEventListener("click", async () => {
+          const bridge = api();
+          const status = document.getElementById("inv-settings-status");
+          if (!bridge || !bridge.writeInvoiceSettings) {
+            alert("Electron bridge unavailable. Restart the app.");
+            return;
+          }
+          try {
+            await bridge.writeInvoiceSettings(collectPaymentSettingsFromForm());
+            if (status) status.textContent = "Payment settings saved.";
+          } catch (err) {
+            if (status) status.textContent = "";
+            alert(err && err.message ? err.message : String(err));
+          }
+        });
+      }
 
       async function saveInvoice(exportPdf) {
         const bridge = api();

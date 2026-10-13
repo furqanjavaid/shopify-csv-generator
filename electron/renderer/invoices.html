@@ -1,12 +1,13 @@
 <header>
   <h1 class="page-title">Invoices</h1>
-  <p class="page-subtitle">Manage clients and create professional GBP invoices</p>
+  <p class="page-subtitle">Manage clients and create professional invoices</p>
 </header>
 
 <div class="inv-tabs" role="tablist">
   <button class="inv-tab active" type="button" data-inv-tab="clients">Clients</button>
   <button class="inv-tab" type="button" data-inv-tab="new">New Invoice</button>
   <button class="inv-tab" type="button" data-inv-tab="all">All Invoices</button>
+  <button class="inv-tab" type="button" data-inv-tab="settings">Settings</button>
 </div>
 
 <!-- TAB: Clients -->
@@ -37,6 +38,76 @@
       </div>
     </div>
 
+    <style>
+      #inv-clients-table {
+        display: table;
+        width: 100%;
+        table-layout: fixed;
+        border-collapse: collapse;
+      }
+      #inv-clients-table th:nth-child(1),
+      #inv-clients-table td:nth-child(1) { width: 180px; }
+      #inv-clients-table th:nth-child(2),
+      #inv-clients-table td:nth-child(2) { width: 180px; }
+      #inv-clients-table th:nth-child(3),
+      #inv-clients-table td:nth-child(3) { width: 220px; }
+      #inv-clients-table th:nth-child(4),
+      #inv-clients-table td:nth-child(4) { width: auto; }
+      #inv-clients-table th:nth-child(5),
+      #inv-clients-table td:nth-child(5) { width: 120px; }
+      #inv-clients-table th,
+      #inv-clients-table td {
+        padding: 10px 12px;
+        text-overflow: ellipsis;
+        overflow: hidden;
+        white-space: nowrap;
+      }
+      #inv-clients-table tr {
+        border-bottom: 1px solid #e8e4df;
+      }
+      .inv-fx-card {
+        margin-top: 12px;
+        padding: 14px 16px;
+        border: 1px solid var(--border, #e8e4df);
+        border-radius: 10px;
+        background: #FBF8F4;
+      }
+      .inv-fx-card h3 {
+        margin: 0 0 10px;
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--heading, #0D1B2A);
+      }
+      .inv-fx-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+      }
+      .inv-fx-row .input,
+      .inv-fx-row .select {
+        margin-top: 0;
+        width: auto;
+        min-width: 0;
+      }
+      .inv-fx-amount { width: 110px !important; }
+      .inv-fx-select { width: 90px !important; }
+      .inv-fx-eq {
+        font-weight: 700;
+        color: var(--text-secondary, #666);
+      }
+      .inv-fx-result {
+        min-width: 100px;
+        font-weight: 700;
+        color: var(--heading, #0D1B2A);
+        font-size: 14px;
+      }
+      .inv-fx-meta {
+        margin: 8px 0 0;
+        font-size: 12px;
+        color: var(--text-secondary, #666);
+      }
+    </style>
     <div class="table-wrap mt-12">
       <table class="table" id="inv-clients-table">
         <thead>
@@ -59,7 +130,7 @@
 <section class="inv-panel" id="inv-panel-new">
   <section class="card">
     <h2 class="card-title">New Invoice</h2>
-    <p class="card-caption">Currency is GBP (£). Fill line items, then save as draft or export PDF.</p>
+    <p class="card-caption">Fill line items, then save as draft or export PDF.</p>
 
     <div class="grid-2">
       <div>
@@ -85,6 +156,46 @@
       </div>
     </div>
 
+    <label class="field-label" for="inv-currency">Currency</label>
+    <select class="select" id="inv-currency">
+      <option value="GBP" selected>GBP (£)</option>
+      <option value="USD">USD ($)</option>
+      <option value="EUR">EUR (€)</option>
+      <option value="PKR">PKR (₨)</option>
+      <option value="AUD">AUD (A$)</option>
+      <option value="CAD">CAD (C$)</option>
+    </select>
+
+    <div class="inv-fx-card" id="inv-fx-card">
+      <h3>Currency Converter</h3>
+      <div class="inv-fx-row">
+        <input class="input inv-fx-amount" id="inv-fx-amount" type="number" min="0" step="any" value="1" />
+        <select class="select inv-fx-select" id="inv-fx-from">
+          <option value="GBP" selected>GBP</option>
+          <option value="USD">USD</option>
+          <option value="EUR">EUR</option>
+          <option value="PKR">PKR</option>
+          <option value="AUD">AUD</option>
+          <option value="CAD">CAD</option>
+          <option value="SAR">SAR</option>
+          <option value="AED">AED</option>
+        </select>
+        <span class="inv-fx-eq">=</span>
+        <span class="inv-fx-result" id="inv-fx-result">Fetching...</span>
+        <select class="select inv-fx-select" id="inv-fx-to">
+          <option value="GBP">GBP</option>
+          <option value="USD" selected>USD</option>
+          <option value="EUR">EUR</option>
+          <option value="PKR">PKR</option>
+          <option value="AUD">AUD</option>
+          <option value="CAD">CAD</option>
+          <option value="SAR">SAR</option>
+          <option value="AED">AED</option>
+        </select>
+      </div>
+      <p class="inv-fx-meta" id="inv-fx-meta">Rate: —  •  Last updated: —</p>
+    </div>
+
     <label class="field-label">Line Items</label>
     <div class="table-wrap">
       <table class="table" id="inv-lines-table">
@@ -92,7 +203,7 @@
           <tr>
             <th>Description</th>
             <th style="width:90px">Qty</th>
-            <th style="width:120px">Unit Price (£)</th>
+            <th style="width:120px" id="inv-unit-price-label">Unit Price (£)</th>
             <th style="width:110px">Amount</th>
             <th style="width:48px"></th>
           </tr>
@@ -147,5 +258,45 @@
       </table>
     </div>
     <div class="empty-row" id="inv-all-empty">No invoices yet.</div>
+  </section>
+</section>
+
+<!-- TAB: Settings -->
+<section class="inv-panel" id="inv-panel-settings">
+  <section class="card">
+    <h2 class="card-title">Payment Settings</h2>
+    <p class="card-caption">Bank details and payment links appear on exported invoice PDFs.</p>
+
+    <h2 class="card-title mt-16">Bank Details</h2>
+    <p class="card-caption">All fields are optional. Only filled fields are shown on the PDF.</p>
+
+    <label class="field-label" for="inv-set-bank-name">Bank Name</label>
+    <input class="input" id="inv-set-bank-name" type="text" placeholder="e.g. Barclays" />
+
+    <label class="field-label" for="inv-set-account-name">Account Name</label>
+    <input class="input" id="inv-set-account-name" type="text" placeholder="Sentivo Limited" />
+
+    <label class="field-label" for="inv-set-sort-code">Sort Code</label>
+    <input class="input" id="inv-set-sort-code" type="text" placeholder="00-00-00" />
+
+    <label class="field-label" for="inv-set-account-number">Account Number</label>
+    <input class="input" id="inv-set-account-number" type="text" placeholder="00000000" />
+
+    <label class="field-label" for="inv-set-iban">IBAN</label>
+    <input class="input" id="inv-set-iban" type="text" placeholder="Optional" />
+
+    <h2 class="card-title mt-16">Payment Links</h2>
+    <p class="card-caption">Optional clickable links on the invoice PDF.</p>
+
+    <label class="field-label" for="inv-set-payoneer">Payoneer Link</label>
+    <input class="input" id="inv-set-payoneer" type="url" placeholder="https://payoneer.com/pay/..." />
+
+    <label class="field-label" for="inv-set-paypal">PayPal Link</label>
+    <input class="input" id="inv-set-paypal" type="url" placeholder="https://paypal.me/..." />
+
+    <div class="btn-row">
+      <button class="btn-primary" type="button" id="inv-settings-save">Save Settings →</button>
+    </div>
+    <p class="card-caption mt-12" id="inv-settings-status"></p>
   </section>
 </section>

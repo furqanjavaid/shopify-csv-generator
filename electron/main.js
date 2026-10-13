@@ -24,6 +24,16 @@ const INVOICE_PDF_CLI = path.join(
 const DATA_DIR = path.join(PROJECT_ROOT, "data");
 const CLIENTS_JSON = path.join(DATA_DIR, "clients.json");
 const INVOICES_JSON = path.join(DATA_DIR, "invoices.json");
+const INVOICE_SETTINGS_JSON = path.join(DATA_DIR, "invoice-settings.json");
+const DEFAULT_INVOICE_SETTINGS = {
+  bankName: "",
+  accountName: "",
+  sortCode: "",
+  accountNumber: "",
+  iban: "",
+  payoneerLink: "",
+  paypalLink: "",
+};
 const DOWNLOADS_DIR = path.join(
   process.env.USERPROFILE || process.env.HOME || "",
   "Downloads"
@@ -615,6 +625,36 @@ function registerIpc() {
   ipcMain.handle("invoices:read-invoices", async () => readJsonArray(INVOICES_JSON));
   ipcMain.handle("invoices:write-invoices", async (_event, invoices) =>
     writeJsonArray(INVOICES_JSON, invoices)
+  );
+
+  function readInvoiceSettings() {
+    ensureDataFile(INVOICE_SETTINGS_JSON, DEFAULT_INVOICE_SETTINGS);
+    try {
+      const raw = fs.readFileSync(INVOICE_SETTINGS_JSON, "utf8");
+      const data = JSON.parse(raw || "{}");
+      return { ...DEFAULT_INVOICE_SETTINGS, ...(data && typeof data === "object" ? data : {}) };
+    } catch (_err) {
+      return { ...DEFAULT_INVOICE_SETTINGS };
+    }
+  }
+
+  function writeInvoiceSettings(settings) {
+    fs.mkdirSync(path.dirname(INVOICE_SETTINGS_JSON), { recursive: true });
+    const next = {
+      ...DEFAULT_INVOICE_SETTINGS,
+      ...(settings && typeof settings === "object" ? settings : {}),
+    };
+    fs.writeFileSync(
+      INVOICE_SETTINGS_JSON,
+      JSON.stringify(next, null, 2),
+      "utf8"
+    );
+    return { ok: true, path: INVOICE_SETTINGS_JSON, settings: next };
+  }
+
+  ipcMain.handle("invoices:read-settings", async () => readInvoiceSettings());
+  ipcMain.handle("invoices:write-settings", async (_event, settings) =>
+    writeInvoiceSettings(settings)
   );
 
   ipcMain.handle("invoices:export-pdf", async (_event, invoice = {}) => {
