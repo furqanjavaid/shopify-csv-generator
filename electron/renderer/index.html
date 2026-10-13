@@ -3125,7 +3125,264 @@
 
     loadPlaceholderPage("robots", "robots-sitemap.html", "Robots & Sitemap");
     loadPlaceholderPage("expenses", "expense-tracker.html", "Expense Tracker");
-    loadPlaceholderPage("resizer", "image-resizer.html", "Image Resizer");
+
+    // Image Resizer
+    function wireResizerUi() {
+      let resizerFiles = [];
+      let resizerInputFolder = "";
+      let resizerOutputFolder = "";
+      let resizerRunning = false;
+      let resizerOutputReady = "";
+
+      const els = {
+        log: document.getElementById("resizer-log"),
+        count: document.getElementById("resizer-count"),
+        path: document.getElementById("resizer-input-path"),
+        start: document.getElementById("resizer-start"),
+        stop: document.getElementById("resizer-stop"),
+        openBtn: document.getElementById("resizer-open-output"),
+        mode: document.getElementById("resizer-mode"),
+        dims: document.getElementById("resizer-dims-wrap"),
+        pct: document.getElementById("resizer-pct-wrap"),
+        maxside: document.getElementById("resizer-maxside-wrap"),
+        aspectWrap: document.getElementById("resizer-aspect-wrap"),
+        aspect: document.getElementById("resizer-aspect"),
+        format: document.getElementById("resizer-format"),
+        qualityWrap: document.getElementById("resizer-quality-wrap"),
+        quality: document.getElementById("resizer-quality"),
+        qualityValue: document.getElementById("resizer-quality-value"),
+        output: document.getElementById("resizer-output"),
+        fill: document.getElementById("resizer-progress-fill"),
+        pctLabel: document.getElementById("resizer-progress-pct"),
+        label: document.getElementById("resizer-progress-label"),
+      };
+
+      function defaultOutputFromInput() {
+        if (resizerInputFolder) {
+          return resizerInputFolder.replace(/[\\/]+$/, "") + pathJoin("resized");
+        }
+        if (resizerFiles.length) {
+          const first = resizerFiles[0].replace(/[\\/][^\\/]+$/, "");
+          return first + pathJoin("resized");
+        }
+        return "";
+      }
+
+      function pathJoin(segment) {
+        // Prefer backslash on Windows paths, else forward slash.
+        const sample = resizerInputFolder || resizerFiles[0] || "";
+        const sep = sample.includes("\\") ? "\\" : "/";
+        return sep + segment;
+      }
+
+      function updateSelectionUi() {
+        const n = resizerFiles.length;
+        els.count.textContent = n + " image" + (n === 1 ? "" : "s") + " selected";
+        if (resizerInputFolder) {
+          els.path.textContent = "Folder: " + resizerInputFolder;
+        } else if (n) {
+          els.path.textContent = n + " file" + (n === 1 ? "" : "s") + " selected";
+        } else {
+          els.path.textContent = "No folder or files selected.";
+        }
+        els.start.disabled = resizerRunning || n === 0;
+        if (!els.output.value.trim()) {
+          const def = defaultOutputFromInput();
+          if (def) els.output.value = def;
+        }
+      }
+
+      function syncModeUi() {
+        const mode = els.mode.value;
+        els.dims.classList.toggle("hidden", mode !== "dimensions");
+        els.pct.classList.toggle("hidden", mode !== "percentage");
+        els.maxside.classList.toggle("hidden", mode !== "maxside");
+        els.aspectWrap.classList.toggle("hidden", mode !== "dimensions");
+      }
+
+      function syncQualityUi() {
+        const fmt = els.format.value;
+        const show = fmt === "jpg" || fmt === "webp";
+        els.qualityWrap.classList.toggle("hidden", !show);
+      }
+
+      function setResizerProgress(current, total, label) {
+        const tot = total || 0;
+        const cur = current || 0;
+        const pct = tot > 0 ? Math.round((cur * 100) / tot) : 0;
+        els.fill.style.width = pct + "%";
+        els.pctLabel.textContent = cur + "/" + tot;
+        if (label) els.label.textContent = label;
+      }
+
+      function setRunning(running) {
+        resizerRunning = running;
+        els.start.disabled = running || resizerFiles.length === 0;
+        els.stop.disabled = !running;
+      }
+
+      syncModeUi();
+      syncQualityUi();
+      updateSelectionUi();
+
+      els.mode.addEventListener("change", syncModeUi);
+      els.format.addEventListener("change", syncQualityUi);
+      els.quality.addEventListener("input", () => {
+        els.qualityValue.textContent = els.quality.value;
+      });
+
+      document.getElementById("resizer-select-folder").addEventListener("click", async () => {
+        const bridge = api();
+        if (!bridge || !bridge.selectResizerFolder) return;
+        const result = await bridge.selectResizerFolder();
+        if (!result || !result.folder) return;
+        resizerInputFolder = result.folder;
+        resizerFiles = Array.isArray(result.files) ? result.files.slice() : [];
+        els.output.value = defaultOutputFromInput();
+        updateSelectionUi();
+        appendLog(els.log, `[INFO] Selected folder with ${resizerFiles.length} image(s).`);
+      });
+
+      document.getElementById("resizer-select-files").addEventListener("click", async () => {
+        const bridge = api();
+        if (!bridge || !bridge.selectResizerFiles) return;
+        const result = await bridge.selectResizerFiles();
+        if (!result || !result.files || !result.files.length) return;
+        resizerInputFolder = "";
+        resizerFiles = result.files.slice();
+        els.output.value = defaultOutputFromInput();
+        updateSelectionUi();
+        appendLog(els.log, `[INFO] Selected ${resizerFiles.length} image(s).`);
+      });
+
+      document.getElementById("resizer-browse-output").addEventListener("click", async () => {
+        const bridge = api();
+        if (!bridge) return;
+        const folder = await bridge.browseFolder();
+        if (folder) {
+          els.output.value = folder;
+          resizerOutputFolder = folder;
+        }
+      });
+
+      if (bridgeApiSafe()) {
+        const bridge = api();
+        bridge.onResizerLogLine((line) => appendLog(els.log, line));
+        bridge.onResizerProgress((evt) => {
+          if (!evt) return;
+          if (evt.type === "progress") {
+            setResizerProgress(evt.current, evt.total, "Resizing…");
+          } else if (evt.type === "done") {
+            setResizerProgress(evt.total || evt.ok || 0, evt.total || 0, "Complete");
+            resizerOutputReady = evt.output_folder || els.output.value.trim();
+            els.openBtn.classList.remove("hidden");
+          }
+        });
+        bridge.onResizerDone(({ code, stopped }) => {
+          setRunning(false);
+          if (stopped) {
+            els.label.textContent = "Stopped";
+            appendLog(els.log, "[WARNING] Resizer stopped.");
+            return;
+          }
+          if (code === 0) {
+            els.label.textContent = "Complete";
+            els.openBtn.classList.remove("hidden");
+          } else {
+            els.label.textContent = "Failed";
+            appendLog(els.log, `[ERROR] Resizer exited with code ${code}.`);
+          }
+        });
+      }
+
+      function bridgeApiSafe() {
+        try {
+          return !!api();
+        } catch (_err) {
+          return false;
+        }
+      }
+
+      els.start.addEventListener("click", async () => {
+        const bridge = api();
+        if (!bridge || !bridge.startImageResizer) {
+          alert("Electron bridge unavailable. Restart the app.");
+          return;
+        }
+        if (!resizerFiles.length) {
+          alert("Select a folder or files first.");
+          return;
+        }
+        const outputFolder = els.output.value.trim() || defaultOutputFromInput();
+        if (!outputFolder) {
+          alert("Choose an output folder.");
+          return;
+        }
+        els.output.value = outputFolder;
+        resizerOutputFolder = outputFolder;
+        resizerOutputReady = outputFolder;
+        els.openBtn.classList.add("hidden");
+        clearLog(els.log, "[INFO] Starting image resize…");
+        setResizerProgress(0, resizerFiles.length, "Starting…");
+        setRunning(true);
+        try {
+          await bridge.startImageResizer({
+            files: resizerFiles,
+            mode: els.mode.value,
+            width: parseInt(document.getElementById("resizer-width").value, 10) || 0,
+            height: parseInt(document.getElementById("resizer-height").value, 10) || 0,
+            percentage: parseFloat(document.getElementById("resizer-percentage").value) || 100,
+            max_side: parseInt(document.getElementById("resizer-maxside").value, 10) || 0,
+            maintain_aspect: !!els.aspect.checked,
+            output_format: els.format.value,
+            quality: parseInt(els.quality.value, 10) || 85,
+            output_folder: outputFolder,
+          });
+        } catch (err) {
+          setRunning(false);
+          appendLog(els.log, `[ERROR] ${err && err.message ? err.message : err}`);
+        }
+      });
+
+      els.stop.addEventListener("click", async () => {
+        const bridge = api();
+        if (!bridge || !bridge.stopImageResizer) return;
+        appendLog(els.log, "[WARNING] Stop requested…");
+        try {
+          await bridge.stopImageResizer();
+        } catch (err) {
+          appendLog(els.log, `[ERROR] Stop failed: ${err && err.message ? err.message : err}`);
+        }
+      });
+
+      els.openBtn.addEventListener("click", async () => {
+        const bridge = api();
+        if (!bridge || !bridge.openResizerFolder) return;
+        const folder = resizerOutputReady || els.output.value.trim();
+        if (!folder) return;
+        await bridge.openResizerFolder(folder);
+      });
+    }
+
+    fetch("./image-resizer.html")
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed to load image-resizer.html");
+        return res.text();
+      })
+      .then((html) => {
+        const host = document.getElementById("page-resizer");
+        if (!host) return;
+        host.innerHTML = html;
+        wireResizerUi();
+      })
+      .catch((err) => {
+        const host = document.getElementById("page-resizer");
+        if (host) {
+          host.innerHTML =
+            '<header><h1 class="page-title">Image Resizer</h1>' +
+            `<p class="page-subtitle">${err && err.message ? err.message : err}</p></header>`;
+        }
+      });
 
     // Settings
     document.getElementById("settings-browse-output").addEventListener("click", async () => {

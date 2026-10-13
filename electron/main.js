@@ -21,6 +21,13 @@ const INVOICE_PDF_CLI = path.join(
   "cli",
   "invoice_pdf_cli.py"
 );
+const IMAGE_RESIZER_CLI = path.join(
+  PROJECT_ROOT,
+  "sentivo_extractor",
+  "cli",
+  "image_resizer_cli.py"
+);
+const IMAGE_EXTS = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif"]);
 const DATA_DIR = path.join(PROJECT_ROOT, "data");
 const CLIENTS_JSON = path.join(DATA_DIR, "clients.json");
 const INVOICES_JSON = path.join(DATA_DIR, "invoices.json");
@@ -48,6 +55,7 @@ const jobs = {
   auditor: { proc: null, stopped: false, meta: {} },
   upload: { proc: null, stopped: false, meta: {} },
   merger: { proc: null, stopped: false, meta: {} },
+  resizer: { proc: null, stopped: false, meta: {} },
 };
 
 function resolveAppIcon() {
@@ -417,6 +425,203 @@ function registerIpc() {
   ipcMain.handle("stop-converter", async () => ({ ok: killJob("converter") }));
   ipcMain.handle("stop-auditor", async () => ({ ok: killJob("auditor") }));
   ipcMain.handle("stop-upload", async () => ({ ok: killJob("upload") }));
+  ipcMain.handle("image-resizer:stop", async () => ({ ok: killJob("resizer") }));
+
+  function collectImagesFromFolder(folderPath) {
+    const root = String(folderPath || "").trim();
+    if (!root || !fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
+      return [];
+    }
+    const out = [];
+    for (const name of fs.readdirSync(root)) {
+      const full = path.join(root, name);
+      try {
+        if (!fs.statSync(full).isFile()) continue;
+      } catch (_err) {
+        continue;
+      }
+      if (IMAGE_EXTS.has(path.extname(full).toLowerCase())) {
+        out.push(full);
+      }
+    }
+    out.sort((a, b) => a.localeCompare(b));
+    return out;
+  }
+
+  ipcMain.handle("image-resizer:select-folder", async () => {
+    const result = await dialog.showOpenDialog(mainWindow || undefined, {
+      properties: ["openDirectory"],
+    });
+    if (result.canceled || !result.filePaths.length) {
+      return { folder: null, files: [] };
+    }
+    const folder = result.filePaths[0];
+    const files = collectImagesFromFolder(folder);
+    return { folder, files };
+  });
+
+  ipcMain.handle("image-resizer:select-files", async () => {
+    const result = await dialog.showOpenDialog(mainWindow || undefined, {
+      properties: ["openFile", "multiSelections"],
+      filters: [
+        {
+          name: "Images",
+          extensions: ["jpg", "jpeg", "png", "webp", "gif"],
+        },
+      ],
+    });
+    if (result.canceled || !result.filePaths.length) {
+      return { files: [] };
+    }
+    const files = result.filePaths.filter((p) =>
+      IMAGE_EXTS.has(path.extname(p).toLowerCase())
+    );
+    return { files };
+  });
+
+  ipcMain.handle("image-resizer:open-folder", async (_event, folderPath) => {
+    const p = String(folderPath || "").trim();
+    if (!p) return { ok: false, error: "Folder path required" };
+    fs.mkdirSync(p, { recursive: true });
+    if (!fs.existsSync(p)) return { ok: false, error: "Folder not found" };
+    const err = await shell.openPath(p);
+    return { ok: !err, error: err || "" };
+  });
+
+  ipcMain.handle("image-resizer:start", async (_event, config = {}) => {
+    if (!fs.existsSync(IMAGE_RESIZER_CLI)) {
+      throw new Error(`image_resizer_cli.py not found: ${IMAGE_RESIZER_CLI}`);
+    }
+    const files = Array.isArray(config.files) ? config.files.filter(Boolean) : [];
+    if (!files.length) throw new Error("Select at least one image.");
+    const outputFolder = String(config.output_folder || config.outputFolder || "").trim();
+    if (!outputFolder) throw new Error("Output folder is required.");
+
+    ensurePython();
+    const job = jobs.resizer;
+    if (job.proc) throw new Error("A resizer job is already running.");
+
+    const env = { ...process.env };
+    env.PYTHONPATH = PROJECT_ROOT + path.delimiter + (env.PYTHONPATH || "");
+    env.PYTHONUTF8 = "1";
+
+    job.stopped = false;
+    job.meta = { outputPath: outputFolder, total: files.length };
+
+    sendToRenderer(
+      "image-resizer:log-line",
+      `[INFO] CMD: ${PYTHON_EXE} ${IMAGE_RESIZER_CLI}`
+    );
+
+    const proc = spawn(PYTHON_EXE, [IMAGE_RESIZER_CLI], {
+      cwd: PROJECT_ROOT,
+      env,
+      windowsHide: true,
+    });
+    job.proc = proc;
+
+    const handleLine = (line) => {
+      const text = String(line || "").trim();
+      if (!text) return;
+      try {
+        const evt = JSON.parse(text);
+        if (evt && typeof evt === "object" && evt.type) {
+          if (evt.type === "progress") {
+            sendToRenderer("image-resizer:progress", evt);
+            if (evt.size && !evt.failed) {
+              sendToRenderer(
+                "image-resizer:log-line",
+                `[INFO] ✓ ${evt.file} → ${evt.size} (${evt.kb || 0}KB)`
+              );
+            }
+            return;
+          }
+          if (evt.type === "error") {
+            sendToRenderer("image-resizer:progress", evt);
+            sendToRenderer(
+              "image-resizer:log-line",
+              `[ERROR] ${evt.file ? evt.file + ": " : ""}${evt.error || "Unknown error"}`
+            );
+            return;
+          }
+          if (evt.type === "done") {
+            job.meta.outputPath = evt.output_folder || outputFolder;
+            job.meta.total = evt.total;
+            job.meta.ok = evt.ok;
+            sendToRenderer("image-resizer:progress", evt);
+            sendToRenderer(
+              "image-resizer:log-line",
+              `[INFO] Done. ${evt.ok || 0}/${evt.total || 0} resized → ${evt.output_folder || outputFolder}`
+            );
+            return;
+          }
+        }
+      } catch (_err) {
+        /* not JSON — forward as log */
+      }
+      sendToRenderer("image-resizer:log-line", text);
+    };
+
+    const emitLines = (stream) => {
+      const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+      rl.on("line", handleLine);
+    };
+    if (proc.stdout) emitLines(proc.stdout);
+    if (proc.stderr) emitLines(proc.stderr);
+
+    proc.on("error", (err) => {
+      sendToRenderer(
+        "image-resizer:log-line",
+        `[ERROR] Failed to start Python: ${err.message}`
+      );
+      job.proc = null;
+      sendToRenderer("image-resizer:done", {
+        code: -1,
+        stopped: false,
+        error: err.message,
+        ...job.meta,
+      });
+    });
+
+    proc.on("close", (code) => {
+      const wasStopped = job.stopped;
+      job.proc = null;
+      job.stopped = false;
+      sendToRenderer("image-resizer:done", {
+        code: code == null ? -1 : code,
+        stopped: wasStopped,
+        ...job.meta,
+      });
+    });
+
+    const payload = {
+      files,
+      mode: String(config.mode || "dimensions"),
+      width: Number(config.width) || 0,
+      height: Number(config.height) || 0,
+      percentage: Number(config.percentage) || 100,
+      max_side: Number(config.max_side || config.maxSide) || 0,
+      maintain_aspect:
+        config.maintain_aspect !== undefined
+          ? Boolean(config.maintain_aspect)
+          : Boolean(config.maintainAspect !== false),
+      output_format: String(config.output_format || config.outputFormat || "same"),
+      quality: Number(config.quality) || 85,
+      output_folder: outputFolder,
+    };
+
+    try {
+      proc.stdin.write(JSON.stringify(payload));
+      proc.stdin.end();
+    } catch (err) {
+      sendToRenderer(
+        "image-resizer:log-line",
+        `[ERROR] Failed to send payload: ${err && err.message ? err.message : err}`
+      );
+    }
+
+    return { ok: true, pid: proc.pid, outputPath: outputFolder, total: files.length };
+  });
 
   ipcMain.handle("run-scraper", async (_event, config = {}) => {
     const urls = Array.isArray(config.urls) ? config.urls : [];

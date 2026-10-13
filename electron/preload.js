@@ -36,6 +36,12 @@ contextBridge.exposeInMainWorld("sentivo", {
     ipcRenderer.invoke("invoices:write-settings", settings),
   exportInvoicePdf: (invoice) =>
     ipcRenderer.invoke("invoices:export-pdf", invoice),
+  selectResizerFolder: () => ipcRenderer.invoke("image-resizer:select-folder"),
+  selectResizerFiles: () => ipcRenderer.invoke("image-resizer:select-files"),
+  startImageResizer: (config) => ipcRenderer.invoke("image-resizer:start", config),
+  stopImageResizer: () => ipcRenderer.invoke("image-resizer:stop"),
+  openResizerFolder: (folderPath) =>
+    ipcRenderer.invoke("image-resizer:open-folder", folderPath),
   onLogLine: (callback) => subscribe("log-line", callback),
   onScraperDone: (callback) => subscribe("scraper-done", callback),
   onConverterLogLine: (callback) => subscribe("converter-log-line", callback),
@@ -46,4 +52,7 @@ contextBridge.exposeInMainWorld("sentivo", {
   onUploadDone: (callback) => subscribe("upload-done", callback),
   onMergerLogLine: (callback) => subscribe("merger-log-line", callback),
   onMergerDone: (callback) => subscribe("merger-done", callback),
+  onResizerLogLine: (callback) => subscribe("image-resizer:log-line", callback),
+  onResizerProgress: (callback) => subscribe("image-resizer:progress", callback),
+  onResizerDone: (callback) => subscribe("image-resizer:done", callback),
 });

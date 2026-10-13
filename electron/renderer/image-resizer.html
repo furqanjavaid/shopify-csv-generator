@@ -1,11 +1,96 @@
 <header>
   <h1 class="page-title">Image Resizer</h1>
-  <p class="page-subtitle">Resize and optimize product images in bulk</p>
+  <p class="page-subtitle">Bulk resize and optimize images for Shopify</p>
 </header>
 
-<div class="coming-soon-wrap">
-  <div class="coming-soon-card">
-    <h2>Coming Soon</h2>
-    <p>Bulk resize and optimize images for Shopify</p>
+<section class="card">
+  <h2 class="card-title">Input</h2>
+  <p class="card-caption">Choose a folder of images or pick individual files.</p>
+  <div class="btn-row">
+    <button class="btn-outline" type="button" id="resizer-select-folder">Select Folder →</button>
+    <button class="btn-outline" type="button" id="resizer-select-files">Select Files →</button>
   </div>
-</div>
+  <p class="card-caption mt-12" id="resizer-input-path">No folder or files selected.</p>
+  <p class="card-caption" id="resizer-count">0 images selected</p>
+</section>
+
+<section class="card">
+  <h2 class="card-title">Resize Settings</h2>
+  <p class="card-caption">Choose how images should be resized and exported.</p>
+
+  <label class="field-label" for="resizer-mode">Resize Mode</label>
+  <select class="select" id="resizer-mode">
+    <option value="dimensions" selected>By Dimensions (width × height)</option>
+    <option value="percentage">By Percentage (%)</option>
+    <option value="maxside">By Max Side (longest side = X px)</option>
+  </select>
+
+  <div id="resizer-dims-wrap" class="grid-2">
+    <div>
+      <label class="field-label" for="resizer-width">Width (px)</label>
+      <input class="input" id="resizer-width" type="number" min="1" step="1" value="800" />
+    </div>
+    <div>
+      <label class="field-label" for="resizer-height">Height (px)</label>
+      <input class="input" id="resizer-height" type="number" min="1" step="1" value="800" />
+    </div>
+  </div>
+
+  <div id="resizer-pct-wrap" class="hidden">
+    <label class="field-label" for="resizer-percentage">Percentage (%)</label>
+    <input class="input" id="resizer-percentage" type="number" min="1" max="400" step="1" value="50" />
+  </div>
+
+  <div id="resizer-maxside-wrap" class="hidden">
+    <label class="field-label" for="resizer-maxside">Max Side (px)</label>
+    <input class="input" id="resizer-maxside" type="number" min="1" step="1" value="1200" />
+  </div>
+
+  <label class="checkbox" id="resizer-aspect-wrap">
+    <input type="checkbox" id="resizer-aspect" checked />
+    Maintain Aspect Ratio
+  </label>
+
+  <label class="field-label" for="resizer-format">Output Format</label>
+  <select class="select" id="resizer-format">
+    <option value="same" selected>Same as original</option>
+    <option value="jpg">JPG</option>
+    <option value="png">PNG</option>
+    <option value="webp">WebP</option>
+  </select>
+
+  <div id="resizer-quality-wrap">
+    <label class="field-label" for="resizer-quality">Quality</label>
+    <div class="range-row">
+      <input id="resizer-quality" type="range" min="1" max="100" value="85" />
+      <span class="range-value" id="resizer-quality-value">85</span>
+    </div>
+  </div>
+
+  <label class="field-label" for="resizer-output">Output Folder</label>
+  <div class="row">
+    <input class="input" id="resizer-output" type="text" placeholder="Select output folder…" />
+    <button class="btn-outline fixed" type="button" id="resizer-browse-output">Browse</button>
+  </div>
+</section>
+
+<section class="card">
+  <h2 class="card-title">Actions</h2>
+  <div class="btn-row">
+    <button class="btn-primary" type="button" id="resizer-start" disabled>Start Resizing →</button>
+    <button class="btn-stop" type="button" id="resizer-stop" disabled>Stop →</button>
+    <button class="btn-outline hidden" type="button" id="resizer-open-output">Open Output Folder →</button>
+  </div>
+  <div class="progress-wrap mt-16">
+    <div class="progress-meta">
+      <span id="resizer-progress-label">Idle</span>
+      <span id="resizer-progress-pct">0/0</span>
+    </div>
+    <div class="progress-track"><div class="progress-fill" id="resizer-progress-fill"></div></div>
+  </div>
+</section>
+
+<section class="card">
+  <h2 class="card-title">Log</h2>
+  <div class="log" id="resizer-log"><span class="log-line">Ready. Select images and click Start Resizing.</span></div>
+</section>
