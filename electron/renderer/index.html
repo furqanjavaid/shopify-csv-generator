@@ -3231,6 +3231,20 @@
         els.qualityValue.textContent = els.quality.value;
       });
 
+      document.querySelectorAll(".resizer-preset-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const w = parseInt(btn.dataset.width, 10) || 0;
+          const h = parseInt(btn.dataset.height, 10) || 0;
+          els.mode.value = "dimensions";
+          syncModeUi();
+          const widthEl = document.getElementById("resizer-width");
+          const heightEl = document.getElementById("resizer-height");
+          if (widthEl) widthEl.value = String(w);
+          if (heightEl) heightEl.value = String(h);
+          if (els.aspect) els.aspect.checked = false;
+        });
+      });
+
       document.getElementById("resizer-select-folder").addEventListener("click", async () => {
         const bridge = api();
         if (!bridge || !bridge.selectResizerFolder) return;
