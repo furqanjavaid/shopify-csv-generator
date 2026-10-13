@@ -16,11 +16,23 @@ contextBridge.exposeInMainWorld("sentivo", {
   runUpload: (config) => ipcRenderer.invoke("run-upload", config),
   stopUpload: () => ipcRenderer.invoke("stop-upload"),
   browseFolder: () => ipcRenderer.invoke("browse-folder"),
-  browseFile: () => ipcRenderer.invoke("browse-file"),
+  browseFile: (options) => ipcRenderer.invoke("browse-file", options || {}),
   saveFile: (options) => ipcRenderer.invoke("save-file", options),
   openPath: (targetPath) => ipcRenderer.invoke("open-path", targetPath),
   copyFile: (source, destination) =>
     ipcRenderer.invoke("copy-file", { source, destination }),
+  analyseCsvMerger: (payload) =>
+    ipcRenderer.invoke("csv-merger:analyse", payload),
+  runCsvMerger: (payload) => ipcRenderer.invoke("csv-merger:merge", payload),
+  openCsvMergerFolder: (folderPath) =>
+    ipcRenderer.invoke("csv-merger:open-folder", folderPath),
+  readClients: () => ipcRenderer.invoke("invoices:read-clients"),
+  writeClients: (clients) => ipcRenderer.invoke("invoices:write-clients", clients),
+  readInvoices: () => ipcRenderer.invoke("invoices:read-invoices"),
+  writeInvoices: (invoices) =>
+    ipcRenderer.invoke("invoices:write-invoices", invoices),
+  exportInvoicePdf: (invoice) =>
+    ipcRenderer.invoke("invoices:export-pdf", invoice),
   onLogLine: (callback) => subscribe("log-line", callback),
   onScraperDone: (callback) => subscribe("scraper-done", callback),
   onConverterLogLine: (callback) => subscribe("converter-log-line", callback),
@@ -29,4 +41,6 @@ contextBridge.exposeInMainWorld("sentivo", {
   onAuditorDone: (callback) => subscribe("auditor-done", callback),
   onUploadLogLine: (callback) => subscribe("upload-log-line", callback),
   onUploadDone: (callback) => subscribe("upload-done", callback),
+  onMergerLogLine: (callback) => subscribe("merger-log-line", callback),
+  onMergerDone: (callback) => subscribe("merger-done", callback),
 });

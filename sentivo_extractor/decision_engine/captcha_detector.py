@@ -147,7 +147,6 @@ class PlaywrightLiveSession:
 
         self._manager = sync_playwright()
         self._pw = self._manager.start()
-        # Headed system Chrome — headless / requests get Cloudflare 502.
         self.browser = _launch_chromium_for_cloudflare(self._pw)
         opts: dict[str, Any] = {
             "viewport": {"width": 1440, "height": 900},
@@ -161,9 +160,7 @@ class PlaywrightLiveSession:
             opts["user_agent"] = user_agent
         self.context = self.browser.new_context(**opts)
         self.page = self.context.new_page()
-        self.logger.info(
-            "Opened headed Chrome Playwright window (Cloudflare bypass / CAPTCHA)"
-        )
+        self.logger.info("Opened headless Chromium Playwright session")
 
     def goto(self, url: str, *, timeout_ms: int = 45000) -> Any:
         self.ensure_visible()

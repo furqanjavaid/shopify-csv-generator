@@ -1,5 +1,5 @@
 """
-Shared headed-Chrome Playwright session for Magento PDP fetches.
+Shared headless Chromium Playwright session for Magento PDP fetches.
 
 One browser, one tab — sequential only (avoids Sucuri IDS parallel blocks).
 """
@@ -104,8 +104,7 @@ class MagentoBrowserPool:
         from sentivo_extractor.core.http_client import playwright_proxy
 
         self._pw = await async_playwright().start()
-        args = ["--disable-blink-features=AutomationControlled"]
-        launch_kwargs: dict[str, Any] = {"headless": False, "args": args}
+        launch_kwargs: dict[str, Any] = {"headless": True}
         proxy = playwright_proxy()
         if proxy:
             launch_kwargs["proxy"] = proxy
@@ -113,12 +112,7 @@ class MagentoBrowserPool:
                 "[Magento] Playwright launching with proxy server=%s",
                 proxy.get("server"),
             )
-        try:
-            self._browser = await self._pw.chromium.launch(
-                channel="chrome", **launch_kwargs
-            )
-        except Exception:
-            self._browser = await self._pw.chromium.launch(**launch_kwargs)
+        self._browser = await self._pw.chromium.launch(**launch_kwargs)
         extra = {
             k: v
             for k, v in BROWSER_HEADERS.items()

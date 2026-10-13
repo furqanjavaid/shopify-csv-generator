@@ -249,22 +249,14 @@ def _fetch_homepage_html(
 
 
 def _launch_chromium_for_cloudflare(p: Any) -> Any:
-    """
-    Cloudflare blocks headless Chromium and bare requests (502 / challenge).
-    Prefer headed system Chrome; fall back to headed bundled Chromium.
-    Window opens normally on screen so the user can see navigation.
-    """
+    """Launch simple headless Chromium (optional proxy)."""
     from sentivo_extractor.core.http_client import playwright_proxy
 
-    args = ["--disable-blink-features=AutomationControlled"]
-    launch_kwargs: dict[str, Any] = {"headless": False, "args": args}
+    launch_kwargs: dict[str, Any] = {"headless": True}
     proxy = playwright_proxy()
     if proxy:
         launch_kwargs["proxy"] = proxy
-    try:
-        return p.chromium.launch(channel="chrome", **launch_kwargs)
-    except Exception:
-        return p.chromium.launch(**launch_kwargs)
+    return p.chromium.launch(**launch_kwargs)
 
 
 def fetch_html_playwright(
@@ -274,10 +266,9 @@ def fetch_html_playwright(
     settle_ms: int = 2500,
 ) -> str:
     """
-    Fetch HTML via Playwright (headed Chrome fingerprint).
+    Fetch HTML via Playwright (headless Chromium).
 
-    Cloudflare returns 502 to requests/httpx and blocks headless Chromium.
-    page.goto + networkidle + settle wait lets the JS challenge complete.
+    page.goto + networkidle + settle wait lets JS content settle.
     """
     try:
         from playwright.sync_api import sync_playwright

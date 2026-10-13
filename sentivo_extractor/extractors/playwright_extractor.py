@@ -436,8 +436,6 @@ class PlaywrightExtractor(BaseExtractor):
                 headless = True if ctx.get("playwright_headless") is None else bool(
                     ctx.get("playwright_headless")
                 )
-                if live is not None:
-                    headless = False
                 from sentivo_extractor.core.http_client import playwright_proxy
 
                 launch_kwargs: dict[str, Any] = {"headless": headless}

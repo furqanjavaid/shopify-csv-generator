@@ -1,0 +1,151 @@
+<header>
+  <h1 class="page-title">Invoices</h1>
+  <p class="page-subtitle">Manage clients and create professional GBP invoices</p>
+</header>
+
+<div class="inv-tabs" role="tablist">
+  <button class="inv-tab active" type="button" data-inv-tab="clients">Clients</button>
+  <button class="inv-tab" type="button" data-inv-tab="new">New Invoice</button>
+  <button class="inv-tab" type="button" data-inv-tab="all">All Invoices</button>
+</div>
+
+<!-- TAB: Clients -->
+<section class="inv-panel active" id="inv-panel-clients">
+  <section class="card">
+    <div class="inv-card-head">
+      <div>
+        <h2 class="card-title">Clients</h2>
+        <p class="card-caption">Saved billing contacts for invoices.</p>
+      </div>
+      <button class="btn-primary" type="button" id="inv-add-client">Add Client →</button>
+    </div>
+
+    <div class="card hidden" id="inv-client-form-card" style="margin-top:14px; background:#FBF8F4;">
+      <h2 class="card-title" id="inv-client-form-title">Add Client</h2>
+      <input type="hidden" id="inv-client-edit-id" value="" />
+      <label class="field-label" for="inv-client-name">Full Name</label>
+      <input class="input" id="inv-client-name" type="text" placeholder="Jane Smith" />
+      <label class="field-label" for="inv-client-company">Company Name</label>
+      <input class="input" id="inv-client-company" type="text" placeholder="Acme Ltd" />
+      <label class="field-label" for="inv-client-email">Email</label>
+      <input class="input" id="inv-client-email" type="email" placeholder="jane@acme.com" />
+      <label class="field-label" for="inv-client-address">Billing Address</label>
+      <textarea class="textarea" id="inv-client-address" placeholder="Street, City, Postcode, Country"></textarea>
+      <div class="btn-row">
+        <button class="btn-primary" type="button" id="inv-client-save">Save →</button>
+        <button class="btn-outline" type="button" id="inv-client-cancel">Cancel</button>
+      </div>
+    </div>
+
+    <div class="table-wrap mt-12">
+      <table class="table" id="inv-clients-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Company</th>
+            <th>Email</th>
+            <th>Address</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="inv-clients-body"></tbody>
+      </table>
+    </div>
+    <div class="empty-row" id="inv-clients-empty">No clients yet. Click Add Client to create one.</div>
+  </section>
+</section>
+
+<!-- TAB: New Invoice -->
+<section class="inv-panel" id="inv-panel-new">
+  <section class="card">
+    <h2 class="card-title">New Invoice</h2>
+    <p class="card-caption">Currency is GBP (£). Fill line items, then save as draft or export PDF.</p>
+
+    <div class="grid-2">
+      <div>
+        <label class="field-label" for="inv-client-select">Client</label>
+        <select class="select" id="inv-client-select">
+          <option value="">— Select client —</option>
+        </select>
+      </div>
+      <div>
+        <label class="field-label" for="inv-number">Invoice Number</label>
+        <input class="input" id="inv-number" type="text" readonly />
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div>
+        <label class="field-label" for="inv-date">Invoice Date</label>
+        <input class="input" id="inv-date" type="date" />
+      </div>
+      <div>
+        <label class="field-label" for="inv-due">Due Date</label>
+        <input class="input" id="inv-due" type="date" />
+      </div>
+    </div>
+
+    <label class="field-label">Line Items</label>
+    <div class="table-wrap">
+      <table class="table" id="inv-lines-table">
+        <thead>
+          <tr>
+            <th>Description</th>
+            <th style="width:90px">Qty</th>
+            <th style="width:120px">Unit Price (£)</th>
+            <th style="width:110px">Amount</th>
+            <th style="width:48px"></th>
+          </tr>
+        </thead>
+        <tbody id="inv-lines-body"></tbody>
+      </table>
+    </div>
+    <button class="btn-outline mt-12" type="button" id="inv-add-line">Add Line Item →</button>
+
+    <div class="inv-totals mt-16">
+      <div class="result-row"><span>Subtotal</span><strong id="inv-subtotal">£0.00</strong></div>
+      <label class="checkbox">
+        <input type="checkbox" id="inv-vat-toggle" />
+        Add VAT (20%)
+      </label>
+      <div class="result-row hidden" id="inv-vat-row"><span>VAT (20%)</span><strong id="inv-vat">£0.00</strong></div>
+      <div class="result-row"><span>Total</span><strong id="inv-total">£0.00</strong></div>
+    </div>
+
+    <label class="field-label" for="inv-notes">Notes (optional)</label>
+    <textarea class="textarea" id="inv-notes" placeholder="Payment terms, project reference…"></textarea>
+
+    <label class="field-label" for="inv-paypal">PayPal Link (optional)</label>
+    <input class="input" id="inv-paypal" type="url" placeholder="https://paypal.me/…" />
+
+    <div class="btn-row">
+      <button class="btn-outline" type="button" id="inv-save-draft">Save as Draft →</button>
+      <button class="btn-primary" type="button" id="inv-save-export">Save &amp; Export PDF →</button>
+    </div>
+  </section>
+</section>
+
+<!-- TAB: All Invoices -->
+<section class="inv-panel" id="inv-panel-all">
+  <section class="card">
+    <h2 class="card-title">All Invoices</h2>
+    <p class="card-caption">Draft, sent, and paid invoices.</p>
+    <div class="table-wrap mt-12">
+      <table class="table" id="inv-all-table">
+        <thead>
+          <tr>
+            <th>Invoice No</th>
+            <th>Client</th>
+            <th>Amount</th>
+            <th>Date</th>
+            <th>Due Date</th>
+            <th>Status</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="inv-all-body"></tbody>
+      </table>
+    </div>
+    <div class="empty-row" id="inv-all-empty">No invoices yet.</div>
+  </section>
+</section>

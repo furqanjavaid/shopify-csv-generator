@@ -670,12 +670,10 @@ def discover_category_seed_products(
 
     def _fetch_category_html(page_url: str) -> str:
         """
-        Category pages: always Playwright first.
+        Category pages: always Playwright first (headless Chromium).
 
-        - No proxy → visible Chromium (headless=False)
-        - Proxy set → Playwright with proxy (headless=True)
-        - cloudscraper/requests (get_text) only after Playwright fails or
-          returns a Cloudflare challenge/block page.
+        cloudscraper/requests (get_text) only after Playwright fails or
+        returns a Cloudflare challenge/block page.
         """
         from sentivo_extractor.core.cloudflare import html_title
         from sentivo_extractor.core.http_client import (
@@ -702,17 +700,15 @@ def discover_category_seed_products(
             )
 
         proxy = get_proxy()
-        headless = bool(proxy)  # visible browser when no proxy
         log.info(
-            "[Category] Playwright first (headless=%s proxy=%s): %s",
-            headless,
+            "[Category] Playwright first (headless=True proxy=%s): %s",
             bool(proxy),
             page_url,
         )
         html = ""
         try:
             html = fetch_with_playwright(
-                page_url, logger_=log, headless=headless
+                page_url, logger_=log, headless=True
             ) or ""
         except Exception as exc:  # noqa: BLE001
             log.warning(

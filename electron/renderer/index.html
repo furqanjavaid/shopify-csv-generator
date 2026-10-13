@@ -49,15 +49,24 @@
       color: var(--sidebar-text);
       display: flex;
       flex-direction: column;
-      padding: 24px 16px 16px;
+      padding: 24px 0 16px;
+      overflow: hidden;
     }
 
     .sidebar nav {
       flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
     }
 
     .sidebar-footer {
       margin-top: auto;
+      margin-left: 16px;
+      margin-right: 16px;
       padding-top: 16px;
       border-top: 2px solid #8A94B8;
     }
@@ -83,48 +92,114 @@
 
     .logo {
       width: 180px;
-      max-width: 100%;
+      max-width: calc(100% - 32px);
       height: auto;
       display: block;
-      margin: 0 0 28px 4px;
+      margin: 0 16px 20px;
     }
 
-    nav {
+    .nav-group {
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      gap: 2px;
+      margin-bottom: 6px;
+    }
+
+    .nav-group-label {
+      text-transform: uppercase;
+      font-size: 9px;
+      color: #8B7B7B;
+      letter-spacing: 0.08em;
+      padding: 16px 16px 4px;
+      font-weight: 700;
+      user-select: none;
     }
 
     .nav-item {
       appearance: none;
       border: 0;
+      border-left: 2px solid transparent;
       background: transparent;
       color: var(--sidebar-text);
       text-align: left;
       font: inherit;
-      font-size: 14px;
-      padding: 10px 12px;
-      border-radius: 8px;
+      font-size: 13px;
+      padding: 8px 16px;
+      border-radius: 6px;
       cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 0 8px;
+      transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
     }
 
-    .nav-item:hover { background: rgba(255, 255, 255, 0.06); }
-    .nav-item.active { background: var(--button); color: #fff; }
+    .nav-item:hover {
+      background: rgba(255, 255, 255, 0.08);
+      border-left-color: #8B1A2E;
+    }
+
+    .nav-item.active {
+      background: rgba(139, 26, 46, 0.2);
+      border-left-color: #8B1A2E;
+      color: #fff;
+    }
+
+    .nav-icon {
+      width: 16px;
+      height: 16px;
+      flex: 0 0 16px;
+      opacity: 0.85;
+      fill: currentColor;
+    }
 
     .main {
       flex: 1;
       min-width: 0;
       background: var(--main-bg);
-      overflow: auto;
+      overflow-y: auto;
+      overflow-x: hidden;
     }
 
     .page {
       display: none;
       padding: 28px 32px 40px;
-      max-width: 1180px;
+      max-width: 100%;
+      overflow-x: hidden;
     }
 
     .page.active { display: block; }
+
+    .coming-soon-wrap {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 360px;
+      margin-top: 24px;
+    }
+
+    .coming-soon-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 36px 40px;
+      max-width: 480px;
+      width: 100%;
+      text-align: center;
+    }
+
+    .coming-soon-card h2 {
+      margin: 0 0 8px;
+      font-size: 22px;
+      color: var(--heading);
+    }
+
+    .coming-soon-card p {
+      margin: 0;
+      font-size: 14px;
+      color: var(--text-secondary);
+      line-height: 1.5;
+    }
 
     .page-title {
       margin: 0;
@@ -416,6 +491,151 @@
       color: var(--heading);
     }
 
+    .merger-files {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .merger-file-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1.4fr) minmax(140px, 1fr) auto auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #FBF8F4;
+    }
+
+    .merger-file-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--heading);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .merger-file-row .select {
+      margin: 0;
+      padding: 8px 10px;
+      font-size: 13px;
+    }
+
+    .merger-prio {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .merger-prio-num {
+      min-width: 22px;
+      text-align: center;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-secondary);
+    }
+
+    .merger-icon-btn {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: #fff;
+      color: var(--heading);
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1;
+      padding: 0;
+    }
+
+    .merger-icon-btn:hover {
+      border-color: var(--button);
+      color: var(--button);
+    }
+
+    .merger-icon-btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    .table select.select {
+      min-width: 160px;
+      padding: 8px 10px;
+      font-size: 13px;
+    }
+
+    .inv-tabs {
+      display: flex;
+      gap: 8px;
+      margin-top: 18px;
+      flex-wrap: wrap;
+    }
+
+    .inv-tab {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: #fff;
+      color: var(--heading);
+      font: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      height: 38px;
+      padding: 0 16px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+
+    .inv-tab:hover { border-color: var(--button); color: var(--button); }
+    .inv-tab.active {
+      background: var(--button);
+      border-color: var(--button);
+      color: #fff;
+    }
+
+    .inv-panel { display: none; }
+    .inv-panel.active { display: block; }
+
+    .inv-card-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+    }
+
+    .inv-totals {
+      max-width: 320px;
+      margin-left: auto;
+    }
+
+    .inv-line-input {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--text);
+      font: inherit;
+      font-size: 13px;
+      padding: 8px 10px;
+      outline: none;
+    }
+
+    .inv-line-input:focus {
+      border-color: var(--button);
+      box-shadow: 0 0 0 3px rgba(139, 26, 46, 0.12);
+    }
+
+    .inv-actions {
+      display: flex;
+      gap: 6px;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+    }
+
     .link {
       color: var(--button);
       text-decoration: none;
@@ -518,8 +738,16 @@
       margin-top: 16px;
     }
 
-    .table {
+    .table-wrap {
+      display: block;
       width: 100%;
+      overflow-x: auto;
+    }
+
+    .table {
+      display: block;
+      width: 100%;
+      overflow-x: auto;
       border-collapse: collapse;
       margin-top: 10px;
     }
@@ -580,6 +808,9 @@
         grid-template-columns: 1fr;
       }
       .bottom-row { grid-template-columns: 1fr; }
+      .merger-file-row {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
@@ -588,12 +819,73 @@
     <aside class="sidebar">
       <img class="logo" src="../../assets/sentivo-tools-logo.png" alt="Sentivo Tools" />
       <nav>
-        <button class="nav-item active" type="button" data-page="home">Home</button>
-        <button class="nav-item" type="button" data-page="upload">File Upload</button>
-        <button class="nav-item" type="button" data-page="scraper">URL Scraper</button>
-        <button class="nav-item" type="button" data-page="audit">Store Auditor</button>
-        <button class="nav-item" type="button" data-page="converter">Image Converter</button>
-        <button class="nav-item" type="button" data-page="settings">Settings</button>
+        <div class="nav-group">
+          <div class="nav-group-label">General</div>
+          <button class="nav-item active" type="button" data-page="home">
+            <svg class="nav-icon" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
+            Home
+          </button>
+        </div>
+
+        <div class="nav-group">
+          <div class="nav-group-label">Scraping &amp; Data</div>
+          <button class="nav-item" type="button" data-page="scraper">
+            <svg class="nav-icon" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+            URL Scraper
+          </button>
+          <button class="nav-item" type="button" data-page="merger">
+            <svg class="nav-icon" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M17 20.41L18.41 19 15 15.59 13.59 17 17 20.41zM7.5 8H11v5.59L5.59 19 7 20.41l6-6V8h3.5L12 3.5 7.5 8z"/></svg>
+            CSV Merger
+          </button>
+          <button class="nav-item" type="button" data-page="upload">
+            <svg class="nav-icon" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/></svg>
+            File Upload
+          </button>
+        </div>
+
+        <div class="nav-group">
+          <div class="nav-group-label">Shopify Store</div>
+          <button class="nav-item" type="button" data-page="audit">
+            <svg class="nav-icon" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+            Store Auditor
+          </button>
+          <button class="nav-item" type="button" data-page="robots">
+            <svg class="nav-icon" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M17 12h-5v5h5v-5zM16 1v2H8V1H6v2H5c-1.11 0-1.99.9-1.99 2L3 19c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2h-1V1h-2zm3 18H5V8h14v11z"/></svg>
+            Robots &amp; Sitemap
+          </button>
+        </div>
+
+        <div class="nav-group">
+          <div class="nav-group-label">Business</div>
+          <button class="nav-item" type="button" data-page="invoices">
+            <svg class="nav-icon" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14l4-4h12c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 10H7.83L6 14.83V5h13v8z"/></svg>
+            Invoices
+          </button>
+          <button class="nav-item" type="button" data-page="expenses">
+            <svg class="nav-icon" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z"/></svg>
+            Expense Tracker
+          </button>
+        </div>
+
+        <div class="nav-group">
+          <div class="nav-group-label">Image Tools</div>
+          <button class="nav-item" type="button" data-page="converter">
+            <svg class="nav-icon" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>
+            Image Converter
+          </button>
+          <button class="nav-item" type="button" data-page="resizer">
+            <svg class="nav-icon" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M21 15h2v2h-2v-2zm0-4h2v2h-2v-2zm2 8h-2v2c1 0 2-1 2-2zM13 3h2v2h-2V3zm8 4h2v2h-2V7zm0-4v2h2c0-1-1-2-2-2zM1 7h2v2H1V7zm16-4h2v2h-2V3zM1 11h2v2H1v-2zm4-8h2v2H5V3zM3 3C2 3 1 4 1 5h2V3zm0 12H1c0 1 1 2 2 2v-2zm8 4h2v2h-2v-2zm-4 0h2v2H7v-2zm8 0h2v2h-2v-2zm-4-16h2v2h-2V3zM1 15h2v2H1v-2z"/></svg>
+            Image Resizer
+          </button>
+        </div>
+
+        <div class="nav-group">
+          <div class="nav-group-label">System</div>
+          <button class="nav-item" type="button" data-page="settings">
+            <svg class="nav-icon" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+            Settings
+          </button>
+        </div>
       </nav>
       <div class="sidebar-footer">
         <p class="sidebar-version">v1.3.3</p>
@@ -749,6 +1041,12 @@
         </section>
       </section>
 
+      <!-- CSV MERGER (content loaded from csv-merger.html) -->
+      <section id="page-merger" class="page"></section>
+
+      <!-- INVOICES (content loaded from invoices.html) -->
+      <section id="page-invoices" class="page"></section>
+
       <!-- URL SCRAPER -->
       <section id="page-scraper" class="page">
         <header>
@@ -871,6 +1169,12 @@
         </section>
       </section>
 
+      <!-- ROBOTS & SITEMAP -->
+      <section id="page-robots" class="page"></section>
+
+      <!-- EXPENSE TRACKER -->
+      <section id="page-expenses" class="page"></section>
+
       <!-- IMAGE CONVERTER -->
       <section id="page-converter" class="page">
         <header>
@@ -926,6 +1230,9 @@
           <div class="log" id="converter-log"><span class="log-line">Ready. Select folders and click Convert.</span></div>
         </section>
       </section>
+
+      <!-- IMAGE RESIZER -->
+      <section id="page-resizer" class="page"></section>
 
       <!-- SETTINGS -->
       <section id="page-settings" class="page">
@@ -1702,6 +2009,926 @@
         appendLog(converterLog, `[ERROR] Stop failed: ${err && err.message ? err.message : err}`);
       }
     });
+
+    // CSV Merger
+    const SOURCE_TYPE_OPTIONS = [
+      { value: "scraper", label: "Scraper Output" },
+      { value: "shopify_export", label: "Shopify Export" },
+      { value: "supplier", label: "Supplier List" },
+      { value: "client", label: "Client File" },
+    ];
+    let mergerFiles = [];
+    let mergerShopColumns = [];
+    let mergerAnalysed = false;
+    let mergerMappingConfirmed = false;
+    let mergerOutputFolder = "";
+    let mergerFileIdSeq = 1;
+
+    function basenamePath(p) {
+      const s = String(p || "");
+      const parts = s.split(/[/\\]/);
+      return parts[parts.length - 1] || s;
+    }
+
+    function mergerEls() {
+      return {
+        list: document.getElementById("merger-files"),
+        log: document.getElementById("merger-log"),
+        unmappedCard: document.getElementById("merger-unmapped-card"),
+        unmappedBody: document.getElementById("merger-unmapped-body"),
+        analyseBtn: document.getElementById("merger-analyse"),
+        runBtn: document.getElementById("merger-run"),
+        openBtn: document.getElementById("merger-open-output"),
+        confirmBtn: document.getElementById("merger-confirm-mapping"),
+      };
+    }
+
+    function invalidateMergerAnalysis() {
+      mergerAnalysed = false;
+      mergerMappingConfirmed = false;
+      const els = mergerEls();
+      if (els.runBtn) els.runBtn.disabled = true;
+      if (els.unmappedCard) els.unmappedCard.classList.add("hidden");
+      if (els.unmappedBody) els.unmappedBody.innerHTML = "";
+      if (els.openBtn) els.openBtn.classList.add("hidden");
+    }
+
+    function collectMergerSources() {
+      return mergerFiles.map((f) => ({
+        path: f.path,
+        label: f.label || basenamePath(f.path),
+        source_type: f.sourceType,
+      }));
+    }
+
+    function collectMergerSettings() {
+      return {
+        merge_mode: document.getElementById("merger-mode").value,
+        output_folder: document.getElementById("merger-output-folder").value.trim(),
+        output_filename: document.getElementById("merger-output-name").value.trim() || "merged_output.csv",
+      };
+    }
+
+    function collectColumnMappings() {
+      const mappings = {};
+      document.querySelectorAll("#merger-unmapped-body tr").forEach((tr) => {
+        const file = tr.dataset.file;
+        const col = tr.dataset.column;
+        if (!file || !col) return;
+        if (!mappings[file]) mappings[file] = {};
+        const ignore = tr.querySelector(".merger-ignore");
+        const select = tr.querySelector(".merger-map-to");
+        if (ignore && ignore.checked) {
+          mappings[file][col] = "__ignore__";
+        } else if (select && select.value) {
+          mappings[file][col] = select.value;
+        }
+      });
+      return mappings;
+    }
+
+    function renderMergerFiles() {
+      const els = mergerEls();
+      if (!els.list) return;
+      els.list.innerHTML = "";
+      if (!mergerFiles.length) {
+        const empty = document.createElement("p");
+        empty.className = "card-caption";
+        empty.textContent = "No files added yet.";
+        els.list.appendChild(empty);
+        return;
+      }
+      mergerFiles.forEach((file, index) => {
+        const row = document.createElement("div");
+        row.className = "merger-file-row";
+        row.draggable = true;
+        row.dataset.id = String(file.id);
+
+        const name = document.createElement("div");
+        name.className = "merger-file-name";
+        name.title = file.path;
+        name.textContent = file.label;
+
+        const typeSelect = document.createElement("select");
+        typeSelect.className = "select";
+        SOURCE_TYPE_OPTIONS.forEach((opt) => {
+          const o = document.createElement("option");
+          o.value = opt.value;
+          o.textContent = opt.label;
+          if (opt.value === file.sourceType) o.selected = true;
+          typeSelect.appendChild(o);
+        });
+        typeSelect.addEventListener("change", () => {
+          file.sourceType = typeSelect.value;
+          invalidateMergerAnalysis();
+        });
+
+        const prio = document.createElement("div");
+        prio.className = "merger-prio";
+        const up = document.createElement("button");
+        up.type = "button";
+        up.className = "merger-icon-btn";
+        up.title = "Move up";
+        up.textContent = "↑";
+        up.disabled = index === 0;
+        up.addEventListener("click", () => {
+          if (index <= 0) return;
+          const tmp = mergerFiles[index - 1];
+          mergerFiles[index - 1] = mergerFiles[index];
+          mergerFiles[index] = tmp;
+          invalidateMergerAnalysis();
+          renderMergerFiles();
+        });
+        const num = document.createElement("span");
+        num.className = "merger-prio-num";
+        num.textContent = String(index + 1);
+        const down = document.createElement("button");
+        down.type = "button";
+        down.className = "merger-icon-btn";
+        down.title = "Move down";
+        down.textContent = "↓";
+        down.disabled = index === mergerFiles.length - 1;
+        down.addEventListener("click", () => {
+          if (index >= mergerFiles.length - 1) return;
+          const tmp = mergerFiles[index + 1];
+          mergerFiles[index + 1] = mergerFiles[index];
+          mergerFiles[index] = tmp;
+          invalidateMergerAnalysis();
+          renderMergerFiles();
+        });
+        prio.appendChild(up);
+        prio.appendChild(num);
+        prio.appendChild(down);
+
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "merger-icon-btn";
+        remove.title = "Remove";
+        remove.textContent = "×";
+        remove.addEventListener("click", () => {
+          mergerFiles = mergerFiles.filter((f) => f.id !== file.id);
+          invalidateMergerAnalysis();
+          renderMergerFiles();
+        });
+
+        row.addEventListener("dragstart", (e) => {
+          e.dataTransfer.setData("text/plain", String(file.id));
+          e.dataTransfer.effectAllowed = "move";
+        });
+        row.addEventListener("dragover", (e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+        });
+        row.addEventListener("drop", (e) => {
+          e.preventDefault();
+          const fromId = Number(e.dataTransfer.getData("text/plain"));
+          const toId = file.id;
+          if (!fromId || fromId === toId) return;
+          const fromIdx = mergerFiles.findIndex((f) => f.id === fromId);
+          const toIdx = mergerFiles.findIndex((f) => f.id === toId);
+          if (fromIdx < 0 || toIdx < 0) return;
+          const [item] = mergerFiles.splice(fromIdx, 1);
+          mergerFiles.splice(toIdx, 0, item);
+          invalidateMergerAnalysis();
+          renderMergerFiles();
+        });
+
+        row.appendChild(name);
+        row.appendChild(typeSelect);
+        row.appendChild(prio);
+        row.appendChild(remove);
+        els.list.appendChild(row);
+      });
+    }
+
+    function shopifyColumnOptionsHtml(selected) {
+      const cols = mergerShopColumns.length
+        ? mergerShopColumns
+        : [
+            "Handle", "Title", "Body (HTML)", "Vendor", "Type", "Tags", "Published",
+            "Variant SKU", "Variant Price", "Variant Compare At Price",
+            "Variant Inventory Qty", "Image Src", "Image Position",
+          ];
+      let html = '<option value="">— Select —</option>';
+      cols.forEach((c) => {
+        const sel = c === selected ? " selected" : "";
+        html += `<option value="${String(c).replace(/"/g, "&quot;")}"${sel}>${c}</option>`;
+      });
+      return html;
+    }
+
+    function renderUnmappedTable(unmapped) {
+      const els = mergerEls();
+      if (!els.unmappedBody || !els.unmappedCard) return;
+      els.unmappedBody.innerHTML = "";
+      const entries = [];
+      Object.keys(unmapped || {}).forEach((fileLabel) => {
+        (unmapped[fileLabel] || []).forEach((col) => {
+          entries.push({ file: fileLabel, column: col });
+        });
+      });
+      if (!entries.length) {
+        els.unmappedCard.classList.add("hidden");
+        mergerMappingConfirmed = true;
+        if (els.runBtn && mergerAnalysed) els.runBtn.disabled = false;
+        return;
+      }
+      entries.forEach((entry) => {
+        const tr = document.createElement("tr");
+        tr.dataset.file = entry.file;
+        tr.dataset.column = entry.column;
+        tr.innerHTML =
+          `<td>${entry.file}</td>` +
+          `<td>${entry.column}</td>` +
+          `<td><select class="select merger-map-to">${shopifyColumnOptionsHtml("")}</select></td>` +
+          `<td><label class="checkbox" style="margin:0"><input class="merger-ignore" type="checkbox" /></label></td>`;
+        const ignore = tr.querySelector(".merger-ignore");
+        const select = tr.querySelector(".merger-map-to");
+        ignore.addEventListener("change", () => {
+          select.disabled = ignore.checked;
+          if (ignore.checked) select.value = "";
+          mergerMappingConfirmed = false;
+          if (els.runBtn) els.runBtn.disabled = true;
+        });
+        select.addEventListener("change", () => {
+          mergerMappingConfirmed = false;
+          if (els.runBtn) els.runBtn.disabled = true;
+        });
+        els.unmappedBody.appendChild(tr);
+      });
+      els.unmappedCard.classList.remove("hidden");
+      mergerMappingConfirmed = false;
+      if (els.runBtn) els.runBtn.disabled = true;
+    }
+
+    function wireMergerUi() {
+      const els = mergerEls();
+      if (!els.list) return;
+
+      document.getElementById("merger-add-file").addEventListener("click", async () => {
+        const bridge = api();
+        if (!bridge) {
+          alert("Electron bridge unavailable. Restart the app.");
+          return;
+        }
+        const filePath = await bridge.browseFile({
+          filters: [
+            { name: "CSV / Excel", extensions: ["csv", "xlsx"] },
+            { name: "All Files", extensions: ["*"] },
+          ],
+        });
+        if (!filePath) return;
+        if (mergerFiles.some((f) => f.path === filePath)) {
+          alert("That file is already in the list.");
+          return;
+        }
+        mergerFiles.push({
+          id: mergerFileIdSeq++,
+          path: filePath,
+          label: basenamePath(filePath),
+          sourceType: "client",
+        });
+        invalidateMergerAnalysis();
+        renderMergerFiles();
+      });
+
+      document.getElementById("merger-browse-output").addEventListener("click", async () => {
+        const bridge = api();
+        if (!bridge) return;
+        const folder = await bridge.browseFolder();
+        if (folder) {
+          document.getElementById("merger-output-folder").value = folder;
+          mergerOutputFolder = folder;
+        }
+      });
+
+      document.getElementById("merger-output-folder").addEventListener("input", (e) => {
+        mergerOutputFolder = e.target.value.trim();
+      });
+
+      document.getElementById("merger-mode").addEventListener("change", () => {
+        /* settings change does not require re-analyse */
+      });
+
+      els.confirmBtn.addEventListener("click", () => {
+        let incomplete = false;
+        document.querySelectorAll("#merger-unmapped-body tr").forEach((tr) => {
+          const ignore = tr.querySelector(".merger-ignore");
+          const select = tr.querySelector(".merger-map-to");
+          if (!ignore.checked && !select.value) incomplete = true;
+        });
+        if (incomplete) {
+          alert("Map or ignore every unmapped column before confirming.");
+          return;
+        }
+        mergerMappingConfirmed = true;
+        if (els.runBtn && mergerAnalysed) els.runBtn.disabled = false;
+        appendLog(els.log, "[INFO] Column mapping confirmed.");
+      });
+
+      els.analyseBtn.addEventListener("click", async () => {
+        const bridge = api();
+        if (!bridge) {
+          alert("Electron bridge unavailable. Restart with npm start from electron/.");
+          return;
+        }
+        if (mergerFiles.length < 2) {
+          alert("Add at least 2 source files.");
+          return;
+        }
+        clearLog(els.log, "[INFO] Analysing source files…");
+        els.analyseBtn.disabled = true;
+        els.runBtn.disabled = true;
+        try {
+          const result = await bridge.analyseCsvMerger({
+            sources: collectMergerSources(),
+            settings: collectMergerSettings(),
+          });
+          mergerShopColumns = Array.isArray(result.shopify_columns)
+            ? result.shopify_columns
+            : [];
+          mergerAnalysed = true;
+          (result.errors || []).forEach((err) => appendLog(els.log, `[ERROR] ${err}`));
+          const unmapped = result.unmapped_columns || {};
+          let totalUnmapped = 0;
+          Object.keys(unmapped).forEach((k) => {
+            totalUnmapped += (unmapped[k] || []).length;
+          });
+          appendLog(
+            els.log,
+            `[INFO] Analysis complete. ${totalUnmapped} unmapped column(s).`
+          );
+          renderUnmappedTable(unmapped);
+          if (totalUnmapped === 0) {
+            mergerMappingConfirmed = true;
+            els.runBtn.disabled = false;
+            appendLog(els.log, "[INFO] All columns mapped automatically. Ready to merge.");
+          }
+        } catch (err) {
+          appendLog(els.log, `[ERROR] ${err && err.message ? err.message : err}`);
+          invalidateMergerAnalysis();
+        } finally {
+          els.analyseBtn.disabled = false;
+        }
+      });
+
+      els.runBtn.addEventListener("click", async () => {
+        const bridge = api();
+        if (!bridge) return;
+        if (!mergerAnalysed || !mergerMappingConfirmed) {
+          alert("Analyse files and confirm mapping before running merge.");
+          return;
+        }
+        if (mergerFiles.length < 2) {
+          alert("Add at least 2 source files.");
+          return;
+        }
+        const settings = collectMergerSettings();
+        if (!settings.output_folder) {
+          alert("Choose an output folder.");
+          return;
+        }
+        mergerOutputFolder = settings.output_folder;
+        clearLog(els.log, "[INFO] Starting merge…");
+        els.runBtn.disabled = true;
+        els.analyseBtn.disabled = true;
+        els.openBtn.classList.add("hidden");
+        try {
+          await bridge.runCsvMerger({
+            sources: collectMergerSources(),
+            settings,
+            column_mappings: collectColumnMappings(),
+          });
+        } catch (err) {
+          appendLog(els.log, `[ERROR] ${err && err.message ? err.message : err}`);
+          els.runBtn.disabled = false;
+          els.analyseBtn.disabled = false;
+        }
+      });
+
+      els.openBtn.addEventListener("click", async () => {
+        const bridge = api();
+        if (!bridge || !mergerOutputFolder) return;
+        const result = await bridge.openCsvMergerFolder(mergerOutputFolder);
+        if (result && result.ok === false) {
+          alert(result.error || "Could not open folder.");
+        }
+      });
+
+      if (api()) {
+        api().onMergerLogLine((line) => {
+          appendLog(els.log, line);
+        });
+        api().onMergerDone((payload) => {
+          const els2 = mergerEls();
+          els2.analyseBtn.disabled = false;
+          els2.runBtn.disabled = !(mergerAnalysed && mergerMappingConfirmed);
+          const stopped = Boolean(payload && payload.stopped);
+          const code = payload && typeof payload.code === "number" ? payload.code : -1;
+          const out =
+            (payload && payload.result && payload.result.output_path) ||
+            (payload && payload.outputPath) ||
+            "";
+          if (out) {
+            const slash = Math.max(out.lastIndexOf("/"), out.lastIndexOf("\\"));
+            mergerOutputFolder =
+              out.toLowerCase().endsWith(".csv") && slash > 0
+                ? out.slice(0, slash)
+                : out;
+          }
+          if (stopped) {
+            appendLog(els2.log, "[WARNING] Merge stopped.");
+            return;
+          }
+          if (code === 0) {
+            appendLog(els2.log, "[INFO] Merge finished successfully.");
+            els2.openBtn.classList.remove("hidden");
+          } else {
+            appendLog(els2.log, `[ERROR] Merge exited with code ${code}.`);
+          }
+        });
+      }
+
+      renderMergerFiles();
+    }
+
+    fetch("./csv-merger.html")
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed to load csv-merger.html");
+        return res.text();
+      })
+      .then((html) => {
+        const host = document.getElementById("page-merger");
+        if (!host) return;
+        host.innerHTML = html;
+        wireMergerUi();
+      })
+      .catch((err) => {
+        const host = document.getElementById("page-merger");
+        if (host) {
+          host.innerHTML =
+            '<header><h1 class="page-title">CSV Merger</h1>' +
+            `<p class="page-subtitle">${err && err.message ? err.message : err}</p></header>`;
+        }
+      });
+
+    // Invoices
+    let invClients = [];
+    let invInvoices = [];
+    let invLineSeq = 1;
+
+    function invToday() {
+      const d = new Date();
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const dd = String(d.getDate()).padStart(2, "0");
+      return d.getFullYear() + "-" + mm + "-" + dd;
+    }
+
+    function invMoney(n) {
+      const v = Number(n);
+      if (!Number.isFinite(v)) return "£0.00";
+      return "£" + v.toFixed(2);
+    }
+
+    function invUid() {
+      return "id_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
+    }
+
+    function nextInvoiceNumber() {
+      let max = 0;
+      invInvoices.forEach((inv) => {
+        const m = String(inv.number || "").match(/INV-(\d+)/i);
+        if (m) max = Math.max(max, parseInt(m[1], 10));
+      });
+      return "INV-" + String(max + 1).padStart(3, "0");
+    }
+
+    function showInvTab(tab) {
+      document.querySelectorAll(".inv-tab").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.invTab === tab);
+      });
+      document.querySelectorAll(".inv-panel").forEach((panel) => {
+        panel.classList.toggle("active", panel.id === "inv-panel-" + tab);
+      });
+    }
+
+    function populateClientSelect() {
+      const sel = document.getElementById("inv-client-select");
+      if (!sel) return;
+      const current = sel.value;
+      sel.innerHTML = '<option value="">— Select client —</option>';
+      invClients.forEach((c) => {
+        const opt = document.createElement("option");
+        opt.value = c.id;
+        opt.textContent = (c.name || "Unnamed") + (c.company ? " — " + c.company : "");
+        sel.appendChild(opt);
+      });
+      if (current && invClients.some((c) => c.id === current)) sel.value = current;
+    }
+
+    function renderClientsTable() {
+      const body = document.getElementById("inv-clients-body");
+      const empty = document.getElementById("inv-clients-empty");
+      if (!body) return;
+      body.innerHTML = "";
+      if (!invClients.length) {
+        if (empty) empty.style.display = "block";
+        return;
+      }
+      if (empty) empty.style.display = "none";
+      invClients.forEach((c) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML =
+          `<td>${escapeHtml(c.name || "")}</td>` +
+          `<td>${escapeHtml(c.company || "")}</td>` +
+          `<td>${escapeHtml(c.email || "")}</td>` +
+          `<td>${escapeHtml(c.address || "").replace(/\n/g, "<br>")}</td>` +
+          `<td><div class="inv-actions">` +
+          `<button class="btn-outline inv-edit-client" type="button" data-id="${c.id}">Edit</button>` +
+          `<button class="btn-outline inv-del-client" type="button" data-id="${c.id}">Delete</button>` +
+          `</div></td>`;
+        body.appendChild(tr);
+      });
+      body.querySelectorAll(".inv-edit-client").forEach((btn) => {
+        btn.addEventListener("click", () => openClientForm(btn.dataset.id));
+      });
+      body.querySelectorAll(".inv-del-client").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          if (!confirm("Delete this client?")) return;
+          invClients = invClients.filter((c) => c.id !== btn.dataset.id);
+          await persistClients();
+          renderClientsTable();
+          populateClientSelect();
+        });
+      });
+    }
+
+    function escapeHtml(s) {
+      return String(s || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function openClientForm(editId) {
+      const card = document.getElementById("inv-client-form-card");
+      const title = document.getElementById("inv-client-form-title");
+      const idEl = document.getElementById("inv-client-edit-id");
+      card.classList.remove("hidden");
+      if (editId) {
+        const c = invClients.find((x) => x.id === editId);
+        if (!c) return;
+        title.textContent = "Edit Client";
+        idEl.value = c.id;
+        document.getElementById("inv-client-name").value = c.name || "";
+        document.getElementById("inv-client-company").value = c.company || "";
+        document.getElementById("inv-client-email").value = c.email || "";
+        document.getElementById("inv-client-address").value = c.address || "";
+      } else {
+        title.textContent = "Add Client";
+        idEl.value = "";
+        document.getElementById("inv-client-name").value = "";
+        document.getElementById("inv-client-company").value = "";
+        document.getElementById("inv-client-email").value = "";
+        document.getElementById("inv-client-address").value = "";
+      }
+    }
+
+    function closeClientForm() {
+      document.getElementById("inv-client-form-card").classList.add("hidden");
+    }
+
+    async function persistClients() {
+      const bridge = api();
+      if (!bridge) return;
+      await bridge.writeClients(invClients);
+    }
+
+    async function persistInvoices() {
+      const bridge = api();
+      if (!bridge) return;
+      await bridge.writeInvoices(invInvoices);
+    }
+
+    function recalcInvoiceTotals() {
+      let subtotal = 0;
+      document.querySelectorAll("#inv-lines-body tr").forEach((tr) => {
+        const qty = parseFloat(tr.querySelector(".inv-qty").value) || 0;
+        const price = parseFloat(tr.querySelector(".inv-price").value) || 0;
+        const amount = qty * price;
+        tr.querySelector(".inv-amount").textContent = invMoney(amount);
+        subtotal += amount;
+      });
+      const vatOn = document.getElementById("inv-vat-toggle").checked;
+      const vat = vatOn ? subtotal * 0.2 : 0;
+      const total = subtotal + vat;
+      document.getElementById("inv-subtotal").textContent = invMoney(subtotal);
+      document.getElementById("inv-vat").textContent = invMoney(vat);
+      document.getElementById("inv-total").textContent = invMoney(total);
+      document.getElementById("inv-vat-row").classList.toggle("hidden", !vatOn);
+      return { subtotal, vatAmount: vat, total, vatEnabled: vatOn };
+    }
+
+    function addLineRow(item) {
+      const body = document.getElementById("inv-lines-body");
+      const tr = document.createElement("tr");
+      tr.dataset.lineId = String(invLineSeq++);
+      tr.innerHTML =
+        `<td><input class="inv-line-input inv-desc" type="text" placeholder="Description" value="${escapeHtml((item && item.description) || "")}" /></td>` +
+        `<td><input class="inv-line-input inv-qty" type="number" min="0" step="any" value="${item && item.qty != null ? item.qty : 1}" /></td>` +
+        `<td><input class="inv-line-input inv-price" type="number" min="0" step="0.01" value="${item && item.unitPrice != null ? item.unitPrice : ""}" /></td>` +
+        `<td class="inv-amount">${invMoney(0)}</td>` +
+        `<td><button class="merger-icon-btn inv-remove-line" type="button" title="Remove">×</button></td>`;
+      body.appendChild(tr);
+      const bump = () => recalcInvoiceTotals();
+      tr.querySelector(".inv-qty").addEventListener("input", bump);
+      tr.querySelector(".inv-price").addEventListener("input", bump);
+      tr.querySelector(".inv-remove-line").addEventListener("click", () => {
+        if (body.querySelectorAll("tr").length <= 1) {
+          alert("Keep at least one line item.");
+          return;
+        }
+        tr.remove();
+        recalcInvoiceTotals();
+      });
+      recalcInvoiceTotals();
+    }
+
+    function resetNewInvoiceForm() {
+      document.getElementById("inv-number").value = nextInvoiceNumber();
+      document.getElementById("inv-date").value = invToday();
+      document.getElementById("inv-due").value = "";
+      document.getElementById("inv-notes").value = "";
+      document.getElementById("inv-paypal").value = "";
+      document.getElementById("inv-vat-toggle").checked = false;
+      document.getElementById("inv-client-select").value = "";
+      const body = document.getElementById("inv-lines-body");
+      body.innerHTML = "";
+      addLineRow({ description: "", qty: 1, unitPrice: "" });
+      recalcInvoiceTotals();
+    }
+
+    function collectInvoiceFromForm(status) {
+      const clientId = document.getElementById("inv-client-select").value;
+      const client = invClients.find((c) => c.id === clientId);
+      if (!client) {
+        throw new Error("Select a client.");
+      }
+      const totals = recalcInvoiceTotals();
+      const lineItems = [];
+      document.querySelectorAll("#inv-lines-body tr").forEach((tr) => {
+        const description = tr.querySelector(".inv-desc").value.trim();
+        const qty = parseFloat(tr.querySelector(".inv-qty").value) || 0;
+        const unitPrice = parseFloat(tr.querySelector(".inv-price").value) || 0;
+        lineItems.push({
+          description,
+          qty,
+          unitPrice,
+          amount: qty * unitPrice,
+        });
+      });
+      if (!lineItems.some((li) => li.description || li.amount)) {
+        throw new Error("Add at least one line item.");
+      }
+      return {
+        id: invUid(),
+        number: document.getElementById("inv-number").value.trim(),
+        clientId: client.id,
+        clientName: client.name || "",
+        clientCompany: client.company || "",
+        clientEmail: client.email || "",
+        clientAddress: client.address || "",
+        date: document.getElementById("inv-date").value,
+        dueDate: document.getElementById("inv-due").value,
+        lineItems,
+        subtotal: totals.subtotal,
+        vatEnabled: totals.vatEnabled,
+        vatAmount: totals.vatAmount,
+        total: totals.total,
+        notes: document.getElementById("inv-notes").value.trim(),
+        paypalLink: document.getElementById("inv-paypal").value.trim(),
+        currency: "GBP",
+        status: status || "Draft",
+      };
+    }
+
+    function renderInvoicesTable() {
+      const body = document.getElementById("inv-all-body");
+      const empty = document.getElementById("inv-all-empty");
+      if (!body) return;
+      body.innerHTML = "";
+      if (!invInvoices.length) {
+        if (empty) empty.style.display = "block";
+        return;
+      }
+      if (empty) empty.style.display = "none";
+      const sorted = invInvoices.slice().sort((a, b) => {
+        return String(b.number || "").localeCompare(String(a.number || ""));
+      });
+      sorted.forEach((inv) => {
+        const tr = document.createElement("tr");
+        const statusOpts = ["Draft", "Sent", "Paid"]
+          .map((s) => `<option value="${s}"${inv.status === s ? " selected" : ""}>${s}</option>`)
+          .join("");
+        tr.innerHTML =
+          `<td>${escapeHtml(inv.number || "")}</td>` +
+          `<td>${escapeHtml(inv.clientName || "")}</td>` +
+          `<td>${invMoney(inv.total)}</td>` +
+          `<td>${escapeHtml(inv.date || "")}</td>` +
+          `<td>${escapeHtml(inv.dueDate || "")}</td>` +
+          `<td><select class="select inv-status" data-id="${inv.id}">${statusOpts}</select></td>` +
+          `<td><div class="inv-actions">` +
+          `<button class="btn-outline inv-dl-pdf" type="button" data-id="${inv.id}">Download PDF</button>` +
+          `<button class="btn-outline inv-del-inv" type="button" data-id="${inv.id}">Delete</button>` +
+          `</div></td>`;
+        body.appendChild(tr);
+      });
+      body.querySelectorAll(".inv-status").forEach((sel) => {
+        sel.addEventListener("change", async () => {
+          const inv = invInvoices.find((x) => x.id === sel.dataset.id);
+          if (!inv) return;
+          inv.status = sel.value;
+          await persistInvoices();
+        });
+      });
+      body.querySelectorAll(".inv-dl-pdf").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const bridge = api();
+          const inv = invInvoices.find((x) => x.id === btn.dataset.id);
+          if (!bridge || !inv) return;
+          btn.disabled = true;
+          try {
+            await bridge.exportInvoicePdf(inv);
+          } catch (err) {
+            alert(err && err.message ? err.message : String(err));
+          } finally {
+            btn.disabled = false;
+          }
+        });
+      });
+      body.querySelectorAll(".inv-del-inv").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          if (!confirm("Delete this invoice?")) return;
+          invInvoices = invInvoices.filter((x) => x.id !== btn.dataset.id);
+          await persistInvoices();
+          renderInvoicesTable();
+          const numEl = document.getElementById("inv-number");
+          if (numEl && document.getElementById("inv-panel-new").classList.contains("active")) {
+            numEl.value = nextInvoiceNumber();
+          }
+        });
+      });
+    }
+
+    async function loadInvoiceData() {
+      const bridge = api();
+      if (!bridge) return;
+      invClients = (await bridge.readClients()) || [];
+      invInvoices = (await bridge.readInvoices()) || [];
+      renderClientsTable();
+      populateClientSelect();
+      renderInvoicesTable();
+      if (document.getElementById("inv-number")) {
+        document.getElementById("inv-number").value = nextInvoiceNumber();
+      }
+    }
+
+    function wireInvoicesUi() {
+      document.querySelectorAll(".inv-tab").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          showInvTab(btn.dataset.invTab);
+          if (btn.dataset.invTab === "new") {
+            populateClientSelect();
+            if (!document.getElementById("inv-lines-body").children.length) {
+              resetNewInvoiceForm();
+            } else {
+              document.getElementById("inv-number").value = nextInvoiceNumber();
+            }
+          }
+          if (btn.dataset.invTab === "all") renderInvoicesTable();
+          if (btn.dataset.invTab === "clients") renderClientsTable();
+        });
+      });
+
+      document.getElementById("inv-add-client").addEventListener("click", () => openClientForm(null));
+      document.getElementById("inv-client-cancel").addEventListener("click", closeClientForm);
+      document.getElementById("inv-client-save").addEventListener("click", async () => {
+        const name = document.getElementById("inv-client-name").value.trim();
+        if (!name) {
+          alert("Full Name is required.");
+          return;
+        }
+        const editId = document.getElementById("inv-client-edit-id").value;
+        const payload = {
+          id: editId || invUid(),
+          name,
+          company: document.getElementById("inv-client-company").value.trim(),
+          email: document.getElementById("inv-client-email").value.trim(),
+          address: document.getElementById("inv-client-address").value.trim(),
+        };
+        if (editId) {
+          invClients = invClients.map((c) => (c.id === editId ? payload : c));
+        } else {
+          invClients.push(payload);
+        }
+        await persistClients();
+        closeClientForm();
+        renderClientsTable();
+        populateClientSelect();
+      });
+
+      document.getElementById("inv-add-line").addEventListener("click", () => addLineRow(null));
+      document.getElementById("inv-vat-toggle").addEventListener("change", () => recalcInvoiceTotals());
+
+      async function saveInvoice(exportPdf) {
+        const bridge = api();
+        if (!bridge) {
+          alert("Electron bridge unavailable. Restart the app.");
+          return;
+        }
+        let invoice;
+        try {
+          invoice = collectInvoiceFromForm(exportPdf ? "Sent" : "Draft");
+        } catch (err) {
+          alert(err && err.message ? err.message : String(err));
+          return;
+        }
+        // Replace if same number already exists (re-save), else append.
+        const existingIdx = invInvoices.findIndex((x) => x.number === invoice.number);
+        if (existingIdx >= 0) {
+          invoice.id = invInvoices[existingIdx].id;
+          invoice.status = exportPdf ? "Sent" : invInvoices[existingIdx].status || "Draft";
+          invInvoices[existingIdx] = invoice;
+        } else {
+          invInvoices.push(invoice);
+        }
+        await persistInvoices();
+        renderInvoicesTable();
+        if (exportPdf) {
+          try {
+            await bridge.exportInvoicePdf(invoice);
+          } catch (err) {
+            alert(err && err.message ? err.message : String(err));
+            return;
+          }
+        } else {
+          alert("Invoice saved as draft: " + invoice.number);
+        }
+        resetNewInvoiceForm();
+        showInvTab("all");
+      }
+
+      document.getElementById("inv-save-draft").addEventListener("click", () => saveInvoice(false));
+      document.getElementById("inv-save-export").addEventListener("click", () => saveInvoice(true));
+
+      resetNewInvoiceForm();
+      loadInvoiceData();
+    }
+
+    fetch("./invoices.html")
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed to load invoices.html");
+        return res.text();
+      })
+      .then((html) => {
+        const host = document.getElementById("page-invoices");
+        if (!host) return;
+        host.innerHTML = html;
+        wireInvoicesUi();
+      })
+      .catch((err) => {
+        const host = document.getElementById("page-invoices");
+        if (host) {
+          host.innerHTML =
+            '<header><h1 class="page-title">Invoices</h1>' +
+            `<p class="page-subtitle">${err && err.message ? err.message : err}</p></header>`;
+        }
+      });
+
+    function loadPlaceholderPage(pageId, file, title) {
+      fetch("./" + file)
+        .then((res) => {
+          if (!res.ok) throw new Error("Failed to load " + file);
+          return res.text();
+        })
+        .then((html) => {
+          const host = document.getElementById("page-" + pageId);
+          if (host) host.innerHTML = html;
+        })
+        .catch((err) => {
+          const host = document.getElementById("page-" + pageId);
+          if (host) {
+            host.innerHTML =
+              '<header><h1 class="page-title">' + title + "</h1>" +
+              `<p class="page-subtitle">${err && err.message ? err.message : err}</p></header>`;
+          }
+        });
+    }
+
+    loadPlaceholderPage("robots", "robots-sitemap.html", "Robots & Sitemap");
+    loadPlaceholderPage("expenses", "expense-tracker.html", "Expense Tracker");
+    loadPlaceholderPage("resizer", "image-resizer.html", "Image Resizer");
 
     // Settings
     document.getElementById("settings-browse-output").addEventListener("click", async () => {

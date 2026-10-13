@@ -33,11 +33,10 @@ GetTextFn = Callable[[str], str]
 
 class _PlaywrightSession:
     """
-    Reusable headed Chrome session for Magento nav crawl.
+    Reusable headless Chromium session for Magento nav crawl.
 
-    Cloudflare blocks requests/httpx (502) and headless Chromium (challenge).
-    Headed system Chrome + networkidle + settle wait passes CF. One browser is
-    kept open for the whole discover() run so cookies persist across pages.
+    One browser is kept open for the whole discover() run so cookies persist
+    across pages. networkidle + settle wait lets JS content load.
     """
 
     def __init__(self, logger: logging.Logger) -> None:
@@ -68,7 +67,7 @@ class _PlaywrightSession:
         )
         self._page = self._context.new_page()
         self.logger.info(
-            "[Magento] Playwright session started (headed Chrome, Cloudflare bypass)"
+            "[Magento] Playwright session started (headless Chromium)"
         )
         return self
 

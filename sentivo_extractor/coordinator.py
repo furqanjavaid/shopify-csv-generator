@@ -272,7 +272,7 @@ class DecisionCoordinator:
             "probe_variants": False,
             "logger": self.logger,
             "browser_headers": platform == "Magento",
-            "playwright_headless": False,
+            "playwright_headless": True,
             # Gallery URLs from the same proxied Playwright page as `html`.
             "gallery_images": list(getattr(self, "_woo_gallery_images", None) or []),
         }
@@ -284,7 +284,7 @@ class DecisionCoordinator:
         live = self.shared_playwright()
         if live is not None and live.alive:
             context["playwright_session"] = live
-            context["playwright_headless"] = False
+            context["playwright_headless"] = True
 
         values: dict[str, Any] = {}
         sources: dict[str, str] = {}
@@ -374,7 +374,7 @@ class DecisionCoordinator:
                 live2 = self.shared_playwright()
                 if live2 is not None and live2.alive:
                     context["playwright_session"] = live2
-                    context["playwright_headless"] = False
+                    context["playwright_headless"] = True
 
         pipeline._ensure_price(values, sources, confidences, engine_html or html)  # noqa: SLF001
         # Magento cut-to-size: price is JS-calculated — empty string is OK.
@@ -596,7 +596,7 @@ class DecisionCoordinator:
 
     def _magento_playwright_fetch(self, url: str) -> tuple[str, bool]:
         """
-        Magento PDP fetch — Playwright headed Chrome ONLY (never requests/httpx).
+        Magento PDP fetch — Playwright headless Chromium ONLY (never requests/httpx).
         Uses the shared MagentoBrowserPool so one browser serves every product.
         """
         self.logger.info(

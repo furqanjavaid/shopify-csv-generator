@@ -1,0 +1,67 @@
+<header>
+  <h1 class="page-title">CSV Merger</h1>
+  <p class="page-subtitle">Merge scraper, supplier, client, and Shopify export files into one product CSV</p>
+</header>
+
+<section class="card">
+  <h2 class="card-title">Source Files</h2>
+  <p class="card-caption">Add at least two CSV or Excel files. Higher rows = higher merge priority.</p>
+  <div id="merger-files" class="merger-files"></div>
+  <button class="btn-outline btn-block mt-12" type="button" id="merger-add-file">Add File →</button>
+</section>
+
+<section class="card">
+  <h2 class="card-title">Merge Settings</h2>
+  <p class="card-caption">Choose how overlapping products are resolved and where to write the result.</p>
+
+  <label class="field-label" for="merger-mode">Merge Mode</label>
+  <select class="select" id="merger-mode">
+    <option value="smart">Smart Merge</option>
+    <option value="append">Append</option>
+    <option value="update">Update</option>
+    <option value="replace">Full Replace</option>
+  </select>
+
+  <label class="field-label" for="merger-output-folder">Output Folder</label>
+  <div class="row">
+    <input class="input" id="merger-output-folder" type="text" placeholder="Select output folder…" value="" />
+    <button class="btn-outline fixed" type="button" id="merger-browse-output">Browse</button>
+  </div>
+
+  <label class="field-label" for="merger-output-name">Output Filename</label>
+  <input class="input" id="merger-output-name" type="text" value="merged_output.csv" placeholder="merged_output.csv" />
+</section>
+
+<section class="card hidden" id="merger-unmapped-card">
+  <h2 class="card-title">Unmapped Columns</h2>
+  <p class="card-caption">Map leftover columns to Shopify fields, or ignore them.</p>
+  <div class="table-wrap mt-12">
+    <table class="table" id="merger-unmapped-table">
+      <thead>
+        <tr>
+          <th>File</th>
+          <th>Original Column</th>
+          <th>Map To</th>
+          <th>Ignore</th>
+        </tr>
+      </thead>
+      <tbody id="merger-unmapped-body"></tbody>
+    </table>
+  </div>
+  <button class="btn-primary mt-16" type="button" id="merger-confirm-mapping">Confirm Mapping →</button>
+</section>
+
+<section class="card">
+  <h2 class="card-title">Actions</h2>
+  <div class="btn-row">
+    <button class="btn-primary" type="button" id="merger-analyse">Analyse Files →</button>
+    <button class="btn-primary" type="button" id="merger-run" disabled>Run Merge →</button>
+  </div>
+  <button class="btn-outline btn-block mt-12 hidden" type="button" id="merger-open-output">Open Output Folder →</button>
+</section>
+
+<section class="card">
+  <h2 class="card-title">Log Area</h2>
+  <p class="card-caption">Live merge output from Python.</p>
+  <div class="log" id="merger-log"><span class="log-line">Ready. Add at least two files, then Analyse.</span></div>
+</section>
