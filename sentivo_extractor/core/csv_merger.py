@@ -260,6 +260,32 @@ def load_tabular_file(path: str | Path) -> pd.DataFrame:
     return df.fillna("")
 
 
+def _clean_title_handle_suffixes(df: pd.DataFrame) -> pd.DataFrame:
+    """Strip store-name suffixes from Title and Handle before merge."""
+    out = df.copy()
+    if "Title" in out.columns:
+        out["Title"] = (
+            out["Title"]
+            .astype(str)
+            .str.replace(r"\s*\|.*$", "", regex=True)
+            .str.strip()
+        )
+    if "Handle" in out.columns:
+        out["Handle"] = (
+            out["Handle"]
+            .astype(str)
+            .str.replace(r"-(the-)?[a-z]+-store$", "", regex=True)
+            .str.strip()
+        )
+        out["Handle"] = (
+            out["Handle"]
+            .astype(str)
+            .str.replace(r"-the-polycarbonate-store$", "", regex=True)
+            .str.strip()
+        )
+    return out
+
+
 def auto_map_columns(
     columns: list[str],
     *,
