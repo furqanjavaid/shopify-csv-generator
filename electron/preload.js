@@ -36,6 +36,12 @@ contextBridge.exposeInMainWorld("sentivo", {
     ipcRenderer.invoke("invoices:write-settings", settings),
   exportInvoicePdf: (invoice) =>
     ipcRenderer.invoke("invoices:export-pdf", invoice),
+  readExpenses: () => ipcRenderer.invoke("expenses:read"),
+  writeExpenses: (expenses) => ipcRenderer.invoke("expenses:write", expenses),
+  exportExpensesCsv: (payload) =>
+    ipcRenderer.invoke("expenses:export-csv", payload),
+  exportExpensesPdf: (payload) =>
+    ipcRenderer.invoke("expenses:export-pdf", payload),
   selectResizerFolder: () => ipcRenderer.invoke("image-resizer:select-folder"),
   selectResizerFiles: () => ipcRenderer.invoke("image-resizer:select-files"),
   startImageResizer: (config) => ipcRenderer.invoke("image-resizer:start", config),

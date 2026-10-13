@@ -3123,7 +3123,376 @@
         });
     }
 
-    loadPlaceholderPage("expenses", "expense-tracker.html", "Expense Tracker");
+    // Expense Tracker
+    function wireExpenseTrackerUi() {
+      let expenses = [];
+      const CATEGORIES = [
+        "Software",
+        "Hardware",
+        "Marketing",
+        "Travel",
+        "Office",
+        "Subscriptions",
+        "Tax",
+        "Other",
+      ];
+      const FX_TO_GBP = {
+        GBP: 1,
+        USD: 0.79,
+        EUR: 0.86,
+        PKR: 0.0028,
+        AUD: 0.52,
+      };
+      const SYM = { GBP: "£", USD: "$", EUR: "€", PKR: "₨", AUD: "A$" };
+
+      function expToday() {
+        const d = new Date();
+        const mm = String(d.getMonth() + 1).padStart(2, "0");
+        const dd = String(d.getDate()).padStart(2, "0");
+        return d.getFullYear() + "-" + mm + "-" + dd;
+      }
+
+      function expMonthValue(d) {
+        const dt = d instanceof Date ? d : new Date();
+        return dt.getFullYear() + "-" + String(dt.getMonth() + 1).padStart(2, "0");
+      }
+
+      function expMonthLabel(ym) {
+        if (!ym || !/^\d{4}-\d{2}$/.test(ym)) return "Expenses";
+        const [y, m] = ym.split("-").map(Number);
+        const names = [
+          "January", "February", "March", "April", "May", "June",
+          "July", "August", "September", "October", "November", "December",
+        ];
+        return names[(m || 1) - 1] + " " + y;
+      }
+
+      function expUid() {
+        return "exp_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
+      }
+
+      function expMoney(amount, currency) {
+        const code = currency || "GBP";
+        const symbol = SYM[code] || code + " ";
+        const n = Number(amount);
+        if (!Number.isFinite(n)) return symbol + "0.00";
+        return symbol + n.toFixed(2);
+      }
+
+      function toGbp(amount, currency) {
+        const rate = FX_TO_GBP[currency] != null ? FX_TO_GBP[currency] : 1;
+        const n = Number(amount);
+        return Number.isFinite(n) ? n * rate : 0;
+      }
+
+      function showExpTab(tab) {
+        document.querySelectorAll("[data-exp-tab]").forEach((btn) => {
+          btn.classList.toggle("active", btn.dataset.expTab === tab);
+        });
+        document.querySelectorAll("#page-expenses .inv-panel").forEach((panel) => {
+          panel.classList.toggle("active", panel.id === "exp-panel-" + tab);
+        });
+      }
+
+      function resetExpenseForm() {
+        document.getElementById("exp-edit-id").value = "";
+        document.getElementById("exp-form-title").textContent = "Add Expense";
+        document.getElementById("exp-date").value = expToday();
+        document.getElementById("exp-description").value = "";
+        document.getElementById("exp-category").value = "Software";
+        document.getElementById("exp-amount").value = "";
+        document.getElementById("exp-currency").value = "GBP";
+        document.getElementById("exp-notes").value = "";
+        document.getElementById("exp-save").textContent = "Add Expense →";
+        document.getElementById("exp-cancel-edit").classList.add("hidden");
+      }
+
+      function filteredExpenses() {
+        const cat = document.getElementById("exp-filter-category").value;
+        const month = document.getElementById("exp-filter-month").value;
+        const q = (document.getElementById("exp-filter-search").value || "").trim().toLowerCase();
+        return expenses
+          .filter((e) => {
+            if (cat && e.category !== cat) return false;
+            if (month && String(e.date || "").slice(0, 7) !== month) return false;
+            if (q) {
+              const hay = ((e.description || "") + " " + (e.notes || "")).toLowerCase();
+              if (!hay.includes(q)) return false;
+            }
+            return true;
+          })
+          .slice()
+          .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+      }
+
+      function renderExpenseTable() {
+        const body = document.getElementById("exp-table-body");
+        const empty = document.getElementById("exp-empty");
+        const totalEl = document.getElementById("exp-list-total");
+        if (!body) return;
+        const rows = filteredExpenses();
+        body.innerHTML = "";
+        if (!rows.length) {
+          if (empty) empty.style.display = "block";
+          if (totalEl) totalEl.textContent = "Total: £0.00";
+          return;
+        }
+        if (empty) empty.style.display = "none";
+
+        const byCurrency = {};
+        rows.forEach((e) => {
+          const tr = document.createElement("tr");
+          tr.innerHTML =
+            `<td>${escapeHtml(e.date || "")}</td>` +
+            `<td title="${escapeHtml(e.description || "")}">${escapeHtml(e.description || "")}</td>` +
+            `<td>${escapeHtml(e.category || "")}</td>` +
+            `<td>${escapeHtml(expMoney(e.amount, e.currency))}</td>` +
+            `<td>${escapeHtml(e.currency || "GBP")}</td>` +
+            `<td title="${escapeHtml(e.notes || "")}">${escapeHtml(e.notes || "")}</td>` +
+            `<td><div class="inv-actions">` +
+            `<button class="btn-outline exp-edit" type="button" data-id="${e.id}">Edit</button>` +
+            `<button class="btn-outline exp-del" type="button" data-id="${e.id}">Delete</button>` +
+            `</div></td>`;
+          body.appendChild(tr);
+          const code = e.currency || "GBP";
+          byCurrency[code] = (byCurrency[code] || 0) + (Number(e.amount) || 0);
+        });
+
+        const codes = Object.keys(byCurrency);
+        if (codes.length === 1) {
+          totalEl.textContent = "Total: " + expMoney(byCurrency[codes[0]], codes[0]);
+        } else {
+          totalEl.textContent =
+            "Total: " +
+            codes.map((c) => expMoney(byCurrency[c], c)).join(" · ");
+        }
+
+        body.querySelectorAll(".exp-edit").forEach((btn) => {
+          btn.addEventListener("click", () => openExpenseEdit(btn.dataset.id));
+        });
+        body.querySelectorAll(".exp-del").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            if (!confirm("Delete this expense?")) return;
+            expenses = expenses.filter((e) => e.id !== btn.dataset.id);
+            await persistExpenses();
+            renderExpenseTable();
+            renderExpenseSummary();
+          });
+        });
+      }
+
+      function monthExpenses(ym) {
+        return expenses.filter((e) => String(e.date || "").slice(0, 7) === ym);
+      }
+
+      function renderExpenseSummary() {
+        const ym = document.getElementById("exp-summary-month").value || expMonthValue();
+        const rows = monthExpenses(ym);
+        const totalGbp = rows.reduce(
+          (sum, e) => sum + toGbp(e.amount, e.currency || "GBP"),
+          0
+        );
+        document.getElementById("exp-summary-total").textContent = expMoney(totalGbp, "GBP");
+
+        const byCat = {};
+        CATEGORIES.forEach((c) => {
+          byCat[c] = 0;
+        });
+        rows.forEach((e) => {
+          const cat = CATEGORIES.includes(e.category) ? e.category : "Other";
+          byCat[cat] += toGbp(e.amount, e.currency || "GBP");
+        });
+
+        const bars = document.getElementById("exp-category-bars");
+        const note = document.getElementById("exp-summary-note");
+        bars.innerHTML = "";
+        const entries = Object.entries(byCat)
+          .filter(([, v]) => v > 0)
+          .sort((a, b) => b[1] - a[1]);
+        if (!entries.length) {
+          note.textContent = "No expenses in this month.";
+          return;
+        }
+        note.textContent =
+          entries.length +
+          " categor" +
+          (entries.length === 1 ? "y" : "ies") +
+          " · totals converted to GBP for comparison";
+        entries.forEach(([name, amount]) => {
+          const pct = totalGbp > 0 ? (amount / totalGbp) * 100 : 0;
+          const row = document.createElement("div");
+          row.className = "exp-bar-row";
+          row.innerHTML =
+            `<div>${escapeHtml(name)}</div>` +
+            `<div class="exp-bar-track"><div class="exp-bar-fill" style="width:${pct.toFixed(1)}%"></div></div>` +
+            `<div class="exp-bar-meta">${escapeHtml(expMoney(amount, "GBP"))}<br>${pct.toFixed(0)}%</div>`;
+          bars.appendChild(row);
+        });
+      }
+
+      function openExpenseEdit(id) {
+        const e = expenses.find((x) => x.id === id);
+        if (!e) return;
+        document.getElementById("exp-edit-id").value = e.id;
+        document.getElementById("exp-form-title").textContent = "Edit Expense";
+        document.getElementById("exp-date").value = e.date || expToday();
+        document.getElementById("exp-description").value = e.description || "";
+        document.getElementById("exp-category").value = e.category || "Other";
+        document.getElementById("exp-amount").value = e.amount != null ? e.amount : "";
+        document.getElementById("exp-currency").value = e.currency || "GBP";
+        document.getElementById("exp-notes").value = e.notes || "";
+        document.getElementById("exp-save").textContent = "Save Changes →";
+        document.getElementById("exp-cancel-edit").classList.remove("hidden");
+        showExpTab("add");
+      }
+
+      async function persistExpenses() {
+        const bridge = api();
+        if (!bridge || !bridge.writeExpenses) return;
+        await bridge.writeExpenses(expenses);
+      }
+
+      async function loadExpenses() {
+        const bridge = api();
+        if (!bridge || !bridge.readExpenses) return;
+        expenses = (await bridge.readExpenses()) || [];
+        if (!Array.isArray(expenses)) expenses = [];
+        renderExpenseTable();
+        renderExpenseSummary();
+      }
+
+      // Init defaults
+      document.getElementById("exp-date").value = expToday();
+      const monthNow = expMonthValue();
+      document.getElementById("exp-filter-month").value = "";
+      document.getElementById("exp-summary-month").value = monthNow;
+
+      document.querySelectorAll("[data-exp-tab]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          showExpTab(btn.dataset.expTab);
+          if (btn.dataset.expTab === "all") renderExpenseTable();
+          if (btn.dataset.expTab === "summary") renderExpenseSummary();
+        });
+      });
+
+      document.getElementById("exp-cancel-edit").addEventListener("click", () => {
+        resetExpenseForm();
+      });
+
+      document.getElementById("exp-save").addEventListener("click", async () => {
+        const description = document.getElementById("exp-description").value.trim();
+        const amount = parseFloat(document.getElementById("exp-amount").value);
+        const date = document.getElementById("exp-date").value;
+        if (!description) {
+          alert("Description is required.");
+          return;
+        }
+        if (!date) {
+          alert("Date is required.");
+          return;
+        }
+        if (!Number.isFinite(amount) || amount < 0) {
+          alert("Enter a valid amount.");
+          return;
+        }
+        const editId = document.getElementById("exp-edit-id").value;
+        const payload = {
+          id: editId || expUid(),
+          date,
+          description,
+          category: document.getElementById("exp-category").value || "Other",
+          amount,
+          currency: document.getElementById("exp-currency").value || "GBP",
+          notes: document.getElementById("exp-notes").value.trim(),
+          createdAt: editId
+            ? (expenses.find((e) => e.id === editId) || {}).createdAt || new Date().toISOString()
+            : new Date().toISOString(),
+        };
+        if (editId) {
+          expenses = expenses.map((e) => (e.id === editId ? payload : e));
+        } else {
+          expenses.push(payload);
+        }
+        await persistExpenses();
+        resetExpenseForm();
+        renderExpenseTable();
+        renderExpenseSummary();
+        showExpTab("all");
+      });
+
+      ["exp-filter-category", "exp-filter-month", "exp-filter-search"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener("input", () => renderExpenseTable());
+        el.addEventListener("change", () => renderExpenseTable());
+      });
+
+      document.getElementById("exp-summary-month").addEventListener("change", () => {
+        renderExpenseSummary();
+      });
+
+      document.getElementById("exp-export-csv").addEventListener("click", async () => {
+        const bridge = api();
+        if (!bridge || !bridge.exportExpensesCsv) return;
+        const ym = document.getElementById("exp-summary-month").value || expMonthValue();
+        const rows = monthExpenses(ym);
+        if (!rows.length) {
+          alert("No expenses in this month to export.");
+          return;
+        }
+        try {
+          const result = await bridge.exportExpensesCsv({
+            expenses: rows,
+            month: expMonthLabel(ym),
+          });
+          alert("CSV exported: " + (result && result.path ? result.path : "Downloads"));
+        } catch (err) {
+          alert(err && err.message ? err.message : String(err));
+        }
+      });
+
+      document.getElementById("exp-export-pdf").addEventListener("click", async () => {
+        const bridge = api();
+        if (!bridge || !bridge.exportExpensesPdf) return;
+        const ym = document.getElementById("exp-summary-month").value || expMonthValue();
+        const rows = monthExpenses(ym);
+        if (!rows.length) {
+          alert("No expenses in this month to export.");
+          return;
+        }
+        try {
+          const result = await bridge.exportExpensesPdf({
+            expenses: rows,
+            month: expMonthLabel(ym),
+          });
+          alert("PDF exported: " + (result && result.path ? result.path : "Downloads"));
+        } catch (err) {
+          alert(err && err.message ? err.message : String(err));
+        }
+      });
+
+      loadExpenses();
+    }
+
+    fetch("./expense-tracker.html")
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed to load expense-tracker.html");
+        return res.text();
+      })
+      .then((html) => {
+        const host = document.getElementById("page-expenses");
+        if (!host) return;
+        host.innerHTML = html;
+        wireExpenseTrackerUi();
+      })
+      .catch((err) => {
+        const host = document.getElementById("page-expenses");
+        if (host) {
+          host.innerHTML =
+            '<header><h1 class="page-title">Expense Tracker</h1>' +
+            `<p class="page-subtitle">${err && err.message ? err.message : err}</p></header>`;
+        }
+      });
 
     // Robots & Sitemap
     function wireRobotsSitemapUi() {

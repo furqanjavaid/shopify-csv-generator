@@ -1,11 +1,220 @@
 <header>
   <h1 class="page-title">Expense Tracker</h1>
-  <p class="page-subtitle">Track business spending and tax-ready reports</p>
+  <p class="page-subtitle">Log business expenses and generate HMRC-ready reports</p>
 </header>
 
-<div class="coming-soon-wrap">
-  <div class="coming-soon-card">
-    <h2>Coming Soon</h2>
-    <p>Log business expenses and generate HMRC-ready reports</p>
-  </div>
+<style>
+  .exp-filters {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1.4fr;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+  .exp-total-line {
+    margin-top: 14px;
+    text-align: right;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--heading, #0D1B2A);
+  }
+  .exp-big-total {
+    margin: 8px 0 18px;
+    font-size: 36px;
+    font-weight: 800;
+    color: var(--heading, #0D1B2A);
+    letter-spacing: -0.02em;
+  }
+  .exp-bar-row {
+    display: grid;
+    grid-template-columns: 120px 1fr 90px;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 10px;
+    font-size: 13px;
+  }
+  .exp-bar-track {
+    height: 10px;
+    border-radius: 999px;
+    background: #efeae3;
+    overflow: hidden;
+  }
+  .exp-bar-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: #8B1A2E;
+    width: 0%;
+    transition: width 200ms ease;
+  }
+  .exp-bar-meta {
+    text-align: right;
+    color: var(--text-secondary, #666);
+    font-size: 12px;
+  }
+  #exp-table {
+    display: table;
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: collapse;
+  }
+  #exp-table th,
+  #exp-table td {
+    padding: 10px 12px;
+    text-overflow: ellipsis;
+    overflow: hidden;
+    white-space: nowrap;
+    border-bottom: 1px solid #e8e4df;
+    font-size: 12px;
+  }
+  #exp-table th:nth-child(1),
+  #exp-table td:nth-child(1) { width: 100px; }
+  #exp-table th:nth-child(3),
+  #exp-table td:nth-child(3) { width: 110px; }
+  #exp-table th:nth-child(4),
+  #exp-table td:nth-child(4) { width: 90px; }
+  #exp-table th:nth-child(5),
+  #exp-table td:nth-child(5) { width: 70px; }
+  #exp-table th:nth-child(7),
+  #exp-table td:nth-child(7) { width: 140px; }
+  @media (max-width: 980px) {
+    .exp-filters { grid-template-columns: 1fr; }
+    .exp-bar-row { grid-template-columns: 1fr; gap: 4px; }
+  }
+</style>
+
+<div class="inv-tabs" role="tablist">
+  <button class="inv-tab active" type="button" data-exp-tab="add">Add Expense</button>
+  <button class="inv-tab" type="button" data-exp-tab="all">All Expenses</button>
+  <button class="inv-tab" type="button" data-exp-tab="summary">Summary</button>
 </div>
+
+<!-- TAB: Add -->
+<section class="inv-panel active" id="exp-panel-add">
+  <section class="card">
+    <h2 class="card-title" id="exp-form-title">Add Expense</h2>
+    <p class="card-caption">Log a business expense for your records.</p>
+    <input type="hidden" id="exp-edit-id" value="" />
+
+    <div class="grid-2">
+      <div>
+        <label class="field-label" for="exp-date">Date</label>
+        <input class="input" id="exp-date" type="date" />
+      </div>
+      <div>
+        <label class="field-label" for="exp-category">Category</label>
+        <select class="select" id="exp-category">
+          <option>Software</option>
+          <option>Hardware</option>
+          <option>Marketing</option>
+          <option>Travel</option>
+          <option>Office</option>
+          <option>Subscriptions</option>
+          <option>Tax</option>
+          <option>Other</option>
+        </select>
+      </div>
+    </div>
+
+    <label class="field-label" for="exp-description">Description</label>
+    <input class="input" id="exp-description" type="text" placeholder="e.g. Adobe Creative Cloud" />
+
+    <div class="grid-2">
+      <div>
+        <label class="field-label" for="exp-amount">Amount</label>
+        <input class="input" id="exp-amount" type="number" min="0" step="0.01" placeholder="0.00" />
+      </div>
+      <div>
+        <label class="field-label" for="exp-currency">Currency</label>
+        <select class="select" id="exp-currency">
+          <option value="GBP" selected>GBP</option>
+          <option value="USD">USD</option>
+          <option value="EUR">EUR</option>
+          <option value="PKR">PKR</option>
+          <option value="AUD">AUD</option>
+        </select>
+      </div>
+    </div>
+
+    <label class="field-label" for="exp-notes">Notes (optional)</label>
+    <textarea class="textarea" id="exp-notes" placeholder="Receipt ref, project, etc."></textarea>
+
+    <div class="btn-row">
+      <button class="btn-primary" type="button" id="exp-save">Add Expense →</button>
+      <button class="btn-outline hidden" type="button" id="exp-cancel-edit">Cancel Edit</button>
+    </div>
+  </section>
+</section>
+
+<!-- TAB: All -->
+<section class="inv-panel" id="exp-panel-all">
+  <section class="card">
+    <h2 class="card-title">All Expenses</h2>
+    <p class="card-caption">Filter, edit, or delete logged expenses.</p>
+
+    <div class="exp-filters">
+      <div>
+        <label class="field-label" for="exp-filter-category">Category</label>
+        <select class="select" id="exp-filter-category">
+          <option value="">All categories</option>
+          <option>Software</option>
+          <option>Hardware</option>
+          <option>Marketing</option>
+          <option>Travel</option>
+          <option>Office</option>
+          <option>Subscriptions</option>
+          <option>Tax</option>
+          <option>Other</option>
+        </select>
+      </div>
+      <div>
+        <label class="field-label" for="exp-filter-month">Month</label>
+        <input class="input" id="exp-filter-month" type="month" />
+      </div>
+      <div>
+        <label class="field-label" for="exp-filter-search">Search</label>
+        <input class="input" id="exp-filter-search" type="search" placeholder="Description or notes…" />
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table class="table" id="exp-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Description</th>
+            <th>Category</th>
+            <th>Amount</th>
+            <th>Currency</th>
+            <th>Notes</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="exp-table-body"></tbody>
+      </table>
+    </div>
+    <div class="empty-row" id="exp-empty">No expenses yet</div>
+    <div class="exp-total-line" id="exp-list-total">Total: £0.00</div>
+  </section>
+</section>
+
+<!-- TAB: Summary -->
+<section class="inv-panel" id="exp-panel-summary">
+  <section class="card">
+    <h2 class="card-title">Summary</h2>
+    <p class="card-caption">Monthly spend overview for HMRC-ready reporting.</p>
+
+    <label class="field-label" for="exp-summary-month">Month / Year</label>
+    <input class="input" id="exp-summary-month" type="month" style="max-width:220px" />
+
+    <p class="card-caption mt-16">Total spent this month</p>
+    <div class="exp-big-total" id="exp-summary-total">£0.00</div>
+
+    <h2 class="card-title">Breakdown by category</h2>
+    <div id="exp-category-bars"></div>
+    <p class="card-caption mt-12" id="exp-summary-note">No expenses in this month.</p>
+
+    <div class="btn-row">
+      <button class="btn-outline" type="button" id="exp-export-csv">Export CSV →</button>
+      <button class="btn-primary" type="button" id="exp-export-pdf">Export PDF →</button>
+    </div>
+  </section>
+</section>

@@ -21,6 +21,12 @@ const INVOICE_PDF_CLI = path.join(
   "cli",
   "invoice_pdf_cli.py"
 );
+const EXPENSE_PDF_CLI = path.join(
+  PROJECT_ROOT,
+  "sentivo_extractor",
+  "cli",
+  "expense_pdf_cli.py"
+);
 const IMAGE_RESIZER_CLI = path.join(
   PROJECT_ROOT,
   "sentivo_extractor",
@@ -37,6 +43,7 @@ const IMAGE_EXTS = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif"]);
 const DATA_DIR = path.join(PROJECT_ROOT, "data");
 const CLIENTS_JSON = path.join(DATA_DIR, "clients.json");
 const INVOICES_JSON = path.join(DATA_DIR, "invoices.json");
+const EXPENSES_JSON = path.join(DATA_DIR, "expenses.json");
 const INVOICE_SETTINGS_JSON = path.join(DATA_DIR, "invoice-settings.json");
 const DEFAULT_INVOICE_SETTINGS = {
   bankName: "",
@@ -1008,6 +1015,68 @@ function registerIpc() {
     const result = await runPythonJson(INVOICE_PDF_CLI, {
       output_path: outputPath,
       invoice,
+    });
+    if (!result || result.ok === false) {
+      const err =
+        (result && result.errors && result.errors[0]) || "PDF export failed.";
+      throw new Error(err);
+    }
+    const pdfPath = String(result.path || outputPath);
+    if (fs.existsSync(pdfPath)) {
+      await shell.openPath(pdfPath);
+    }
+    return { ok: true, path: pdfPath };
+  });
+
+  ipcMain.handle("expenses:read", async () => readJsonArray(EXPENSES_JSON));
+  ipcMain.handle("expenses:write", async (_event, expenses) =>
+    writeJsonArray(EXPENSES_JSON, expenses)
+  );
+
+  ipcMain.handle("expenses:export-csv", async (_event, payload = {}) => {
+    const rows = Array.isArray(payload.expenses) ? payload.expenses : [];
+    const month = String(payload.month || "expenses").trim() || "expenses";
+    if (!rows.length) throw new Error("No expenses to export.");
+    fs.mkdirSync(DOWNLOADS_DIR, { recursive: true });
+    const safe = month.replace(/[<>:"/\\|?*\s]+/g, "-").toLowerCase();
+    const outPath = path.join(DOWNLOADS_DIR, `expenses-${safe}.csv`);
+    const escape = (v) => {
+      const s = String(v == null ? "" : v);
+      if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    };
+    const lines = ["date,description,category,amount,currency,notes"];
+    for (const row of rows) {
+      lines.push(
+        [
+          escape(row.date),
+          escape(row.description),
+          escape(row.category),
+          escape(row.amount),
+          escape(row.currency),
+          escape(row.notes),
+        ].join(",")
+      );
+    }
+    fs.writeFileSync(outPath, lines.join("\n") + "\n", "utf8");
+    await shell.openPath(outPath);
+    return { ok: true, path: outPath };
+  });
+
+  ipcMain.handle("expenses:export-pdf", async (_event, payload = {}) => {
+    if (!fs.existsSync(EXPENSE_PDF_CLI)) {
+      throw new Error(`expense_pdf_cli.py not found: ${EXPENSE_PDF_CLI}`);
+    }
+    const expenses = Array.isArray(payload.expenses) ? payload.expenses : [];
+    const month = String(payload.month || "Expenses").trim() || "Expenses";
+    if (!expenses.length) throw new Error("No expenses to export.");
+    const safe = month.replace(/[<>:"/\\|?*\s]+/g, "-").toLowerCase();
+    fs.mkdirSync(DOWNLOADS_DIR, { recursive: true });
+    const outputPath = path.join(DOWNLOADS_DIR, `expenses-${safe}.pdf`);
+    const result = await runPythonJson(EXPENSE_PDF_CLI, {
+      output_path: outputPath,
+      month,
+      expenses,
     });
     if (!result || result.ok === false) {
       const err =
