@@ -776,6 +776,7 @@ def merge_csvs(
                 f"{label}: could not map Title, Handle, or Variant SKU — check column headers"
             )
         norm = _normalize_dataframe(raw_df, mapping)
+        norm = _clean_title_handle_suffixes(norm)
         products = _group_products(norm)
         loaded.append(
             {
