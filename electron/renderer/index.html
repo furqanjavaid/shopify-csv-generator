@@ -49,8 +49,14 @@
       color: var(--sidebar-text);
       display: flex;
       flex-direction: column;
-      padding: 24px 0 16px;
-      overflow: hidden;
+      padding: 16px 0 12px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      scrollbar-width: none;
+    }
+
+    .sidebar::-webkit-scrollbar {
+      display: none;
     }
 
     .sidebar nav {
@@ -61,6 +67,11 @@
       display: flex;
       flex-direction: column;
       gap: 2px;
+      scrollbar-width: none;
+    }
+
+    .sidebar nav::-webkit-scrollbar {
+      display: none;
     }
 
     .sidebar-footer {
@@ -95,7 +106,7 @@
       max-width: calc(100% - 32px);
       height: auto;
       display: block;
-      margin: 0 16px 20px;
+      margin: 0 14px 12px;
     }
 
     .nav-group {
@@ -107,10 +118,10 @@
 
     .nav-group-label {
       text-transform: uppercase;
-      font-size: 9px;
+      font-size: 8px;
       color: #8B7B7B;
       letter-spacing: 0.08em;
-      padding: 16px 16px 4px;
+      padding: 10px 14px 3px;
       font-weight: 700;
       user-select: none;
     }
@@ -124,12 +135,12 @@
       text-align: left;
       font: inherit;
       font-size: 13px;
-      padding: 8px 16px;
+      padding: 6px 14px;
       border-radius: 6px;
       cursor: pointer;
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
       margin: 0 8px;
       transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
     }
@@ -2691,7 +2702,6 @@
       document.getElementById("inv-date").value = invToday();
       document.getElementById("inv-due").value = "";
       document.getElementById("inv-notes").value = "";
-      document.getElementById("inv-paypal").value = "";
       document.getElementById("inv-vat-toggle").checked = false;
       document.getElementById("inv-client-select").value = "";
       const currencyEl = document.getElementById("inv-currency");
