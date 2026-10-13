@@ -18,6 +18,50 @@
   <h2 class="card-title">Resize Settings</h2>
   <p class="card-caption">Choose how images should be resized and exported.</p>
 
+  <style>
+    .resizer-presets-label {
+      display: block;
+      margin: 4px 0 8px;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-secondary, #8B7B7B);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .resizer-presets {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .resizer-preset-btn {
+      appearance: none;
+      border: 1px solid #8B1A2E;
+      color: #8B1A2E;
+      background: transparent;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font: inherit;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 150ms ease, color 150ms ease, border-color 150ms ease;
+    }
+    .resizer-preset-btn:hover {
+      background: #8B1A2E;
+      color: #fff;
+    }
+  </style>
+
+  <span class="resizer-presets-label">Quick Presets</span>
+  <div class="resizer-presets" id="resizer-presets">
+    <button class="resizer-preset-btn" type="button" data-width="2000" data-height="800">Banner Desktop</button>
+    <button class="resizer-preset-btn" type="button" data-width="800" data-height="1000">Banner Mobile</button>
+    <button class="resizer-preset-btn" type="button" data-width="1000" data-height="1400">Story / Portrait</button>
+    <button class="resizer-preset-btn" type="button" data-width="2048" data-height="2048">Product Square</button>
+    <button class="resizer-preset-btn" type="button" data-width="2048" data-height="2560">Product Portrait</button>
+  </div>
+
   <label class="field-label" for="resizer-mode">Resize Mode</label>
   <select class="select" id="resizer-mode">
     <option value="dimensions" selected>By Dimensions (width × height)</option>
