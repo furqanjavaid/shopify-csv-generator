@@ -1,11 +1,140 @@
 <header>
   <h1 class="page-title">Robots &amp; Sitemap</h1>
-  <p class="page-subtitle">SEO checks for Shopify store crawlability</p>
+  <p class="page-subtitle">Check your Shopify store's robots.txt and sitemap.xml for SEO issues</p>
 </header>
 
-<div class="coming-soon-wrap">
-  <div class="coming-soon-card">
-    <h2>Coming Soon</h2>
-    <p>Check your Shopify store's robots.txt and sitemap.xml for SEO issues</p>
+<style>
+  .rs-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border, #e8e4df);
+    background: #fff;
+  }
+  .rs-badge.ok {
+    color: #1b7a3d;
+    border-color: rgba(27, 122, 61, 0.35);
+    background: rgba(27, 122, 61, 0.08);
+  }
+  .rs-badge.bad {
+    color: #a32020;
+    border-color: rgba(163, 32, 32, 0.35);
+    background: rgba(163, 32, 32, 0.08);
+  }
+  .rs-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+  .rs-card-head .card-title { margin: 0; }
+  .rs-raw {
+    margin: 0;
+    max-height: 300px;
+    overflow: auto;
+    padding: 12px;
+    border: 1px solid var(--border, #e8e4df);
+    border-radius: 8px;
+    background: #FBF8F4;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--text, #333);
+  }
+  .rs-summary {
+    margin-top: 12px;
+    font-size: 13px;
+    color: var(--text, #333);
+  }
+  .rs-summary p { margin: 0 0 6px; }
+  .rs-disallow {
+    margin: 8px 0 0;
+    padding-left: 18px;
+    font-size: 12px;
+    color: var(--text-secondary, #666);
+  }
+  .rs-status-200 { color: #1b7a3d; font-weight: 700; }
+  .rs-status-301,
+  .rs-status-302,
+  .rs-status-307,
+  .rs-status-308 { color: #c46a00; font-weight: 700; }
+  .rs-status-404 { color: #a32020; font-weight: 700; }
+  .rs-status-err { color: #777; font-weight: 700; }
+  #rs-sitemap-table {
+    display: table;
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: collapse;
+  }
+  #rs-sitemap-table th,
+  #rs-sitemap-table td {
+    padding: 8px 10px;
+    text-align: left;
+    border-bottom: 1px solid #e8e4df;
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #rs-sitemap-table th:nth-child(2),
+  #rs-sitemap-table td:nth-child(2) { width: 110px; }
+</style>
+
+<section class="card">
+  <h2 class="card-title">Input</h2>
+  <p class="card-caption">Enter a store URL to inspect robots.txt and the sitemap.</p>
+  <label class="field-label" for="rs-url">Store URL</label>
+  <div class="row">
+    <input class="input" id="rs-url" type="url" placeholder="https://yourstore.myshopify.com" />
+    <button class="btn-primary fixed" type="button" id="rs-check">Check Store →</button>
+    <button class="btn-stop fixed" type="button" id="rs-stop" disabled>Stop →</button>
   </div>
-</div>
+</section>
+
+<section class="hidden" id="rs-results">
+  <div class="grid-2">
+    <section class="card">
+      <div class="rs-card-head">
+        <h2 class="card-title">robots.txt</h2>
+        <span class="rs-badge" id="rs-robots-badge">—</span>
+      </div>
+      <pre class="rs-raw" id="rs-robots-content">No data yet.</pre>
+      <div class="rs-summary" id="rs-robots-summary"></div>
+    </section>
+
+    <section class="card">
+      <div class="rs-card-head">
+        <h2 class="card-title">Sitemap</h2>
+        <span class="rs-badge" id="rs-sitemap-badge">—</span>
+      </div>
+      <p class="card-caption" id="rs-sitemap-total">Total URLs: 0</p>
+      <div class="table-wrap mt-12">
+        <table class="table" id="rs-sitemap-table">
+          <thead>
+            <tr>
+              <th>URL</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="rs-sitemap-body"></tbody>
+        </table>
+      </div>
+      <p class="card-caption mt-12" id="rs-sitemap-note">Showing first 20 URLs.</p>
+      <div class="btn-row">
+        <button class="btn-outline" type="button" id="rs-export" disabled>Export Results →</button>
+      </div>
+    </section>
+  </div>
+</section>
+
+<section class="card">
+  <h2 class="card-title">Log</h2>
+  <div class="log" id="rs-log"><span class="log-line">Ready. Enter a store URL and click Check Store.</span></div>
+</section>

@@ -3123,8 +3123,238 @@
         });
     }
 
-    loadPlaceholderPage("robots", "robots-sitemap.html", "Robots & Sitemap");
     loadPlaceholderPage("expenses", "expense-tracker.html", "Expense Tracker");
+
+    // Robots & Sitemap
+    function wireRobotsSitemapUi() {
+      let running = false;
+      let allRows = [];
+
+      const els = {
+        url: document.getElementById("rs-url"),
+        check: document.getElementById("rs-check"),
+        stop: document.getElementById("rs-stop"),
+        results: document.getElementById("rs-results"),
+        robotsBadge: document.getElementById("rs-robots-badge"),
+        robotsContent: document.getElementById("rs-robots-content"),
+        robotsSummary: document.getElementById("rs-robots-summary"),
+        sitemapBadge: document.getElementById("rs-sitemap-badge"),
+        sitemapTotal: document.getElementById("rs-sitemap-total"),
+        sitemapBody: document.getElementById("rs-sitemap-body"),
+        sitemapNote: document.getElementById("rs-sitemap-note"),
+        exportBtn: document.getElementById("rs-export"),
+        log: document.getElementById("rs-log"),
+      };
+
+      function setRunning(on) {
+        running = on;
+        els.check.disabled = on;
+        els.stop.disabled = !on;
+      }
+
+      function statusClass(status) {
+        const s = String(status);
+        if (s === "200") return "rs-status-200";
+        if (["301", "302", "307", "308"].includes(s)) return "rs-status-301";
+        if (s === "404") return "rs-status-404";
+        return "rs-status-err";
+      }
+
+      function statusLabel(status) {
+        const s = String(status);
+        if (s === "200") return "200 ✓";
+        if (["301", "302", "307", "308"].includes(s)) return s + " →";
+        if (s === "404") return "404 ✗";
+        if (/^Error/i.test(s)) return "Error";
+        return s;
+      }
+
+      function renderTable() {
+        const show = allRows.slice(0, 20);
+        els.sitemapBody.innerHTML = "";
+        show.forEach((row) => {
+          const tr = document.createElement("tr");
+          const cls = statusClass(row.status);
+          tr.innerHTML =
+            `<td title="${escapeHtml(row.url)}">${escapeHtml(row.url)}</td>` +
+            `<td><span class="${cls}">${escapeHtml(statusLabel(row.status))}</span></td>`;
+          els.sitemapBody.appendChild(tr);
+        });
+        const total = allRows.length;
+        els.sitemapNote.textContent =
+          total > 20
+            ? `Showing first 20 of ${total} URLs.`
+            : total
+              ? `Showing ${total} URL${total === 1 ? "" : "s"}.`
+              : "No sitemap URLs yet.";
+        els.exportBtn.disabled = total === 0;
+      }
+
+      function resetResults() {
+        allRows = [];
+        els.results.classList.remove("hidden");
+        els.robotsBadge.className = "rs-badge";
+        els.robotsBadge.textContent = "…";
+        els.robotsContent.textContent = "Fetching…";
+        els.robotsSummary.innerHTML = "";
+        els.sitemapBadge.className = "rs-badge";
+        els.sitemapBadge.textContent = "…";
+        els.sitemapTotal.textContent = "Total URLs: 0";
+        els.sitemapBody.innerHTML = "";
+        els.sitemapNote.textContent = "Checking…";
+        els.exportBtn.disabled = true;
+      }
+
+      function handleEvent(evt) {
+        if (!evt || !evt.type) return;
+        if (evt.type === "robots") {
+          const found = !!evt.found;
+          els.robotsBadge.className = "rs-badge " + (found ? "ok" : "bad");
+          els.robotsBadge.textContent = found ? "Found ✓" : "Not Found ✗";
+          els.robotsContent.textContent = found
+            ? evt.content || "(empty robots.txt)"
+            : "robots.txt was not found at this store.";
+          const disallowed = Array.isArray(evt.disallowed) ? evt.disallowed : [];
+          const sitemapUrl = evt.sitemap_url || "";
+          const top = disallowed.slice(0, 10);
+          els.robotsSummary.innerHTML =
+            `<p><strong>Sitemap URL in robots.txt:</strong> ${
+              sitemapUrl
+                ? "Yes — " + escapeHtml(sitemapUrl)
+                : "No"
+            }</p>` +
+            `<p><strong>Disallowed paths:</strong> ${disallowed.length}</p>` +
+            (top.length
+              ? `<ul class="rs-disallow">${top
+                  .map((p) => `<li>${escapeHtml(p)}</li>`)
+                  .join("")}</ul>`
+              : "");
+          return;
+        }
+        if (evt.type === "sitemap") {
+          const found = !!evt.found;
+          els.sitemapBadge.className = "rs-badge " + (found ? "ok" : "bad");
+          els.sitemapBadge.textContent = found ? "Found ✓" : "Not Found ✗";
+          els.sitemapTotal.textContent = "Total URLs: " + (evt.total || 0);
+          if (!found) {
+            els.sitemapNote.textContent = "Sitemap not found.";
+          }
+          return;
+        }
+        if (evt.type === "sitemap_url") {
+          allRows.push({ url: evt.url || "", status: evt.status });
+          els.sitemapTotal.textContent =
+            "Total URLs: " + (evt.total != null ? evt.total : allRows.length);
+          // Refresh table periodically for responsiveness
+          if (allRows.length <= 20 || allRows.length % 5 === 0) {
+            renderTable();
+          }
+          return;
+        }
+        if (evt.type === "done") {
+          els.sitemapTotal.textContent = "Total URLs: " + (evt.total_urls || allRows.length);
+          renderTable();
+          return;
+        }
+        if (evt.type === "error") {
+          appendLog(els.log, `[ERROR] ${evt.error || "Unknown error"}`);
+        }
+      }
+
+      const bridge = api();
+      if (bridge && bridge.onRobotsSitemapLogLine) {
+        bridge.onRobotsSitemapLogLine((line) => appendLog(els.log, line));
+        bridge.onRobotsSitemapEvent((evt) => handleEvent(evt));
+        bridge.onRobotsSitemapDone(({ code, stopped }) => {
+          setRunning(false);
+          renderTable();
+          if (stopped) {
+            appendLog(els.log, "[WARNING] Check stopped.");
+            return;
+          }
+          if (code === 0) {
+            appendLog(els.log, "[INFO] Check finished successfully.");
+          } else {
+            appendLog(els.log, `[ERROR] Check exited with code ${code}.`);
+          }
+        });
+      }
+
+      els.check.addEventListener("click", async () => {
+        const b = api();
+        if (!b || !b.checkRobotsSitemap) {
+          alert("Electron bridge unavailable. Restart the app.");
+          return;
+        }
+        const url = (els.url.value || "").trim();
+        if (!url) {
+          alert("Enter a store URL.");
+          return;
+        }
+        resetResults();
+        clearLog(els.log, `[INFO] Starting check for ${url}…`);
+        setRunning(true);
+        try {
+          await b.checkRobotsSitemap({ url });
+        } catch (err) {
+          setRunning(false);
+          appendLog(els.log, `[ERROR] ${err && err.message ? err.message : err}`);
+        }
+      });
+
+      els.stop.addEventListener("click", async () => {
+        const b = api();
+        if (!b || !b.stopRobotsSitemap) return;
+        appendLog(els.log, "[WARNING] Stop requested…");
+        try {
+          await b.stopRobotsSitemap();
+        } catch (err) {
+          appendLog(els.log, `[ERROR] Stop failed: ${err && err.message ? err.message : err}`);
+        }
+      });
+
+      els.exportBtn.addEventListener("click", async () => {
+        const b = api();
+        if (!b || !b.exportRobotsSitemapCsv) return;
+        if (!allRows.length) {
+          alert("No results to export.");
+          return;
+        }
+        try {
+          const result = await b.exportRobotsSitemapCsv({ rows: allRows });
+          appendLog(
+            els.log,
+            `[INFO] Exported CSV: ${result && result.path ? result.path : "Downloads"}`
+          );
+        } catch (err) {
+          appendLog(els.log, `[ERROR] Export failed: ${err && err.message ? err.message : err}`);
+        }
+      });
+
+      els.url.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") els.check.click();
+      });
+    }
+
+    fetch("./robots-sitemap.html")
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed to load robots-sitemap.html");
+        return res.text();
+      })
+      .then((html) => {
+        const host = document.getElementById("page-robots");
+        if (!host) return;
+        host.innerHTML = html;
+        wireRobotsSitemapUi();
+      })
+      .catch((err) => {
+        const host = document.getElementById("page-robots");
+        if (host) {
+          host.innerHTML =
+            '<header><h1 class="page-title">Robots & Sitemap</h1>' +
+            `<p class="page-subtitle">${err && err.message ? err.message : err}</p></header>`;
+        }
+      });
 
     // Image Resizer
     function wireResizerUi() {

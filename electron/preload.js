@@ -55,4 +55,15 @@ contextBridge.exposeInMainWorld("sentivo", {
   onResizerLogLine: (callback) => subscribe("image-resizer:log-line", callback),
   onResizerProgress: (callback) => subscribe("image-resizer:progress", callback),
   onResizerDone: (callback) => subscribe("image-resizer:done", callback),
+  checkRobotsSitemap: (config) =>
+    ipcRenderer.invoke("robots-sitemap:check", config),
+  stopRobotsSitemap: () => ipcRenderer.invoke("robots-sitemap:stop"),
+  exportRobotsSitemapCsv: (payload) =>
+    ipcRenderer.invoke("robots-sitemap:export-csv", payload),
+  onRobotsSitemapLogLine: (callback) =>
+    subscribe("robots-sitemap:log-line", callback),
+  onRobotsSitemapEvent: (callback) =>
+    subscribe("robots-sitemap:event", callback),
+  onRobotsSitemapDone: (callback) =>
+    subscribe("robots-sitemap:done", callback),
 });

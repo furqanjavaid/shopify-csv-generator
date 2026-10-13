@@ -27,6 +27,12 @@ const IMAGE_RESIZER_CLI = path.join(
   "cli",
   "image_resizer_cli.py"
 );
+const ROBOTS_SITEMAP_CLI = path.join(
+  PROJECT_ROOT,
+  "sentivo_extractor",
+  "cli",
+  "robots_sitemap_cli.py"
+);
 const IMAGE_EXTS = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif"]);
 const DATA_DIR = path.join(PROJECT_ROOT, "data");
 const CLIENTS_JSON = path.join(DATA_DIR, "clients.json");
@@ -56,6 +62,7 @@ const jobs = {
   upload: { proc: null, stopped: false, meta: {} },
   merger: { proc: null, stopped: false, meta: {} },
   resizer: { proc: null, stopped: false, meta: {} },
+  robots: { proc: null, stopped: false, meta: {} },
 };
 
 function resolveAppIcon() {
@@ -621,6 +628,134 @@ function registerIpc() {
     }
 
     return { ok: true, pid: proc.pid, outputPath: outputFolder, total: files.length };
+  });
+
+  ipcMain.handle("robots-sitemap:stop", async () => ({ ok: killJob("robots") }));
+
+  ipcMain.handle("robots-sitemap:check", async (_event, config = {}) => {
+    if (!fs.existsSync(ROBOTS_SITEMAP_CLI)) {
+      throw new Error(`robots_sitemap_cli.py not found: ${ROBOTS_SITEMAP_CLI}`);
+    }
+    const url = String(config.url || "").trim();
+    if (!url) throw new Error("Store URL is required.");
+
+    ensurePython();
+    const job = jobs.robots;
+    if (job.proc) throw new Error("A robots/sitemap check is already running.");
+
+    const env = { ...process.env };
+    env.PYTHONPATH = PROJECT_ROOT + path.delimiter + (env.PYTHONPATH || "");
+    env.PYTHONUTF8 = "1";
+
+    job.stopped = false;
+    job.meta = { url };
+
+    sendToRenderer(
+      "robots-sitemap:log-line",
+      `[INFO] CMD: ${PYTHON_EXE} ${ROBOTS_SITEMAP_CLI}`
+    );
+
+    const proc = spawn(PYTHON_EXE, [ROBOTS_SITEMAP_CLI], {
+      cwd: PROJECT_ROOT,
+      env,
+      windowsHide: true,
+    });
+    job.proc = proc;
+
+    const handleLine = (line) => {
+      const text = String(line || "").trim();
+      if (!text) return;
+      try {
+        const evt = JSON.parse(text);
+        if (evt && typeof evt === "object" && evt.type) {
+          if (evt.type === "log") {
+            const level = String(evt.level || "INFO").toUpperCase();
+            sendToRenderer(
+              "robots-sitemap:log-line",
+              `[${level}] ${evt.message || ""}`
+            );
+            return;
+          }
+          if (evt.type === "error") {
+            sendToRenderer(
+              "robots-sitemap:log-line",
+              `[ERROR] ${evt.error || "Unknown error"}`
+            );
+            sendToRenderer("robots-sitemap:event", evt);
+            return;
+          }
+          sendToRenderer("robots-sitemap:event", evt);
+          return;
+        }
+      } catch (_err) {
+        /* not JSON */
+      }
+      sendToRenderer("robots-sitemap:log-line", text);
+    };
+
+    const emitLines = (stream) => {
+      const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+      rl.on("line", handleLine);
+    };
+    if (proc.stdout) emitLines(proc.stdout);
+    if (proc.stderr) emitLines(proc.stderr);
+
+    proc.on("error", (err) => {
+      sendToRenderer(
+        "robots-sitemap:log-line",
+        `[ERROR] Failed to start Python: ${err.message}`
+      );
+      job.proc = null;
+      sendToRenderer("robots-sitemap:done", {
+        code: -1,
+        stopped: false,
+        error: err.message,
+        ...job.meta,
+      });
+    });
+
+    proc.on("close", (code) => {
+      const wasStopped = job.stopped;
+      job.proc = null;
+      job.stopped = false;
+      sendToRenderer("robots-sitemap:done", {
+        code: code == null ? -1 : code,
+        stopped: wasStopped,
+        ...job.meta,
+      });
+    });
+
+    try {
+      proc.stdin.write(JSON.stringify({ url }));
+      proc.stdin.end();
+    } catch (err) {
+      sendToRenderer(
+        "robots-sitemap:log-line",
+        `[ERROR] Failed to send payload: ${err && err.message ? err.message : err}`
+      );
+    }
+
+    return { ok: true, pid: proc.pid, url };
+  });
+
+  ipcMain.handle("robots-sitemap:export-csv", async (_event, payload = {}) => {
+    const rows = Array.isArray(payload.rows) ? payload.rows : [];
+    if (!rows.length) throw new Error("No results to export.");
+    fs.mkdirSync(DOWNLOADS_DIR, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const outPath = path.join(DOWNLOADS_DIR, `sitemap-check-${stamp}.csv`);
+    const escape = (v) => {
+      const s = String(v == null ? "" : v);
+      if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    };
+    const lines = ["url,status"];
+    for (const row of rows) {
+      lines.push(`${escape(row.url)},${escape(row.status)}`);
+    }
+    fs.writeFileSync(outPath, lines.join("\n") + "\n", "utf8");
+    await shell.openPath(outPath);
+    return { ok: true, path: outPath };
   });
 
   ipcMain.handle("run-scraper", async (_event, config = {}) => {
